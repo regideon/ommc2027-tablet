@@ -110,7 +110,25 @@
             await $wire.pullNow();
         },
 
-        submitForm: { collection_amount: '', remarks: '', concerns: '', material_group_id: null, brand_id: null, brand_other: '' },
+        submitForm: {
+            collection_amount: '', remarks: '', concerns: '',
+            material_group_id: null, brand_id: null, brand_other: '',
+            category_id: null, sub_category_id: null, sub_sub_category_id: null
+        },
+        categories: {{ $categoriesJson }},
+        subCategories: {{ $subCategoriesJson }},
+        subSubCategories: {{ $subSubCategoriesJson }},
+        get filteredSubCategories() {
+            if (!this.submitForm.category_id) return [];
+            return this.subCategories.filter(s => s.category_id == this.submitForm.category_id);
+        },
+        get filteredSubSubCategories() {
+            if (!this.submitForm.sub_category_id) return [];
+            return this.subSubCategories.filter(s => s.sub_category_id == this.submitForm.sub_category_id);
+        },
+        get selectedSubCategory() {
+            return this.subCategories.find(s => s.id == this.submitForm.sub_category_id);
+        },
 
         calls: {{ $callsJson }},
 
@@ -187,12 +205,22 @@
                 materialGroupId: this.submitForm.material_group_id || null,
                 brandId:         this.submitForm.brand_id || null,
                 brandOther:      this.submitForm.brand_other || null,
+
+                categoryId:       this.submitForm.category_id || null,
+                subCategoryId:    this.submitForm.sub_category_id || null,
+                subSubCategoryId: this.submitForm.sub_sub_category_id || null,
+
             };
 
             const call = this.calls.find(c => c.id === id);
             if (call) { call.status = 'completed'; call.sync_status = 'pending'; }
             this.submitting = false;
-            this.submitForm = { collection_amount: '', remarks: '', concerns: '', material_group_id: null, brand_id: null, brand_other: '' };
+            this.submitForm = {
+                collection_amount: '', remarks: '', concerns: '',
+                material_group_id: null, brand_id: null, brand_other: '',
+                category_id: null, sub_category_id: null, sub_sub_category_id: null
+            };
+
 
             $wire.initiateSubmit(id, data.collection, data.remarks, data.concerns, data.materialGroupId, data.brandId, data.brandOther, this.isOnline);
         },
@@ -278,8 +306,9 @@
     "
 
     x-on:get-submit-location.window="
-        const { salescallId, collectionAmount, remarks, concerns, materialGroupId, brandId, brandOther, isOnline: online } = $event.detail;
-        const submit = (lat, lng) => $wire.submitSalesCall(salescallId, collectionAmount, remarks, concerns, materialGroupId, brandId, brandOther, lat, lng, online);
+        const { salescallId, collectionAmount, remarks, concerns, materialGroupId, brandId, brandOther, categoryId, subCategoryId, subSubCategoryId, isOnline: online } = $event.detail;
+        const submit = (lat, lng) => $wire.submitSalesCall(salescallId, collectionAmount, remarks, concerns, materialGroupId, brandId, brandOther, categoryId, subCategoryId, subSubCategoryId, lat, lng, online);
+
         if (!navigator.geolocation) { submit(0, 0); return; }
         navigator.geolocation.getCurrentPosition(
             (pos) => submit(pos.coords.latitude, pos.coords.longitude),
@@ -837,6 +866,49 @@
                                     placeholder="Enter brand name..."
                                     class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none" />
                             </div>
+
+
+                            {{-- Categories --}}
+                            <div class="mt-3">
+                                <label class="block text-xs font-black text-[#434654] uppercase tracking-wider mb-2">Categories</label>
+                                <select x-model="submitForm.category_id"
+                                    @change="submitForm.sub_category_id = null; submitForm.sub_sub_category_id = null"
+                                    class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
+                                    <option value="">Select category...</option>
+                                    <template x-for="cat in categories" :key="cat.id">
+                                        <option :value="cat.id" x-text="cat.name"></option>
+                                    </template>
+                                </select>
+                            </div>
+
+                            {{-- Sub Categories --}}
+                            <div class="mt-3" x-show="submitForm.category_id && filteredSubCategories.length" x-transition>
+                                <label class="block text-xs font-semibold text-[#737685] mb-2">Sub Category</label>
+                                <select x-model="submitForm.sub_category_id"
+                                    @change="submitForm.sub_sub_category_id = null"
+                                    class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
+                                    <option value="">Select sub category...</option>
+                                    <template x-for="sub in filteredSubCategories" :key="sub.id">
+                                        <option :value="sub.id" x-text="sub.name"></option>
+                                    </template>
+                                </select>
+                            </div>
+
+                            {{-- Sub Sub Categories (only for AB SMDP) --}}
+                            <div class="mt-3" x-show="submitForm.sub_category_id && filteredSubSubCategories.length" x-transition>
+                                <label class="block text-xs font-semibold text-[#737685] mb-2">
+                                    <span x-text="selectedSubCategory?.name"></span> — Type
+                                </label>
+                                <select x-model="submitForm.sub_sub_category_id"
+                                    class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
+                                    <option value="">Select type...</option>
+                                    <template x-for="ssc in filteredSubSubCategories" :key="ssc.id">
+                                        <option :value="ssc.id" x-text="ssc.name"></option>
+                                    </template>
+                                </select>
+                            </div>
+
+
                         </div>
 
 

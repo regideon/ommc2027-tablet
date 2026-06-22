@@ -2,19 +2,22 @@
 
 namespace App\Filament\Pages;
 
+use App\Models\Brand;
+use App\Models\MaterialGroup;
 use App\Models\Salescall;
+use App\Models\Category;
+use App\Models\SubCategory;
+use App\Models\SubSubCategory;
+use App\Services\SyncService;
 use BackedEnum;
 use Carbon\Carbon;
+use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Livewire\Attributes\On;
 use Native\Mobile\Facades\Geolocation;
-use App\Services\SyncService;
-use Filament\Notifications\Notification;
-use App\Models\Brand;
-use App\Models\MaterialGroup;
 
 class SalescallPage extends Page
 {
@@ -101,13 +104,30 @@ class SalescallPage extends Page
                 materialGroupId: $materialGroupId,
                 brandId: $brandId,
                 brandOther: $brandOther,
+
+                categoryId: $categoryId,
+                subCategoryId: $subCategoryId,
+                subSubCategoryId: $subSubCategoryId,
                 isOnline: $isOnline,
             );
         }
     }
 
-    public function submitSalesCall(int $salescallId, ?float $collectionAmount, ?string $remarks, ?string $concerns, ?int $materialGroupId, ?int $brandId, ?string $brandOther, float $lat = 0, float $lng = 0, bool $isOnline = false): void
-    {
+    public function submitSalesCall(
+        int $salescallId,
+        ?float $collectionAmount,
+        ?string $remarks,
+        ?string $concerns,
+        ?int $materialGroupId,
+        ?int $brandId,
+        ?string $brandOther,
+        ?int $categoryId,
+        ?int $subCategoryId,
+        ?int $subSubCategoryId,
+        float $lat = 0,
+        float $lng = 0,
+        bool $isOnline = false
+    ): void {
         Salescall::findOrFail($salescallId)->update([
             'actual_out'           => now(),
             'latitude_actual_out'  => $lat ?: null,
@@ -120,6 +140,10 @@ class SalescallPage extends Page
             'brand_other'          => $brandOther ?: null,
             'sync_status'          => 'pending',
             'sync_attempts'        => 0,
+
+            'category_id'         => $categoryId,
+            'sub_category_id'     => $subCategoryId,
+            'sub_sub_category_id' => $subSubCategoryId ?: null,
         ]);
 
         if ($isOnline) {
@@ -225,6 +249,11 @@ class SalescallPage extends Page
             'materialGroupsJson' => MaterialGroup::orderBy('name')->get(['id', 'name'])->toJson(),
             'brandsJson'         => Brand::where('enabled', true)->orderBy('name')->get(['id', 'material_group_id', 'name'])->toJson(),
             'preselectedId'      => $this->preselectedId,
+
+            'categoriesJson'       => Category::orderBy('name')->get(['id', 'name'])->toJson(),
+            'subCategoriesJson'    => SubCategory::orderBy('name')->get(['id', 'category_id', 'name'])->toJson(),
+            'subSubCategoriesJson' => SubSubCategory::orderBy('name')->get(['id', 'sub_category_id', 'name'])->toJson(),
+
         ];
     }
 }
