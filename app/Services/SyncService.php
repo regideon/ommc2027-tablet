@@ -152,6 +152,28 @@ class SyncService
                 );
             }
 
+            foreach ($data['categories'] ?? [] as $item) {
+                \Illuminate\Support\Facades\DB::table('categories')->updateOrInsert(
+                    ['id' => $item['id']],
+                    ['name' => $item['name'], 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['sub_categories'] ?? [] as $item) {
+                \Illuminate\Support\Facades\DB::table('sub_categories')->updateOrInsert(
+                    ['id' => $item['id']],
+                    ['category_id' => $item['category_id'], 'name' => $item['name'], 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['sub_sub_categories'] ?? [] as $item) {
+                \Illuminate\Support\Facades\DB::table('sub_sub_categories')->updateOrInsert(
+                    ['id' => $item['id']],
+                    ['sub_category_id' => $item['sub_category_id'], 'name' => $item['name'], 'updated_at' => now()]
+                );
+            }
+
+
 
 
             return SyncResult::ok("Pulled {$itineraryCount} itineraries, {$salescallCount} salescalls.");
@@ -232,6 +254,9 @@ class SyncService
                     'brand_id'             => $salescall->brand_id,
                     'brand_other'          => $salescall->brand_other,
 
+                    'category_id'          => $salescall->category_id,
+                    'sub_category_id'      => $salescall->sub_category_id,
+                    'sub_sub_category_id'  => $salescall->sub_sub_category_id,
 
                     'collection_amount'    => $salescall->collection_amount,
                     'remarks'              => $salescall->remarks,
