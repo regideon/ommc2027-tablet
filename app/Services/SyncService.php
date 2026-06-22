@@ -1,0 +1,286 @@
+<?php
+
+namespace App\Services;
+
+use App\Models\Itinerary;
+use App\Models\Salescall;
+use App\Models\User;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Support\Facades\Http;
+use Spatie\Permission\Models\Role;
+
+class SyncService
+{
+    private string $serverUrl;
+    private int $timeout;
+
+    public function __construct()
+    {
+        $this->serverUrl = rtrim(config('sync.server_url', ''), '/');
+        $this->timeout   = (int) config('sync.timeout', 15);
+    }
+
+    public function isReachable(): bool
+    {
+        if (blank($this->serverUrl)) {
+            return false;
+        }
+
+        try {
+            return Http::timeout(3)->get("{$this->serverUrl}/api/ping")->successful();
+        } catch (\Exception) {
+            return false;
+        }
+    }
+
+    public function refreshToken(string $email, string $password): SyncResult
+    {
+        try {
+            $response = Http::timeout($this->timeout)
+                ->post("{$this->serverUrl}/api/auth/tablet-login", compact('email', 'password'));
+
+            if ($response->status() === 401) {
+                return SyncResult::fail('Invalid email or password.', 'invalid_credentials');
+            }
+
+            if ($response->failed()) {
+                return SyncResult::fail("Server error ({$response->status()}).", 'server_error');
+            }
+
+            $data = $response->json();
+
+            $user = User::updateOrCreate(
+                ['email' => $data['email']],
+                [
+                    'name'      => $data['name'],
+                    'password'  => $data['password'],
+                    'api_token' => $data['api_token'],
+                ]
+            );
+
+            if (! empty($data['roles'])) {
+                foreach ($data['roles'] as $roleName) {
+                    Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
+                }
+                $user->syncRoles($data['roles']);
+            }
+
+            return SyncResult::ok('Token refreshed.');
+        } catch (\Exception $e) {
+            return SyncResult::fail('Could not reach server: ' . $e->getMessage(), 'connection_error');
+        }
+    }
+
+    public function pull(): SyncResult
+    {
+        $user = User::whereNotNull('api_token')->first();
+
+        if (! $user) {
+            return SyncResult::fail('No API token found. Please log in first.', 'no_token');
+        }
+
+        try {
+            $response = $this->client($user->api_token)->get("{$this->serverUrl}/api/sync/pull");
+
+            if ($response->status() === 401) {
+                return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+            }
+
+            if ($response->failed()) {
+                return SyncResult::fail("Pull failed ({$response->status()}).", 'server_error');
+            }
+
+            $data = $response->json();
+
+            foreach ($data['itineraries'] ?? [] as $itinerary) {
+                $local = Itinerary::updateOrCreate(
+                    ['local_uuid' => $itinerary['local_uuid'] ?? (string) $itinerary['id']],
+                    [
+                        'server_id'           => $itinerary['id'],
+                        'created_by'          => $user->id,
+                        'date_month'          => $itinerary['date_month'] ?? null,
+                        'date_year'           => $itinerary['date_year'] ?? null,
+                        'remarks'             => $itinerary['remarks'] ?? null,
+                        'itinerary_status_id' => $itinerary['itinerary_status_id'] ?? null,
+                        'sync_status'         => 'synced',
+                    ]
+                );
+
+                foreach ($itinerary['salescalls'] ?? [] as $sc) {
+                    $visitDate = $sc['route_start_at'] ?? $sc['actual_in'] ?? null;
+
+                    Salescall::updateOrCreate(
+                        ['local_uuid' => $sc['local_uuid'] ?? (string) $sc['id']],
+                        [
+                            'server_id'         => $sc['id'],
+                            'itinerary_id'      => $local->id,
+                            'customer_id'       => $sc['customer_id'],
+                            'visit_date'        => $visitDate,
+                            'actual_in'         => $sc['actual_in'] ?? null,
+                            'actual_out'        => $sc['actual_out'] ?? null,
+                            'collection_amount' => $sc['collection_amount'] ?? null,
+                            'remarks'           => $sc['remarks'] ?? null,
+                            'concerns'          => $sc['concerns'] ?? null,
+                            'sync_status'       => 'synced',
+                        ]
+                    );
+                }
+            }
+
+            $itineraryCount = count($data['itineraries'] ?? []);
+            $salescallCount = array_sum(
+                array_map(fn($i) => count($i['salescalls'] ?? []), $data['itineraries'] ?? [])
+            );
+
+            foreach ($data['material_groups'] ?? [] as $group) {
+                \Illuminate\Support\Facades\DB::table('material_groups')->updateOrInsert(
+                    ['id' => $group['id']],
+                    ['name' => $group['name'], 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['brands'] ?? [] as $brand) {
+                \Illuminate\Support\Facades\DB::table('brands')->updateOrInsert(
+                    ['id' => $brand['id']],
+                    [
+                        'material_group_id' => $brand['material_group_id'],
+                        'name'              => $brand['name'],
+                        'enabled'           => $brand['enabled'],
+                        'updated_at'        => now(),
+                    ]
+                );
+            }
+
+
+
+            return SyncResult::ok("Pulled {$itineraryCount} itineraries, {$salescallCount} salescalls.");
+        } catch (\Exception $e) {
+            return SyncResult::fail('Pull error: ' . $e->getMessage(), 'exception');
+        }
+    }
+
+    public function push(): SyncResult
+    {
+        $user = User::whereNotNull('api_token')->first();
+
+        if (! $user) {
+            return SyncResult::fail('No API token found. Please log in first.', 'no_token');
+        }
+
+        $client = $this->client($user->api_token);
+        $pushed = 0;
+        $failed = 0;
+
+        $pendingItineraries = Itinerary::where('sync_status', 'pending')
+            ->orWhere(fn($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
+            ->get();
+
+        foreach ($pendingItineraries as $itinerary) {
+            try {
+                $response = $client->post("{$this->serverUrl}/api/sync/push/itinerary", [
+                    'local_uuid'          => $itinerary->local_uuid,
+                    'date_month'          => $itinerary->date_month,
+                    'date_year'           => $itinerary->date_year,
+                    'remarks'             => $itinerary->remarks,
+                    'itinerary_status_id' => $itinerary->itinerary_status_id,
+                ]);
+
+                if ($response->status() === 401) {
+                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+                }
+
+                if ($response->successful()) {
+                    $itinerary->update(['sync_status' => 'synced', 'server_id' => $response->json('server_id'), 'sync_error' => null]);
+                    $pushed++;
+                } else {
+                    $this->markFailed($itinerary, $response->status() . ': ' . $response->body());
+                    $failed++;
+                }
+            } catch (\Exception $e) {
+                $this->markFailed($itinerary, $e->getMessage());
+                $failed++;
+            }
+        }
+
+        $pendingSalescalls = Salescall::with('itinerary')
+            ->where('sync_status', 'pending')
+            ->orWhere(fn($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
+            ->get();
+
+        foreach ($pendingSalescalls as $salescall) {
+            if (! $salescall->itinerary?->local_uuid) {
+                continue;
+            }
+
+            try {
+                $response = $client->post("{$this->serverUrl}/api/sync/push/salescall", [
+                    'local_uuid'           => $salescall->local_uuid,
+                    'itinerary_uuid'       => $salescall->itinerary->local_uuid,
+                    'customer_id'          => $salescall->customer_id,
+                    'salescall_type_id'    => $salescall->salescall_type_id,
+                    'latitude'             => $salescall->latitude,
+                    'longitude'            => $salescall->longitude,
+                    'latitude_actual_in'   => $salescall->latitude_actual_in,
+                    'longitude_actual_in'  => $salescall->longitude_actual_in,
+                    'latitude_actual_out'  => $salescall->latitude_actual_out,
+                    'longitude_actual_out' => $salescall->longitude_actual_out,
+                    'actual_in'            => $salescall->actual_in?->toDateTimeString(),
+                    'actual_out'           => $salescall->actual_out?->toDateTimeString(),
+
+                    'material_group_id'    => $salescall->material_group_id,
+                    'brand_id'             => $salescall->brand_id,
+                    'brand_other'          => $salescall->brand_other,
+
+
+                    'collection_amount'    => $salescall->collection_amount,
+                    'remarks'              => $salescall->remarks,
+                    'concerns'             => $salescall->concerns,
+                ]);
+
+                if ($response->status() === 401) {
+                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+                }
+
+                if ($response->successful()) {
+                    $salescall->update(['sync_status' => 'synced', 'server_id' => $response->json('server_id'), 'sync_error' => null]);
+                    $pushed++;
+                } else {
+                    $this->markFailed($salescall, $response->status() . ': ' . $response->body());
+                    $failed++;
+                }
+            } catch (\Exception $e) {
+                $this->markFailed($salescall, $e->getMessage());
+                $failed++;
+            }
+        }
+
+        if ($pushed === 0 && $failed === 0) {
+            return SyncResult::ok('Nothing to push.');
+        }
+
+        if ($failed > 0 && $pushed === 0) {
+            return SyncResult::fail("{$failed} item(s) failed to sync.", 'push_failed');
+        }
+
+        if ($failed > 0) {
+            return SyncResult::ok("Pushed {$pushed} items. {$failed} failed and will retry.");
+        }
+
+        return SyncResult::ok("Pushed {$pushed} items successfully.");
+    }
+
+    private function client(string $token): PendingRequest
+    {
+        return Http::withToken($token)->acceptJson()->timeout($this->timeout);
+    }
+
+    private function markFailed(Model $model, string $error): void
+    {
+        $model->update([
+            'sync_status'   => 'failed',
+            'sync_attempts' => ($model->sync_attempts ?? 0) + 1,
+            'sync_error'    => $error,
+        ]);
+    }
+}
