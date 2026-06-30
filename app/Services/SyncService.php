@@ -9,6 +9,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
 use Spatie\Permission\Models\Role;
+use App\Models\SalescallImage;
+
 
 class SyncService
 {
@@ -56,6 +58,7 @@ class SyncService
                     'name'      => $data['name'],
                     'password'  => $data['password'],
                     'api_token' => $data['api_token'],
+                    'rsm_id'    => $data['rsm_id'] ?? null,
                 ]
             );
 
@@ -128,10 +131,32 @@ class SyncService
                 }
             }
 
+            foreach ($data['customers'] ?? [] as $customer) {
+                \Illuminate\Support\Facades\DB::table('customers')->updateOrInsert(
+                    ['id' => $customer['id']],
+                    [
+                        'region_specific_id' => $customer['region_specific_id'] ?? null,
+                        'municipality_id'    => $customer['municipality_id'] ?? null,
+                        'name'               => $customer['name'],
+                        'contact_person'     => $customer['contact_person'] ?? null,
+                        'contact_number'     => $customer['contact_number'] ?? null,
+                        'address'            => $customer['address'] ?? null,
+                        'latitude'           => $customer['latitude'] ?? null,
+                        'longitude'          => $customer['longitude'] ?? null,
+                        'is_active'          => $customer['is_active'] ?? true,
+                        'updated_at'         => now(),
+                    ]
+                );
+            }
+
+
             $itineraryCount = count($data['itineraries'] ?? []);
             $salescallCount = array_sum(
                 array_map(fn($i) => count($i['salescalls'] ?? []), $data['itineraries'] ?? [])
             );
+
+
+
 
             foreach ($data['material_groups'] ?? [] as $group) {
                 \Illuminate\Support\Facades\DB::table('material_groups')->updateOrInsert(
@@ -151,6 +176,14 @@ class SyncService
                     ]
                 );
             }
+
+            // foreach ($data['customer_user'] ?? [] as $pivot) {
+            //     \Illuminate\Support\Facades\DB::table('customer_user')->updateOrInsert(
+            //         ['customer_id' => $pivot['customer_id'], 'user_id' => $pivot['user_id']],
+            //         ['updated_at' => now()]
+            //     );
+            // }
+
 
             foreach ($data['categories'] ?? [] as $item) {
                 \Illuminate\Support\Facades\DB::table('categories')->updateOrInsert(
@@ -173,10 +206,32 @@ class SyncService
                 );
             }
 
+            foreach ($data['salescall_image_categories'] ?? [] as $item) {
+                \Illuminate\Support\Facades\DB::table('salescall_image_categories')->updateOrInsert(
+                    ['id' => $item['id']],
+                    ['name' => $item['name'], 'slug' => $item['slug'], 'sort' => $item['sort'] ?? 0, 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['salescall_image_types'] ?? [] as $item) {
+                \Illuminate\Support\Facades\DB::table('salescall_image_types')->updateOrInsert(
+                    ['id' => $item['id']],
+                    [
+                        'salescall_image_category_id' => $item['salescall_image_category_id'],
+                        'name'       => $item['name'],
+                        'slug'       => $item['slug'],
+                        'sort'       => $item['sort'] ?? 0,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
 
 
 
-            return SyncResult::ok("Pulled {$itineraryCount} itineraries, {$salescallCount} salescalls.");
+
+            $customerCount = count($data['customers'] ?? []);
+
+            return SyncResult::ok("Pulled {$itineraryCount} itineraries, {$salescallCount} salescalls, {$customerCount} customers.");
         } catch (\Exception $e) {
             return SyncResult::fail('Pull error: ' . $e->getMessage(), 'exception');
         }
@@ -279,6 +334,56 @@ class SyncService
                 $failed++;
             }
         }
+
+        $pendingImages = SalescallImage::with('salescall')
+            ->where(function ($q) {
+                $q->where('sync_status', 'pending')
+                    ->orWhere(fn($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+            })
+            ->get();
+
+        foreach ($pendingImages as $image) {
+            if (! $image->salescall?->server_id) {
+                continue; // wait for salescall to sync first
+            }
+
+            if (! file_exists($image->local_path)) {
+                $this->markFailed($image, 'Local file not found: ' . $image->local_path);
+                $failed++;
+                continue;
+            }
+
+            try {
+                $response = $client
+                    ->attach('image', fopen($image->local_path, 'r'), basename($image->local_path))
+                    ->post("{$this->serverUrl}/api/sync/push/salescall-image", [
+                        'local_uuid'              => $image->local_uuid,
+                        'salescall_server_id'     => $image->salescall->server_id,
+                        'salescall_image_type_id' => $image->salescall_image_type_id,
+                        'notes'                   => $image->notes,
+                    ]);
+
+                if ($response->status() === 401) {
+                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+                }
+
+                if ($response->successful()) {
+                    $image->update([
+                        'sync_status' => 'synced',
+                        'server_id'   => $response->json('server_id'),
+                        'sync_error'  => null,
+                    ]);
+                    $pushed++;
+                } else {
+                    $this->markFailed($image, $response->status() . ': ' . $response->body());
+                    $failed++;
+                }
+            } catch (\Exception $e) {
+                $this->markFailed($image, $e->getMessage());
+                $failed++;
+            }
+        }
+
 
         if ($pushed === 0 && $failed === 0) {
             return SyncResult::ok('Nothing to push.');

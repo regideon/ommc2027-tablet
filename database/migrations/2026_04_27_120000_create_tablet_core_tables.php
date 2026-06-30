@@ -118,6 +118,10 @@ return new class extends Migration
             $table->unsignedBigInteger('brand_id')->nullable();
             $table->string('brand_other')->nullable();
 
+            $table->unsignedBigInteger('category_id')->nullable();
+            $table->unsignedBigInteger('sub_category_id')->nullable();
+            $table->unsignedBigInteger('sub_sub_category_id')->nullable();
+
             $table->decimal('collection_amount', 12, 4)->nullable();
             $table->string('collection_remarks')->nullable();
             $table->string('remarks')->nullable();

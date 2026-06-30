@@ -115,6 +115,37 @@
             material_group_id: null, brand_id: null, brand_other: '',
             category_id: null, sub_category_id: null, sub_sub_category_id: null
         },
+
+        imageCategories: {{ $imageCategoriesJson }},
+        photoStep: 0,
+        photoCategory: null,
+        photoType: null,
+        photoInputKey: 0,
+        get photosGrouped() {
+            const groups = {};
+            ($wire.callPhotos || []).forEach(p => {
+                if (!groups[p.category]) groups[p.category] = { name: p.category, photos: [] };
+                groups[p.category].photos.push(p);
+            });
+            return Object.values(groups);
+        },
+        startPhotoFlow()         { this.photoStep = 1; },
+        selectPhotoCategory(cat) { this.photoCategory = cat; this.photoStep = 2; },
+        selectPhotoType(type)    { this.photoType = type; this.photoStep = 3; },
+        cancelPhoto()            { this.photoStep = 0; this.photoCategory = null; this.photoType = null; },
+        capturePhoto(e) {
+            const file = e.target.files[0];
+            if (!file || !this.photoType) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                $wire.saveImage(this.selected, this.photoType.id, ev.target.result);
+                this.cancelPhoto();
+                this.photoInputKey++;
+            };
+            reader.readAsDataURL(file);
+        },
+
+
         categories: {{ $categoriesJson }},
         subCategories: {{ $subCategoriesJson }},
         subSubCategories: {{ $subSubCategoriesJson }},
@@ -177,6 +208,12 @@
         selectCall(id) {
             this.selected = id;
             this.tab = 'overview';
+
+            $wire.loadPhotos(id);
+            this.photoStep = 0;
+            this.photoCategory = null;
+            this.photoType = null;
+
             this.submitting = false;
             this.submitForm = { collection_amount: '', remarks: '', concerns: '' };
             const call = this.calls.find(c => c.id === id);
@@ -197,6 +234,15 @@
         },
 
         doSubmit() {
+            if (!this.submitForm.material_group_id) {
+                alert('Volume is required.');
+                return;
+            }
+            if (!this.submitForm.brand_id) {
+                alert('Sub-Volume is required.');
+                return;
+            }
+
             const id = this.selected;
             const data = {
                 collection:      this.submitForm.collection_amount !== '' ? (parseFloat(this.submitForm.collection_amount) || 0) : null,
@@ -221,8 +267,7 @@
                 category_id: null, sub_category_id: null, sub_sub_category_id: null
             };
 
-
-            $wire.initiateSubmit(id, data.collection, data.remarks, data.concerns, data.materialGroupId, data.brandId, data.brandOther, this.isOnline);
+            $wire.initiateSubmit(id, data.collection, data.remarks, data.concerns, data.materialGroupId, data.brandId, data.brandOther, data.categoryId, data.subCategoryId, data.subSubCategoryId, this.isOnline);
         },
 
 
@@ -250,6 +295,9 @@
     
     x-init="
         checkedIn = selectedCall ? selectedCall.status !== 'scheduled' : false;
+        
+        if (selected) { $wire.loadPhotos(selected); }
+
         checkConnectivity();
         window.addEventListener('resize', () => { isMobile = window.innerWidth < 1024; });
 
@@ -829,11 +877,17 @@
                         
                        {{-- Brand Observation --}}
                         <div class="pt-2 border-t border-gray-100">
-                            <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">Brand Observation</p>
-
+                            {{-- <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
+                                Brand Observation
+                            </p> --}}
                             <div class="flex gap-3">
                                 <div class="flex-1">
-                                    <label class="block text-xs font-semibold text-[#737685] mb-2">Material Group</label>
+                                    {{-- <label class="block text-xs font-semibold text-[#737685] mb-2"> --}}
+                                    <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
+                                        {{-- Material Group --}}
+                                        Volume
+                                    </p>
+                                    {{-- </label> --}}
                                     <select x-model="submitForm.material_group_id"
                                         @change="submitForm.brand_id = null; submitForm.brand_other = ''"
                                         class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
@@ -845,7 +899,10 @@
                                 </div>
 
                                 <div class="flex-1">
-                                    <label class="block text-xs font-semibold text-[#737685] mb-2">Brand</label>
+                                    <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
+                                        {{-- Brand --}}
+                                        Sub-Volume
+                                    </p>
                                     <select x-model="submitForm.brand_id"
                                         @change="submitForm.brand_other = ''"
                                         :disabled="!submitForm.material_group_id"
@@ -860,53 +917,64 @@
                             </div>
 
 
-                            <div class="mt-3" x-show="submitForm.brand_id && filteredBrands.find(b => b.id == submitForm.brand_id)?.name === 'Others'" x-transition>
-                                <label class="block text-xs font-semibold text-[#737685] mb-2">Specify Brand</label>
+                                                        <div class="mt-3" x-show="submitForm.brand_id && filteredBrands.find(b => b.id == submitForm.brand_id)?.name === 'Others'" x-transition>
+                                <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
+                                    Specify Sub-Volume
+                                </p>
                                 <input type="text" x-model="submitForm.brand_other"
                                     placeholder="Enter brand name..."
                                     class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none" />
                             </div>
 
+                            {{-- Categories + Sub Category --}}
+                            <div class="mt-3 flex gap-3">
+                                <div class="flex-1">
+                                    <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
+                                        Category <span class="text-red-500">*</span>
+                                    </p>
+                                    <select x-model="submitForm.category_id"
+                                        @change="submitForm.sub_category_id = null; submitForm.sub_sub_category_id = null"
+                                        class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
+                                        <option value="">— Select —</option>
+                                        <template x-for="cat in categories" :key="cat.id">
+                                            <option :value="cat.id" x-text="cat.name"></option>
+                                        </template>
+                                    </select>
+                                </div>
 
-                            {{-- Categories --}}
-                            <div class="mt-3">
-                                <label class="block text-xs font-black text-[#434654] uppercase tracking-wider mb-2">Categories</label>
-                                <select x-model="submitForm.category_id"
-                                    @change="submitForm.sub_category_id = null; submitForm.sub_sub_category_id = null"
-                                    class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
-                                    <option value="">Select category...</option>
-                                    <template x-for="cat in categories" :key="cat.id">
-                                        <option :value="cat.id" x-text="cat.name"></option>
-                                    </template>
-                                </select>
+                                <div class="flex-1">
+                                    <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
+                                        Sub Category <span class="text-red-500">*</span>
+                                    </p>
+                                    <select x-model="submitForm.sub_category_id"
+                                        @change="submitForm.sub_sub_category_id = null"
+                                        :disabled="!submitForm.category_id"
+                                        :class="!submitForm.category_id ? 'opacity-40 cursor-not-allowed' : ''"
+                                        class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
+                                        <option value="">— Select —</option>
+                                        <template x-for="sub in filteredSubCategories" :key="sub.id">
+                                            <option :value="sub.id" x-text="sub.name"></option>
+                                        </template>
+                                    </select>
+                                </div>
                             </div>
 
-                            {{-- Sub Categories --}}
-                            <div class="mt-3" x-show="submitForm.category_id && filteredSubCategories.length" x-transition>
-                                <label class="block text-xs font-semibold text-[#737685] mb-2">Sub Category</label>
-                                <select x-model="submitForm.sub_category_id"
-                                    @change="submitForm.sub_sub_category_id = null"
-                                    class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
-                                    <option value="">Select sub category...</option>
-                                    <template x-for="sub in filteredSubCategories" :key="sub.id">
-                                        <option :value="sub.id" x-text="sub.name"></option>
-                                    </template>
-                                </select>
-                            </div>
-
-                            {{-- Sub Sub Categories (only for AB SMDP) --}}
+                            {{-- Sub Sub Categories (only when applicable e.g. AB SMDP) --}}
                             <div class="mt-3" x-show="submitForm.sub_category_id && filteredSubSubCategories.length" x-transition>
-                                <label class="block text-xs font-semibold text-[#737685] mb-2">
+                                <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
                                     <span x-text="selectedSubCategory?.name"></span> — Type
-                                </label>
+                                </p>
                                 <select x-model="submitForm.sub_sub_category_id"
                                     class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
-                                    <option value="">Select type...</option>
+                                    <option value="">— Select —</option>
                                     <template x-for="ssc in filteredSubSubCategories" :key="ssc.id">
                                         <option :value="ssc.id" x-text="ssc.name"></option>
                                     </template>
                                 </select>
                             </div>
+
+
+                          
 
 
                         </div>
@@ -1073,9 +1141,128 @@
                     </div>
 
                     {{-- PHOTOS TAB --}}
-                    <div x-show="tab === 'photos'" class="flex items-center justify-center h-40">
-                        <p class="text-[#737685] text-sm">Photos will appear here.</p>
+                    <div x-show="tab === 'photos'" class="space-y-4">
+
+                        {{-- Step 0: Photo List + Add Button --}}
+                        <div x-show="photoStep === 0">
+
+                            {{-- Empty state --}}
+                            <div x-show="($wire.callPhotos || []).length === 0"
+                                 class="flex flex-col items-center justify-center py-10 text-center">
+                                <div class="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-3">
+                                    <span class="material-symbols-outlined text-gray-400 text-3xl">photo_camera</span>
+                                </div>
+                                <p class="font-bold text-[#191c1e] mb-1">No Photos Yet</p>
+                                <p class="text-sm text-[#737685]">Capture store visit photos below</p>
+                            </div>
+
+                            {{-- Photos grouped by category --}}
+                            <template x-for="group in photosGrouped" :key="group.name">
+                                <div class="mb-5">
+                                    <p class="text-[10px] font-black text-[#737685] uppercase tracking-widest mb-2"
+                                       x-text="group.name"></p>
+                                    <div class="grid grid-cols-3 gap-2">
+                                        <template x-for="photo in group.photos" :key="photo.id">
+                                            <div class="aspect-square rounded-xl overflow-hidden bg-gray-100 relative">
+                                                <img :src="photo.url" class="w-full h-full object-cover" loading="lazy" />
+                                                <div class="absolute bottom-0 left-0 right-0 bg-black/50 px-2 py-1">
+                                                    <p class="text-white text-[9px] font-bold truncate" x-text="photo.type"></p>
+                                                </div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+                            </template>
+
+                            <button @click="startPhotoFlow()"
+                                class="w-full flex items-center justify-center gap-2 h-12 border-2 border-dashed border-gray-300 rounded-2xl text-[#737685] font-bold text-sm hover:border-[#890f00] hover:text-[#890f00] transition-colors">
+                                <span class="material-symbols-outlined text-xl">add_a_photo</span>
+                                Add Photo
+                            </button>
+                        </div>
+
+                        {{-- Step 1: Choose Category --}}
+                        <div x-show="photoStep === 1" x-transition>
+                            <div class="flex items-center gap-3 mb-5">
+                                <button @click="cancelPhoto()"
+                                    class="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
+                                    <span class="material-symbols-outlined text-gray-500 text-xl">arrow_back</span>
+                                </button>
+                                <p class="font-black text-[#191c1e]">Choose Category</p>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <template x-for="cat in imageCategories" :key="cat.id">
+                                    <button @click="selectPhotoCategory(cat)"
+                                        class="flex flex-col items-center justify-center gap-3 h-32 bg-white border-2 border-gray-200 rounded-2xl hover:border-[#890f00] hover:bg-red-50 active:scale-[0.97] transition-all">
+                                        <span class="material-symbols-outlined text-4xl text-[#890f00]"
+                                              x-text="cat.slug === 'exterior' ? 'storefront' : 'battery_charging_full'"></span>
+                                        <p class="font-black text-sm text-[#191c1e]" x-text="cat.name"></p>
+                                    </button>
+                                </template>
+                            </div>
+                        </div>
+
+                        {{-- Step 2: Choose Type --}}
+                        <div x-show="photoStep === 2" x-transition>
+                            <div class="flex items-center gap-3 mb-5">
+                                <button @click="photoStep = 1; photoType = null;"
+                                    class="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
+                                    <span class="material-symbols-outlined text-gray-500 text-xl">arrow_back</span>
+                                </button>
+                                <div>
+                                    <p class="text-[10px] font-black text-[#890f00] uppercase tracking-widest"
+                                       x-text="photoCategory?.name"></p>
+                                    <p class="font-black text-[#191c1e]">Choose Type</p>
+                                </div>
+                            </div>
+                            <div class="space-y-2">
+                                <template x-for="type in (photoCategory?.types || [])" :key="type.id">
+                                    <button @click="selectPhotoType(type)"
+                                        class="w-full flex items-center gap-4 px-5 py-4 bg-white border border-gray-200 rounded-2xl hover:border-[#890f00] hover:bg-red-50 active:scale-[0.98] transition-all text-left">
+                                        <span class="material-symbols-outlined text-[#890f00]">photo_camera</span>
+                                        <p class="font-bold text-sm text-[#191c1e]" x-text="type.name"></p>
+                                        <span class="material-symbols-outlined text-gray-300 ml-auto">chevron_right</span>
+                                    </button>
+                                </template>
+                            </div>
+                        </div>
+
+                        {{-- Step 3: Capture or Gallery --}}
+                        <div x-show="photoStep === 3" x-transition>
+                            <div class="flex items-center gap-3 mb-5">
+                                <button @click="photoStep = 2; photoType = null;"
+                                    class="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
+                                    <span class="material-symbols-outlined text-gray-500 text-xl">arrow_back</span>
+                                </button>
+                                <div>
+                                    <p class="text-[10px] font-black text-[#890f00] uppercase tracking-widest"
+                                       x-text="(photoCategory?.name ?? '') + ' · ' + (photoType?.name ?? '')"></p>
+                                    <p class="font-black text-[#191c1e]">Capture Photo</p>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <label class="flex flex-col items-center justify-center gap-3 h-36 bg-[#890f00] text-white rounded-2xl cursor-pointer hover:opacity-95 active:scale-[0.97] transition-all">
+                                    <span class="material-symbols-outlined text-4xl">photo_camera</span>
+                                    <p class="font-black text-sm">Take Photo</p>
+                                    <input :key="photoInputKey" type="file" accept="image/*" capture="environment"
+                                           class="hidden" @change="capturePhoto($event)" />
+                                </label>
+                                <label class="flex flex-col items-center justify-center gap-3 h-36 bg-white border-2 border-gray-200 rounded-2xl cursor-pointer hover:border-[#890f00] hover:bg-red-50 active:scale-[0.97] transition-all">
+                                    <span class="material-symbols-outlined text-4xl text-[#890f00]">photo_library</span>
+                                    <p class="font-black text-sm text-[#191c1e]">Gallery</p>
+                                    <input :key="photoInputKey" type="file" accept="image/*"
+                                           class="hidden" @change="capturePhoto($event)" />
+                                </label>
+                            </div>
+                            <button @click="cancelPhoto()"
+                                class="w-full mt-4 h-11 bg-gray-100 text-[#737685] rounded-2xl font-bold text-sm hover:bg-gray-200 transition-colors">
+                                Cancel
+                            </button>
+                        </div>
+
                     </div>
+
+
 
                     {{-- ACTIVITY TAB --}}
                     <div x-show="tab === 'activity'" class="flex items-center justify-center h-40">

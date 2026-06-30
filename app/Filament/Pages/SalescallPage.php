@@ -3,9 +3,11 @@
 namespace App\Filament\Pages;
 
 use App\Models\Brand;
+use App\Models\Category;
 use App\Models\MaterialGroup;
 use App\Models\Salescall;
-use App\Models\Category;
+use App\Models\SalescallImage;
+use App\Models\SalescallImageCategory;
 use App\Models\SubCategory;
 use App\Models\SubSubCategory;
 use App\Services\SyncService;
@@ -14,8 +16,7 @@ use Carbon\Carbon;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
-use Illuminate\Support\Facades\Artisan;
-use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Storage;
 use Livewire\Attributes\On;
 use Native\Mobile\Facades\Geolocation;
 
@@ -29,8 +30,8 @@ class SalescallPage extends Page
     protected static ?int $navigationSort = 100;
 
     public ?int $pendingCheckInId = null;
-
     public ?int $preselectedId = null;
+    public array $callPhotos = [];
 
     public function mount(): void
     {
@@ -41,12 +42,43 @@ class SalescallPage extends Page
         }
     }
 
+    public function loadPhotos(int $salescallId): void
+    {
+        $this->callPhotos = SalescallImage::with('type.category')
+            ->where('salescall_id', $salescallId)
+            ->orderBy('created_at', 'desc')
+            ->get()
+            ->map(fn ($img) => [
+                'id'       => $img->id,
+                'url'      => '/salescall-image/' . $img->id,
+                'type'     => $img->type?->name ?? '—',
+                'category' => $img->type?->category?->name ?? '—',
+            ])
+            ->all();
+    }
+
+    public function saveImage(int $salescallId, int $typeId, string $base64Data): void
+    {
+        $raw      = preg_replace('#^data:image/\w+;base64,#i', '', $base64Data);
+        $filename = 'salescall_images/' . \Str::uuid() . '.jpg';
+
+        Storage::disk('local')->put($filename, base64_decode($raw));
+
+        SalescallImage::create([
+            'salescall_id'            => $salescallId,
+            'salescall_image_type_id' => $typeId,
+            'local_path'              => Storage::disk('local')->path($filename),
+            'local_uuid'              => (string) \Str::uuid(),
+            'sync_status'             => 'pending',
+        ]);
+
+        $this->loadPhotos($salescallId);
+    }
 
     public function initiateCheckIn(int $salescallId): void
     {
         $this->pendingCheckInId = $salescallId;
 
-        // Persist check-in time immediately so refresh doesn't lose the state
         Salescall::findOrFail($salescallId)->update([
             'actual_in'   => now(),
             'sync_status' => 'pending',
@@ -76,15 +108,14 @@ class SalescallPage extends Page
         bool $isOnline = false
     ): void {
         if (function_exists('nativephp_call')) {
-            Cache::put('pending_submit_' . $salescallId, [
-                'collection_amount' => $collectionAmount,
-                'remarks'           => $remarks,
-                'concerns'          => $concerns,
-                'material_group_id' => $materialGroupId,
-                'brand_id'          => $brandId,
-                'brand_other'       => $brandOther,
-                'is_online'         => $isOnline,
-
+            \Illuminate\Support\Facades\Cache::put('pending_submit_' . $salescallId, [
+                'collection_amount'   => $collectionAmount,
+                'remarks'             => $remarks,
+                'concerns'            => $concerns,
+                'material_group_id'   => $materialGroupId,
+                'brand_id'            => $brandId,
+                'brand_other'         => $brandOther,
+                'is_online'           => $isOnline,
                 'category_id'         => $categoryId,
                 'sub_category_id'     => $subCategoryId,
                 'sub_sub_category_id' => $subSubCategoryId,
@@ -104,7 +135,6 @@ class SalescallPage extends Page
                 materialGroupId: $materialGroupId,
                 brandId: $brandId,
                 brandOther: $brandOther,
-
                 categoryId: $categoryId,
                 subCategoryId: $subCategoryId,
                 subSubCategoryId: $subSubCategoryId,
@@ -140,17 +170,15 @@ class SalescallPage extends Page
             'brand_other'          => $brandOther ?: null,
             'sync_status'          => 'pending',
             'sync_attempts'        => 0,
-
-            'category_id'         => $categoryId,
-            'sub_category_id'     => $subCategoryId,
-            'sub_sub_category_id' => $subSubCategoryId ?: null,
+            'category_id'          => $categoryId,
+            'sub_category_id'      => $subCategoryId,
+            'sub_sub_category_id'  => $subSubCategoryId ?: null,
         ]);
 
         if ($isOnline) {
             $this->runSync();
         }
     }
-
 
     #[On('nativephp-checkin-complete')]
     public function onCheckinComplete(int $salescallId): void
@@ -160,7 +188,6 @@ class SalescallPage extends Page
 
     public function checkIn(int $salescallId, float $lat, float $lng, bool $isOnline = false): void
     {
-        // actual_in already set — only update GPS coords now
         Salescall::findOrFail($salescallId)->update([
             'latitude_actual_in'  => $lat ?: null,
             'longitude_actual_in' => $lng ?: null,
@@ -171,8 +198,6 @@ class SalescallPage extends Page
             $this->runSync();
         }
     }
-
-
 
     public function syncNow(): void
     {
@@ -242,18 +267,26 @@ class SalescallPage extends Page
                 ];
             });
 
+        $imageCategories = SalescallImageCategory::with('types:id,salescall_image_category_id,name,slug')
+            ->orderBy('sort')
+            ->get(['id', 'name', 'slug'])
+            ->map(fn ($cat) => [
+                'id'    => $cat->id,
+                'name'  => $cat->name,
+                'slug'  => $cat->slug,
+                'types' => $cat->types->map(fn ($t) => ['id' => $t->id, 'name' => $t->name])->values()->all(),
+            ]);
 
         return [
-            'callsJson'          => $calls->toJson(),
-            'firstId'            => $calls->first()['id'] ?? null,
-            'materialGroupsJson' => MaterialGroup::orderBy('name')->get(['id', 'name'])->toJson(),
-            'brandsJson'         => Brand::where('enabled', true)->orderBy('name')->get(['id', 'material_group_id', 'name'])->toJson(),
-            'preselectedId'      => $this->preselectedId,
-
+            'callsJson'            => $calls->toJson(),
+            'firstId'              => $calls->first()['id'] ?? null,
+            'materialGroupsJson'   => MaterialGroup::orderBy('name')->get(['id', 'name'])->toJson(),
+            'brandsJson'           => Brand::where('enabled', true)->orderBy('name')->get(['id', 'material_group_id', 'name'])->toJson(),
+            'preselectedId'        => $this->preselectedId,
             'categoriesJson'       => Category::orderBy('name')->get(['id', 'name'])->toJson(),
             'subCategoriesJson'    => SubCategory::orderBy('name')->get(['id', 'category_id', 'name'])->toJson(),
             'subSubCategoriesJson' => SubSubCategory::orderBy('name')->get(['id', 'sub_category_id', 'name'])->toJson(),
-
+            'imageCategoriesJson'  => $imageCategories->toJson(),
         ];
     }
 }

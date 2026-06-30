@@ -44,4 +44,9 @@ class Salescall extends Model
         if (is_null($this->actual_out)) return 'in_progress';
         return 'completed';
     }
+
+    public function images()
+    {
+        return $this->hasMany(SalescallImage::class);
+    }
 }
