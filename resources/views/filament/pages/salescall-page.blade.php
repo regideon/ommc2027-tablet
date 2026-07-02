@@ -289,14 +289,130 @@
             }[s] ?? '';
         },
         tabLabel(t) {
-            return { overview: 'Overview', ccr: 'CCR', mrf: 'MRF', photos: 'Photos', activity: 'Activity Log' }[t] ?? t;
+            return { overview: 'Overview', ccr: 'CCR', mrf: 'MRF', photos: 'Photos', profile: 'Change Profile', activity: 'Activity Log' }[t] ?? t;
+        },
+
+        currentProfile: @entangle('currentProfile'),
+        profileSubCategoryId: null,
+        profileWithForm: false,
+        profileFormType: null,
+        profileOptions: {{ $profileOptionsJson }},
+        profile: {
+            registered_name: '', owner_name: '', address: '', tin: '',
+            landline: '', mobile: '', classification: '',
+            incentive_type: 'lumpsum_monthly',
+            birthday: '', gender: '', marital_status: '',
+            brand_products: [], has_signature: false,
+        },
+        profileSignatureData: null,
+        profileSigCanvas: null,
+        profileSigCtx: null,
+        profileSigDrawing: false,
+        profileSaving: false,
+
+        selectProfileProgram(option) {
+            this.profileSubCategoryId = option.id;
+            this.profileWithForm = !!option.with_form;
+            const n = option.name.toLowerCase();
+            if (n.includes('madp')) this.profileFormType = 'madp';
+            else if (n.includes('smdp')) this.profileFormType = 'smdp';
+            else if (n.includes('vip')) this.profileFormType = 'vip';
+            else this.profileFormType = null;
+            if (this.profileWithForm) this.$nextTick(() => this.initProfileSig());
+        },
+        profileComputedAge() {
+            if (!this.profile.birthday) return '';
+            const dob = new Date(this.profile.birthday), today = new Date();
+            let age = today.getFullYear() - dob.getFullYear();
+            const m = today.getMonth() - dob.getMonth();
+            if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
+            return isNaN(age) ? '' : age;
+        },
+        addBrandRow() { this.profile.brand_products.push({ brand: '', supplier: '', monthly_volume: '' }); },
+        removeBrandRow(i) { this.profile.brand_products.splice(i, 1); },
+        initProfileSig() {
+            this.$nextTick(() => {
+                const canvas = document.getElementById('profile-sig-pad');
+                if (!canvas || !canvas.offsetWidth) return;
+                this.profileSigCanvas = canvas;
+                this.profileSigCtx = canvas.getContext('2d');
+                canvas.width = canvas.offsetWidth;
+                canvas.height = canvas.offsetHeight;
+                this.profileSigCtx.strokeStyle = '#1e293b';
+                this.profileSigCtx.lineWidth = 2;
+                this.profileSigCtx.lineCap = 'round';
+                this.profileSigCtx.lineJoin = 'round';
+            });
+        },
+        profileSigGetPos(e) {
+            const rect = this.profileSigCanvas.getBoundingClientRect();
+            const src = e.touches ? e.touches[0] : e;
+            return {
+                x: (src.clientX - rect.left) * (this.profileSigCanvas.width / rect.width),
+                y: (src.clientY - rect.top) * (this.profileSigCanvas.height / rect.height),
+            };
+        },
+        profileSigStart(e) {
+            if (!this.profileSigCanvas) { this.initProfileSig(); return; }
+            this.profileSigDrawing = true;
+            const pos = this.profileSigGetPos(e);
+            this.profileSigCtx.beginPath();
+            this.profileSigCtx.moveTo(pos.x, pos.y);
+        },
+        profileSigDraw(e) {
+            if (!this.profileSigDrawing || !this.profileSigCtx) return;
+            const pos = this.profileSigGetPos(e);
+            this.profileSigCtx.lineTo(pos.x, pos.y);
+            this.profileSigCtx.stroke();
+        },
+        profileSigEnd() {
+            this.profileSigDrawing = false;
+            if (this.profileSigCanvas) this.profileSignatureData = this.profileSigCanvas.toDataURL('image/png');
+        },
+        clearProfileSig() {
+            if (this.profileSigCtx && this.profileSigCanvas) {
+                this.profileSigCtx.clearRect(0, 0, this.profileSigCanvas.width, this.profileSigCanvas.height);
+                this.profileSignatureData = null;
+            }
+        },
+        async submitProfile() {
+            if (!this.profileSubCategoryId) return;
+            this.profileSaving = true;
+            try {
+                await $wire.saveProfile(
+                    this.selected, this.profileSubCategoryId,
+                    this.profile.registered_name, this.profile.owner_name, this.profile.address,
+                    this.profile.tin, this.profile.landline, this.profile.mobile, this.profile.classification,
+                    this.profileFormType === 'madp' ? this.profile.incentive_type : null,
+                    this.profile.birthday, this.profile.gender, this.profile.marital_status,
+                    this.profileFormType === 'vip' ? this.profile.brand_products : [],
+                    this.profileSignatureData,
+                );
+                this.profile.has_signature = true;
+            } finally {
+                this.profileSaving = false;
+            }
         }
+
     }"
     
     x-init="
         checkedIn = selectedCall ? selectedCall.status !== 'scheduled' : false;
         
         if (selected) { $wire.loadPhotos(selected); }
+
+        $watch('currentProfile', (p) => {
+            if (!p || !p.registered_name) return;
+            this.profile = { ...this.profile, ...p };
+            if (p.sub_category_id) {
+                const opt = this.profileOptions.find(o => o.id == p.sub_category_id);
+                if (opt) this.selectProfileProgram(opt);
+            }
+        });
+        $watch('tab', (value) => {
+            if (value === 'profile' && this.selected) $wire.loadProfile(this.selected);
+        });
+
 
         checkConnectivity();
         window.addEventListener('resize', () => { isMobile = window.innerWidth < 1024; });
@@ -1058,7 +1174,7 @@
 
                     {{-- Tabs --}}
                     <div class="flex gap-4 lg:gap-6 border-b border-gray-100 overflow-x-auto scrollbar-hide">
-                        <template x-for="t in ['overview','ccr','mrf','photos','activity']">
+                        <template x-for="t in ['overview','ccr','mrf','photos','profile','activity']">
                             <button
                                 @click="tab = t"
                                 :class="tab === t
@@ -1258,16 +1374,226 @@
                                 class="w-full mt-4 h-11 bg-gray-100 text-[#737685] rounded-2xl font-bold text-sm hover:bg-gray-200 transition-colors">
                                 Cancel
                             </button>
-                        </div>
 
+                        </div>
                     </div>
 
 
+                    {{-- CHANGE PROFILE TAB --}}
+                    <div x-show="tab === 'profile'" class="space-y-5">
+
+                        {{-- Program selector --}}
+                        <div>
+                            <label class="block text-xs font-bold text-[#737685] uppercase tracking-wider mb-2">Select Program</label>
+                            <div class="space-y-2">
+                                <template x-for="opt in profileOptions" :key="opt.id">
+                                    <button
+                                        @click="selectProfileProgram(opt)"
+                                        :class="profileSubCategoryId === opt.id
+                                            ? 'border-2 border-[#890f00] bg-[#fdf4f4] text-[#890f00] font-bold'
+                                            : 'border-2 border-gray-200 bg-white text-[#434654] hover:border-gray-300'"
+                                        class="w-full text-left px-4 py-3 rounded-xl text-sm transition-all flex items-center justify-between">
+                                        <span x-text="opt.name"></span>
+                                        <span x-show="opt.with_form" class="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">Form</span>
+                                    </button>
+                                </template>
+                            </div>
+                        </div>
+
+                        {{-- No-form notice --}}
+                        <div x-show="profileSubCategoryId && !profileWithForm" class="p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                            <p class="text-sm text-blue-700 font-medium">No enrollment form required for this program.</p>
+                        </div>
+
+                        {{-- Form (MADP / SMDP / VIP) --}}
+                        <div x-show="profileWithForm" class="space-y-6">
+
+                            {{-- Business Information --}}
+                            <div class="space-y-3">
+                                <h4 class="text-sm font-bold text-[#191c1e] border-b border-gray-100 pb-2">Business Information</h4>
+                                <div>
+                                    <label class="block text-xs text-[#737685] font-medium mb-1">Registered Name <span class="text-red-500">*</span></label>
+                                    <input type="text" x-model="profile.registered_name" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-[#191c1e] focus:outline-none focus:ring-2 focus:ring-[#890f00]/30 focus:border-[#890f00]">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-[#737685] font-medium mb-1">Name of Owner <span class="text-red-500">*</span></label>
+                                    <input type="text" x-model="profile.owner_name" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-[#191c1e] focus:outline-none focus:ring-2 focus:ring-[#890f00]/30 focus:border-[#890f00]">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-[#737685] font-medium mb-1">Address <span class="text-red-500">*</span></label>
+                                    <textarea x-model="profile.address" rows="2" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-[#191c1e] focus:outline-none focus:ring-2 focus:ring-[#890f00]/30 focus:border-[#890f00] resize-none"></textarea>
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-[#737685] font-medium mb-1">TIN <span class="text-red-500">*</span></label>
+                                    <input type="text" x-model="profile.tin" placeholder="000-000-000-000" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-[#191c1e] focus:outline-none focus:ring-2 focus:ring-[#890f00]/30 focus:border-[#890f00]">
+                                </div>
+                            </div>
+
+                            {{-- Contact Details --}}
+                            <div class="space-y-3">
+                                <h4 class="text-sm font-bold text-[#191c1e] border-b border-gray-100 pb-2">Business Contact Details</h4>
+                                <div>
+                                    <label class="block text-xs text-[#737685] font-medium mb-1">Business Landline No</label>
+                                    <input type="text" x-model="profile.landline" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-[#191c1e] focus:outline-none focus:ring-2 focus:ring-[#890f00]/30 focus:border-[#890f00]">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-[#737685] font-medium mb-1">Business Mobile No <span class="text-red-500">*</span></label>
+                                    <input type="text" x-model="profile.mobile" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-[#191c1e] focus:outline-none focus:ring-2 focus:ring-[#890f00]/30 focus:border-[#890f00]">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-[#737685] font-medium mb-1">Classification</label>
+                                    <input type="text" x-model="profile.classification" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-[#191c1e] focus:outline-none focus:ring-2 focus:ring-[#890f00]/30 focus:border-[#890f00]">
+                                </div>
+                            </div>
+
+                            {{-- MADP only: Incentive Type --}}
+                            <div x-show="profileFormType === 'madp'" class="space-y-3">
+                                <h4 class="text-sm font-bold text-[#191c1e] border-b border-gray-100 pb-2">I prefer to get my incentive <span class="text-red-500">*</span></h4>
+                                <label class="flex items-center gap-3 p-3 border-2 rounded-xl cursor-pointer transition-all"
+                                    :class="profile.incentive_type === 'lumpsum_monthly' ? 'border-[#890f00] bg-[#fdf4f4]' : 'border-gray-200'">
+                                    <input type="radio" x-model="profile.incentive_type" value="lumpsum_monthly" class="accent-[#890f00]">
+                                    <span class="text-sm font-medium text-[#191c1e]">Lumpsum - Monthly</span>
+                                </label>
+                                <label class="flex items-center gap-3 p-3 border-2 rounded-xl cursor-pointer transition-all"
+                                    :class="profile.incentive_type === 'outright' ? 'border-[#890f00] bg-[#fdf4f4]' : 'border-gray-200'">
+                                    <input type="radio" x-model="profile.incentive_type" value="outright" class="accent-[#890f00]">
+                                    <span class="text-sm font-medium text-[#191c1e]">Outright</span>
+                                </label>
+                            </div>
+
+                            {{-- VIP only: Brand/Products table --}}
+                            <div x-show="profileFormType === 'vip'" class="space-y-3">
+                                <div class="flex items-center justify-between border-b border-gray-100 pb-2">
+                                    <h4 class="text-sm font-bold text-[#191c1e]">Brand / Product / Services <span class="text-red-500">*</span></h4>
+                                    <button @click="addBrandRow()" type="button" class="flex items-center gap-1 text-xs text-[#890f00] font-bold">
+                                        <span class="material-symbols-outlined text-base">add_circle</span> Add Row
+                                    </button>
+                                </div>
+                                <p x-show="profile.brand_products.length === 0" class="text-xs text-[#737685] italic py-1">Tap "Add Row" to add entries.</p>
+                                <template x-for="(row, i) in profile.brand_products" :key="i">
+                                    <div class="border border-gray-200 rounded-xl p-3 space-y-2 bg-gray-50">
+                                        <div class="flex items-center justify-between">
+                                            <span class="text-xs font-bold text-[#737685]" x-text="'Entry #' + (i + 1)"></span>
+                                            <button @click="removeBrandRow(i)" type="button" class="text-red-400 hover:text-red-600">
+                                                <span class="material-symbols-outlined text-base">remove_circle</span>
+                                            </button>
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-[#737685] mb-1">Brand / Product / Services</label>
+                                            <input type="text" x-model="row.brand" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#890f00]/30 focus:border-[#890f00]">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-[#737685] mb-1">Supplier(s)</label>
+                                            <input type="text" x-model="row.supplier" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#890f00]/30 focus:border-[#890f00]">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-[#737685] mb-1">Monthly Volume</label>
+                                            <input type="number" x-model="row.monthly_volume" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#890f00]/30 focus:border-[#890f00]">
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+
+                            {{-- SMDP only: Commitment text --}}
+                            <div x-show="profileFormType === 'smdp'" class="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-2">
+                                <p class="text-xs font-bold text-[#434654]">In cognizance of this enrollment, I confirm the following commitments:</p>
+                                <ol class="list-decimal list-inside space-y-1 text-xs text-[#434654] leading-relaxed">
+                                    <li>To carry only Philippine Batteries Inc. products</li>
+                                    <li>To fully support OMMC in various sales and marketing activities</li>
+                                    <li>To acknowledge OMMC's ownership of trademarks and promotional materials</li>
+                                </ol>
+                            </div>
+
+                            {{-- Owner's Personal Information --}}
+                            <div class="space-y-3">
+                                <h4 class="text-sm font-bold text-[#191c1e] border-b border-gray-100 pb-2">Owner's Personal Information</h4>
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label class="block text-xs text-[#737685] font-medium mb-1">Birthday <span class="text-red-500">*</span></label>
+                                        <input type="date" x-model="profile.birthday" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-[#191c1e] focus:outline-none focus:ring-2 focus:ring-[#890f00]/30 focus:border-[#890f00]">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-[#737685] font-medium mb-1">Age</label>
+                                        <div class="w-full border border-gray-100 rounded-xl px-3 py-2.5 text-sm text-[#434654] bg-gray-50" x-text="profileComputedAge() || '—'"></div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-[#737685] font-medium mb-1">Gender <span class="text-red-500">*</span></label>
+                                    <select x-model="profile.gender" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-[#191c1e] focus:outline-none focus:ring-2 focus:ring-[#890f00]/30 focus:border-[#890f00] bg-white">
+                                        <option value="">Select gender</option>
+                                        <option value="Male">Male</option>
+                                        <option value="Female">Female</option>
+                                        <option value="Prefer Not to Say">Prefer Not to Say</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-[#737685] font-medium mb-1">Marital Status <span class="text-red-500">*</span></label>
+                                    <select x-model="profile.marital_status" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-[#191c1e] focus:outline-none focus:ring-2 focus:ring-[#890f00]/30 focus:border-[#890f00] bg-white">
+                                        <option value="">Select status</option>
+                                        <option value="Single">Single</option>
+                                        <option value="Married">Married</option>
+                                        <option value="Widow">Widow</option>
+                                        <option value="Separated">Separated</option>
+                                        <option value="Prefer Not to Say">Prefer Not to Say</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            {{-- Declaration & Signature --}}
+                            <div class="space-y-3">
+                                <div class="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                                    <p class="text-xs text-amber-800 italic leading-relaxed">By my signature affixed below, I hereby declare that all information contained in this document are true and correct. I have signed this document freely and voluntarily without any inducement, assurance, or guarantee being made to me.</p>
+                                </div>
+                                <div>
+                                    <div class="flex items-center justify-between mb-2">
+                                        <label class="text-xs font-bold text-[#737685] uppercase tracking-wider">Signature of Owner <span class="text-red-500">*</span></label>
+                                        <button @click="clearProfileSig()" type="button" class="text-xs text-[#890f00] font-medium">Clear</button>
+                                    </div>
+                                    <div x-show="profile.has_signature && !profileSignatureData" class="mb-2 flex items-center gap-1.5 text-xs text-green-600 font-medium">
+                                        <span class="material-symbols-outlined text-base mat-fill">check_circle</span>
+                                        Signature saved — draw below to replace
+                                    </div>
+                                    <canvas id="profile-sig-pad"
+                                        style="touch-action: none; height: 160px;"
+                                        class="w-full border-2 border-dashed border-gray-300 rounded-xl bg-white cursor-crosshair"
+                                        @mousedown.prevent="profileSigStart($event)"
+                                        @mousemove.prevent="profileSigDraw($event)"
+                                        @mouseup="profileSigEnd()"
+                                        @mouseleave="profileSigEnd()"
+                                        @touchstart.prevent="profileSigStart($event)"
+                                        @touchmove.prevent="profileSigDraw($event)"
+                                        @touchend="profileSigEnd()">
+                                    </canvas>
+                                    <div x-show="profileSignatureData" class="mt-1 text-xs text-green-600 font-medium flex items-center gap-1">
+                                        <span class="material-symbols-outlined text-base mat-fill">check_circle</span> Signature captured
+                                    </div>
+                                </div>
+                                <div class="flex items-center gap-2 text-xs text-[#737685]">
+                                    <span class="material-symbols-outlined text-base">calendar_today</span>
+                                    Date: <span class="font-medium text-[#191c1e]">{{ now()->format('F j, Y') }}</span>
+                                </div>
+                            </div>
+
+                            {{-- Save --}}
+                            <button
+                                @click="submitProfile()"
+                                :disabled="profileSaving || !profileSubCategoryId"
+                                class="w-full h-12 bg-[#890f00] text-white rounded-2xl font-black text-base shadow-lg hover:opacity-95 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                                <span x-show="!profileSaving">Save Profile</span>
+                                <span x-show="profileSaving" class="flex items-center justify-center gap-2">
+                                    <span class="material-symbols-outlined text-base animate-spin">progress_activity</span>
+                                    Saving...
+                                </span>
+                            </button>
+
+                        </div>
+                    </div>
 
                     {{-- ACTIVITY TAB --}}
                     <div x-show="tab === 'activity'" class="flex items-center justify-center h-40">
                         <p class="text-[#737685] text-sm">Activity log will appear here.</p>
                     </div>
+
 
                 </div>
 

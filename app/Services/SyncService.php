@@ -11,6 +11,8 @@ use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Spatie\Permission\Models\Role;
+use App\Models\CustomerProfile;
+
 
 class SyncService
 {
@@ -379,6 +381,65 @@ class SyncService
                 $failed++;
             }
         }
+
+        $pendingProfiles = CustomerProfile::with('salescall')
+            ->where(function ($q) {
+                $q->where('sync_status', 'pending')
+                    ->orWhere(fn($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+            })
+            ->get();
+
+        foreach ($pendingProfiles as $profile) {
+            if (! $profile->salescall?->server_id) {
+                continue; // salescall must sync first
+            }
+
+            try {
+                $signature = null;
+                if ($profile->signature_path && file_exists($profile->signature_path)) {
+                    $signature = 'data:image/png;base64,' . base64_encode(file_get_contents($profile->signature_path));
+                }
+
+                $response = $client->post("{$this->serverUrl}/api/sync/push/customer-profile", [
+                    'local_uuid'          => $profile->local_uuid,
+                    'salescall_server_id' => $profile->salescall->server_id,
+                    'sub_category_id'     => $profile->sub_category_id,
+                    'registered_name'     => $profile->registered_name,
+                    'owner_name'          => $profile->owner_name,
+                    'address'             => $profile->address,
+                    'tin'                 => $profile->tin,
+                    'landline'            => $profile->landline,
+                    'mobile'              => $profile->mobile,
+                    'classification'      => $profile->classification,
+                    'incentive_type'      => $profile->incentive_type,
+                    'birthday'            => $profile->birthday?->format('Y-m-d'),
+                    'gender'              => $profile->gender,
+                    'marital_status'      => $profile->marital_status,
+                    'brand_products'      => $profile->brand_products,
+                    'signature'           => $signature,
+                ]);
+
+                if ($response->status() === 401) {
+                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+                }
+
+                if ($response->successful()) {
+                    $profile->update([
+                        'sync_status' => 'synced',
+                        'server_id'   => $response->json('server_id'),
+                        'sync_error'  => null,
+                    ]);
+                    $pushed++;
+                } else {
+                    $this->markFailed($profile, $response->status() . ': ' . $response->body());
+                    $failed++;
+                }
+            } catch (\Exception $e) {
+                $this->markFailed($profile, $e->getMessage());
+                $failed++;
+            }
+        }
+
 
         if ($pushed === 0 && $failed === 0) {
             return SyncResult::ok('Nothing to push.');

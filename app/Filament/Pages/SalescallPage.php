@@ -20,6 +20,8 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Attributes\On;
 use Native\Mobile\Facades\Geolocation;
+use App\Models\CustomerProfile;
+
 
 class SalescallPage extends Page
 {
@@ -39,6 +41,9 @@ class SalescallPage extends Page
 
     public array $callPhotos = [];
 
+    public array $currentProfile = [];
+
+
     public function mount(): void
     {
         $this->preselectedId = (int) request()->get('call') ?: null;
@@ -54,9 +59,9 @@ class SalescallPage extends Page
             ->where('salescall_id', $salescallId)
             ->orderBy('created_at', 'desc')
             ->get()
-            ->map(fn ($img) => [
+            ->map(fn($img) => [
                 'id' => $img->id,
-                'url' => '/salescall-image/'.$img->id,
+                'url' => '/salescall-image/' . $img->id,
                 'type' => $img->type?->name ?? '—',
                 'category' => $img->type?->category?->name ?? '—',
             ])
@@ -66,7 +71,7 @@ class SalescallPage extends Page
     public function saveImage(int $salescallId, int $typeId, string $base64Data): void
     {
         $raw = preg_replace('#^data:image/\w+;base64,#i', '', $base64Data);
-        $filename = 'salescall_images/'.\Str::uuid().'.jpg';
+        $filename = 'salescall_images/' . \Str::uuid() . '.jpg';
 
         Storage::disk('local')->put($filename, base64_decode($raw));
 
@@ -93,7 +98,7 @@ class SalescallPage extends Page
         if (function_exists('nativephp_call')) {
             Geolocation::getCurrentPosition()
                 ->fineAccuracy()
-                ->id('checkin-'.$salescallId)
+                ->id('checkin-' . $salescallId)
                 ->get();
         } else {
             $this->dispatch('use-browser-geolocation', salescallId: $salescallId);
@@ -114,7 +119,7 @@ class SalescallPage extends Page
         bool $isOnline = false
     ): void {
         if (function_exists('nativephp_call')) {
-            Cache::put('pending_submit_'.$salescallId, [
+            Cache::put('pending_submit_' . $salescallId, [
                 'collection_amount' => $collectionAmount,
                 'remarks' => $remarks,
                 'concerns' => $concerns,
@@ -129,7 +134,7 @@ class SalescallPage extends Page
 
             Geolocation::getCurrentPosition()
                 ->fineAccuracy()
-                ->id('submit-'.$salescallId)
+                ->id('submit-' . $salescallId)
                 ->get();
         } else {
             $this->dispatch(
@@ -222,6 +227,83 @@ class SalescallPage extends Page
         }
     }
 
+    public function loadProfile(int $salescallId): void
+    {
+        $salescall = Salescall::with('customer')->findOrFail($salescallId);
+        $existing  = CustomerProfile::where('salescall_id', $salescallId)->first();
+
+        $this->currentProfile = [
+            'sub_category_id' => $existing?->sub_category_id,
+            'registered_name' => $existing?->registered_name ?? $salescall->customer?->name ?? '',
+            'owner_name'      => $existing?->owner_name ?? '',
+            'address'         => $existing?->address ?? $salescall->customer?->address ?? '',
+            'tin'             => $existing?->tin ?? '',
+            'landline'        => $existing?->landline ?? '',
+            'mobile'          => $existing?->mobile ?? $salescall->customer?->contact_number ?? '',
+            'classification'  => $existing?->classification ?? '',
+            'incentive_type'  => $existing?->incentive_type ?? 'lumpsum_monthly',
+            'birthday'        => $existing?->birthday?->format('Y-m-d') ?? '',
+            'gender'          => $existing?->gender ?? '',
+            'marital_status'  => $existing?->marital_status ?? '',
+            'brand_products'  => $existing?->brand_products ?? [],
+            'has_signature'   => ! empty($existing?->signature_path),
+        ];
+    }
+
+    public function saveProfile(
+        int $salescallId,
+        ?int $subCategoryId,
+        string $registeredName,
+        string $ownerName,
+        string $address,
+        ?string $tin,
+        ?string $landline,
+        ?string $mobile,
+        ?string $classification,
+        ?string $incentiveType,
+        ?string $birthday,
+        ?string $gender,
+        ?string $maritalStatus,
+        array $brandProducts,
+        ?string $signatureData,
+    ): void {
+        $profile = CustomerProfile::firstOrNew(['salescall_id' => $salescallId]);
+
+        if (! $profile->local_uuid) {
+            $profile->local_uuid = (string) \Str::uuid();
+        }
+
+        $profile->fill([
+            'sub_category_id' => $subCategoryId,
+            'registered_name' => $registeredName,
+            'owner_name'      => $ownerName,
+            'address'         => $address,
+            'tin'             => $tin ?: null,
+            'landline'        => $landline ?: null,
+            'mobile'          => $mobile ?: null,
+            'classification'  => $classification ?: null,
+            'incentive_type'  => $incentiveType ?: null,
+            'birthday'        => $birthday ?: null,
+            'gender'          => $gender ?: null,
+            'marital_status'  => $maritalStatus ?: null,
+            'brand_products'  => $brandProducts ?: null,
+            'sync_status'     => 'pending',
+            'sync_attempts'   => 0,
+        ]);
+
+        if ($signatureData) {
+            $raw      = preg_replace('#^data:image/\w+;base64,#i', '', $signatureData);
+            $filename = 'customer_profiles/' . \Str::uuid() . '.png';
+            Storage::disk('local')->put($filename, base64_decode($raw));
+            $profile->signature_path = Storage::disk('local')->path($filename);
+        }
+
+        $profile->save();
+
+        Notification::make()->title('Profile saved.')->success()->send();
+    }
+
+
     private function runSync(): void
     {
         $result = app(SyncService::class)->push();
@@ -277,23 +359,43 @@ class SalescallPage extends Page
         $imageCategories = SalescallImageCategory::with('types:id,salescall_image_category_id,name,slug')
             ->orderBy('sort')
             ->get(['id', 'name', 'slug'])
-            ->map(fn ($cat) => [
+            ->map(fn($cat) => [
                 'id' => $cat->id,
                 'name' => $cat->name,
                 'slug' => $cat->slug,
-                'types' => $cat->types->map(fn ($t) => ['id' => $t->id, 'name' => $t->name])->values()->all(),
+                'types' => $cat->types->map(fn($t) => ['id' => $t->id, 'name' => $t->name])->values()->all(),
             ]);
 
         return [
-            'callsJson' => $calls->toJson(),
-            'firstId' => $calls->first()['id'] ?? null,
-            'materialGroupsJson' => MaterialGroup::orderBy('name')->get(['id', 'name'])->toJson(),
-            'brandsJson' => Brand::where('enabled', true)->orderBy('name')->get(['id', 'material_group_id', 'name'])->toJson(),
-            'preselectedId' => $this->preselectedId,
-            'categoriesJson' => Category::orderBy('name')->get(['id', 'name'])->toJson(),
-            'subCategoriesJson' => SubCategory::orderBy('name')->get(['id', 'category_id', 'name'])->toJson(),
+            'callsJson'           => $calls->toJson(),
+            'firstId'             => $calls->first()['id'] ?? null,
+            'materialGroupsJson'  => MaterialGroup::orderBy('name')->get(['id', 'name'])->toJson(),
+            'brandsJson'          => Brand::where('enabled', true)->orderBy('name')->get(['id', 'material_group_id', 'name'])->toJson(),
+            'preselectedId'       => $this->preselectedId,
+            'categoriesJson'      => Category::orderBy('name')->get(['id', 'name'])->toJson(),
+            'subCategoriesJson'   => SubCategory::orderBy('name')->get(['id', 'category_id', 'name'])->toJson(),
             'subSubCategoriesJson' => SubSubCategory::orderBy('name')->get(['id', 'sub_category_id', 'name'])->toJson(),
             'imageCategoriesJson' => $imageCategories->toJson(),
+            'profileOptionsJson'  => SubCategory::whereIn('name', [
+                'AB MADP Outlet',
+                'AB SMDP',
+                'AB VIP',
+                'AB Mercury VDP Loyal',
+                'AB Mass V Loyal',
+            ])
+                ->select('id', 'name', 'with_form')
+                ->get()
+                ->groupBy('name')
+                ->map(fn($group) => $group->first())
+                ->sortBy(fn($s) => array_search($s->name, [
+                    'AB MADP Outlet',
+                    'AB SMDP',
+                    'AB VIP',
+                    'AB Mercury VDP Loyal',
+                    'AB Mass V Loyal',
+                ]))
+                ->values()
+                ->toJson(),
         ];
     }
 }
