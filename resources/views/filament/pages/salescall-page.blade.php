@@ -1001,7 +1001,7 @@
                                     {{-- <label class="block text-xs font-semibold text-[#737685] mb-2"> --}}
                                     <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
                                         {{-- Material Group --}}
-                                        Volume
+                                        Ramcar & Competitor Brand
                                     </p>
                                     {{-- </label> --}}
                                     <select x-model="submitForm.material_group_id"
@@ -1017,7 +1017,7 @@
                                 <div class="flex-1">
                                     <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
                                         {{-- Brand --}}
-                                        Sub-Volume
+                                        Brand
                                     </p>
                                     <select x-model="submitForm.brand_id"
                                         @change="submitForm.brand_other = ''"
