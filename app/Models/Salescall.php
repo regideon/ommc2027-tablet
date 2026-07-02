@@ -14,10 +14,9 @@ class Salescall extends Model
 
     protected $casts = [
         'visit_date' => 'datetime',
-        'actual_in'  => 'datetime',
+        'actual_in' => 'datetime',
         'actual_out' => 'datetime',
     ];
-
 
     public function customer()
     {
@@ -34,14 +33,20 @@ class Salescall extends Model
         return Carbon::parse(
             $this->attributes['visit_date']
                 ?? $this->actual_in
+                ?? $this->attributes['route_start_at']
                 ?? $this->created_at
         );
     }
 
     public function getStatusAttribute(): string
     {
-        if (is_null($this->actual_in))  return 'scheduled';
-        if (is_null($this->actual_out)) return 'in_progress';
+        if (is_null($this->actual_in)) {
+            return 'scheduled';
+        }
+        if (is_null($this->actual_out)) {
+            return 'in_progress';
+        }
+
         return 'completed';
     }
 

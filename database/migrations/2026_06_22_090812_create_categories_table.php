@@ -10,6 +10,7 @@ return new class extends Migration
     {
         Schema::create('categories', function (Blueprint $table) {
             $table->id();
+            $table->unsignedBigInteger('general_category_id')->nullable();
             $table->string('name');
             $table->timestamps();
         });
@@ -18,6 +19,8 @@ return new class extends Migration
             $table->id();
             $table->foreignId('category_id')->constrained()->cascadeOnDelete();
             $table->string('name');
+            $table->boolean('with_form')->default(false);
+            $table->boolean('is_active')->default(true);
             $table->timestamps();
         });
 

@@ -16,6 +16,7 @@ use Carbon\Carbon;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Attributes\On;
 use Native\Mobile\Facades\Geolocation;
@@ -25,12 +26,17 @@ class SalescallPage extends Page
     protected string $view = 'filament.pages.salescall-page';
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedPhone;
+
     protected static ?string $navigationLabel = 'Sales Calls';
+
     protected static ?string $title = '';
+
     protected static ?int $navigationSort = 100;
 
     public ?int $pendingCheckInId = null;
+
     public ?int $preselectedId = null;
+
     public array $callPhotos = [];
 
     public function mount(): void
@@ -49,9 +55,9 @@ class SalescallPage extends Page
             ->orderBy('created_at', 'desc')
             ->get()
             ->map(fn ($img) => [
-                'id'       => $img->id,
-                'url'      => '/salescall-image/' . $img->id,
-                'type'     => $img->type?->name ?? '—',
+                'id' => $img->id,
+                'url' => '/salescall-image/'.$img->id,
+                'type' => $img->type?->name ?? '—',
                 'category' => $img->type?->category?->name ?? '—',
             ])
             ->all();
@@ -59,17 +65,17 @@ class SalescallPage extends Page
 
     public function saveImage(int $salescallId, int $typeId, string $base64Data): void
     {
-        $raw      = preg_replace('#^data:image/\w+;base64,#i', '', $base64Data);
-        $filename = 'salescall_images/' . \Str::uuid() . '.jpg';
+        $raw = preg_replace('#^data:image/\w+;base64,#i', '', $base64Data);
+        $filename = 'salescall_images/'.\Str::uuid().'.jpg';
 
         Storage::disk('local')->put($filename, base64_decode($raw));
 
         SalescallImage::create([
-            'salescall_id'            => $salescallId,
+            'salescall_id' => $salescallId,
             'salescall_image_type_id' => $typeId,
-            'local_path'              => Storage::disk('local')->path($filename),
-            'local_uuid'              => (string) \Str::uuid(),
-            'sync_status'             => 'pending',
+            'local_path' => Storage::disk('local')->path($filename),
+            'local_uuid' => (string) \Str::uuid(),
+            'sync_status' => 'pending',
         ]);
 
         $this->loadPhotos($salescallId);
@@ -80,14 +86,14 @@ class SalescallPage extends Page
         $this->pendingCheckInId = $salescallId;
 
         Salescall::findOrFail($salescallId)->update([
-            'actual_in'   => now(),
+            'actual_in' => now(),
             'sync_status' => 'pending',
         ]);
 
         if (function_exists('nativephp_call')) {
             Geolocation::getCurrentPosition()
                 ->fineAccuracy()
-                ->id('checkin-' . $salescallId)
+                ->id('checkin-'.$salescallId)
                 ->get();
         } else {
             $this->dispatch('use-browser-geolocation', salescallId: $salescallId);
@@ -108,22 +114,22 @@ class SalescallPage extends Page
         bool $isOnline = false
     ): void {
         if (function_exists('nativephp_call')) {
-            \Illuminate\Support\Facades\Cache::put('pending_submit_' . $salescallId, [
-                'collection_amount'   => $collectionAmount,
-                'remarks'             => $remarks,
-                'concerns'            => $concerns,
-                'material_group_id'   => $materialGroupId,
-                'brand_id'            => $brandId,
-                'brand_other'         => $brandOther,
-                'is_online'           => $isOnline,
-                'category_id'         => $categoryId,
-                'sub_category_id'     => $subCategoryId,
+            Cache::put('pending_submit_'.$salescallId, [
+                'collection_amount' => $collectionAmount,
+                'remarks' => $remarks,
+                'concerns' => $concerns,
+                'material_group_id' => $materialGroupId,
+                'brand_id' => $brandId,
+                'brand_other' => $brandOther,
+                'is_online' => $isOnline,
+                'category_id' => $categoryId,
+                'sub_category_id' => $subCategoryId,
                 'sub_sub_category_id' => $subSubCategoryId,
             ], now()->addMinutes(5));
 
             Geolocation::getCurrentPosition()
                 ->fineAccuracy()
-                ->id('submit-' . $salescallId)
+                ->id('submit-'.$salescallId)
                 ->get();
         } else {
             $this->dispatch(
@@ -159,20 +165,20 @@ class SalescallPage extends Page
         bool $isOnline = false
     ): void {
         Salescall::findOrFail($salescallId)->update([
-            'actual_out'           => now(),
-            'latitude_actual_out'  => $lat ?: null,
+            'actual_out' => now(),
+            'latitude_actual_out' => $lat ?: null,
             'longitude_actual_out' => $lng ?: null,
-            'collection_amount'    => $collectionAmount,
-            'remarks'              => $remarks ?: null,
-            'concerns'             => $concerns ?: null,
-            'material_group_id'    => $materialGroupId,
-            'brand_id'             => $brandId,
-            'brand_other'          => $brandOther ?: null,
-            'sync_status'          => 'pending',
-            'sync_attempts'        => 0,
-            'category_id'          => $categoryId,
-            'sub_category_id'      => $subCategoryId,
-            'sub_sub_category_id'  => $subSubCategoryId ?: null,
+            'collection_amount' => $collectionAmount,
+            'remarks' => $remarks ?: null,
+            'concerns' => $concerns ?: null,
+            'material_group_id' => $materialGroupId,
+            'brand_id' => $brandId,
+            'brand_other' => $brandOther ?: null,
+            'sync_status' => 'pending',
+            'sync_attempts' => 0,
+            'category_id' => $categoryId,
+            'sub_category_id' => $subCategoryId,
+            'sub_sub_category_id' => $subSubCategoryId ?: null,
         ]);
 
         if ($isOnline) {
@@ -189,9 +195,9 @@ class SalescallPage extends Page
     public function checkIn(int $salescallId, float $lat, float $lng, bool $isOnline = false): void
     {
         Salescall::findOrFail($salescallId)->update([
-            'latitude_actual_in'  => $lat ?: null,
+            'latitude_actual_in' => $lat ?: null,
             'longitude_actual_in' => $lng ?: null,
-            'sync_status'         => 'pending',
+            'sync_status' => 'pending',
         ]);
 
         if ($isOnline) {
@@ -229,40 +235,41 @@ class SalescallPage extends Page
 
     protected function getViewData(): array
     {
-        $weekStart  = Carbon::now()->startOfWeek();
-        $weekEnd    = Carbon::now()->endOfWeek();
+        $weekStart = Carbon::now()->startOfWeek();
+        $weekEnd = Carbon::now()->endOfWeek();
         $monthStart = Carbon::now()->startOfMonth();
-        $monthEnd   = Carbon::now()->endOfMonth();
+        $monthEnd = Carbon::now()->endOfMonth();
 
         $calls = Salescall::with('customer')
+            ->where('created_by', auth()->id())
             ->where(function ($q) use ($monthStart, $monthEnd) {
                 $q->whereBetween('actual_in', [$monthStart, $monthEnd])
-                    ->orWhereBetween('created_at', [$monthStart, $monthEnd]);
+                    ->orWhereBetween('visit_date', [$monthStart, $monthEnd]);
             })
-            ->orderByRaw('COALESCE(actual_in, created_at) ASC')
+            ->orderByRaw('COALESCE(actual_in, visit_date) ASC')
             ->get()
             ->values()
             ->map(function (Salescall $call) use ($weekStart, $weekEnd) {
                 $visitDate = $call->visit_date;
 
                 $filterGroup = match (true) {
-                    $visitDate->isToday()                     => 'today',
+                    $visitDate->isToday() => 'today',
                     $visitDate->between($weekStart, $weekEnd) => 'week',
-                    default                                   => 'month',
+                    default => 'month',
                 };
 
                 return [
-                    'id'           => $call->id,
-                    'seq'          => $call->id,
-                    'local_uuid'   => $call->local_uuid,
-                    'name'         => $call->customer->name ?? '—',
-                    'location'     => $call->customer->address ?? '',
-                    'lat'          => $call->customer->latitude ?? null,
-                    'lng'          => $call->customer->longitude ?? null,
-                    'time'         => $visitDate->format('h:i A'),
-                    'date_label'   => $visitDate->format('D, M j'),
-                    'status'       => $call->status,
-                    'sync_status'  => $call->sync_status,
+                    'id' => $call->id,
+                    'seq' => $call->id,
+                    'local_uuid' => $call->local_uuid,
+                    'name' => $call->customer->name ?? '—',
+                    'location' => $call->customer->address ?? '',
+                    'lat' => $call->customer->latitude ?? null,
+                    'lng' => $call->customer->longitude ?? null,
+                    'time' => $visitDate->format('h:i A'),
+                    'date_label' => $visitDate->format('D, M j'),
+                    'status' => $call->status,
+                    'sync_status' => $call->sync_status,
                     'filter_group' => $filterGroup,
                 ];
             });
@@ -271,22 +278,22 @@ class SalescallPage extends Page
             ->orderBy('sort')
             ->get(['id', 'name', 'slug'])
             ->map(fn ($cat) => [
-                'id'    => $cat->id,
-                'name'  => $cat->name,
-                'slug'  => $cat->slug,
+                'id' => $cat->id,
+                'name' => $cat->name,
+                'slug' => $cat->slug,
                 'types' => $cat->types->map(fn ($t) => ['id' => $t->id, 'name' => $t->name])->values()->all(),
             ]);
 
         return [
-            'callsJson'            => $calls->toJson(),
-            'firstId'              => $calls->first()['id'] ?? null,
-            'materialGroupsJson'   => MaterialGroup::orderBy('name')->get(['id', 'name'])->toJson(),
-            'brandsJson'           => Brand::where('enabled', true)->orderBy('name')->get(['id', 'material_group_id', 'name'])->toJson(),
-            'preselectedId'        => $this->preselectedId,
-            'categoriesJson'       => Category::orderBy('name')->get(['id', 'name'])->toJson(),
-            'subCategoriesJson'    => SubCategory::orderBy('name')->get(['id', 'category_id', 'name'])->toJson(),
+            'callsJson' => $calls->toJson(),
+            'firstId' => $calls->first()['id'] ?? null,
+            'materialGroupsJson' => MaterialGroup::orderBy('name')->get(['id', 'name'])->toJson(),
+            'brandsJson' => Brand::where('enabled', true)->orderBy('name')->get(['id', 'material_group_id', 'name'])->toJson(),
+            'preselectedId' => $this->preselectedId,
+            'categoriesJson' => Category::orderBy('name')->get(['id', 'name'])->toJson(),
+            'subCategoriesJson' => SubCategory::orderBy('name')->get(['id', 'category_id', 'name'])->toJson(),
             'subSubCategoriesJson' => SubSubCategory::orderBy('name')->get(['id', 'sub_category_id', 'name'])->toJson(),
-            'imageCategoriesJson'  => $imageCategories->toJson(),
+            'imageCategoriesJson' => $imageCategories->toJson(),
         ];
     }
 }

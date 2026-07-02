@@ -36,6 +36,7 @@ return new class extends Migration
 
         Schema::create('customers', function (Blueprint $table) {
             $table->id();
+            $table->unsignedBigInteger('general_category_id')->nullable();
             $table->unsignedBigInteger('region_specific_id')->nullable();
             $table->unsignedBigInteger('municipality_id')->nullable();
             $table->string('name');
@@ -111,8 +112,13 @@ return new class extends Migration
             $table->decimal('longitude_actual_in', 10, 6)->nullable();
             $table->decimal('latitude_actual_out', 10, 6)->nullable();
             $table->decimal('longitude_actual_out', 10, 6)->nullable();
+
             $table->dateTime('actual_in')->nullable();
             $table->dateTime('actual_out')->nullable();
+
+            $table->dateTime('route_start_at')->nullable();
+            $table->dateTime('route_end_at')->nullable();
+            $table->integer('time_spent')->nullable();
 
             $table->unsignedBigInteger('material_group_id')->nullable();
             $table->unsignedBigInteger('brand_id')->nullable();
