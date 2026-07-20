@@ -11,9 +11,9 @@
                     <span class="material-symbols-outlined text-blue-600">event_note</span>
                 </div>
             </div>
-            <p class="text-5xl font-black text-gray-900">{{ $todayCalls->count() }}</p>
+            <p class="text-5xl font-black text-gray-900">{{ $monthCalls->count() }}</p>
             <div class="mt-3 flex items-center gap-2">
-                <span class="text-xs font-bold text-blue-600">Today</span>
+                <span class="text-xs font-bold text-blue-600">This Month</span>
             </div>
         </div>
 
@@ -24,17 +24,17 @@
                     <span class="material-symbols-outlined mat-fill text-green-600">check_circle</span>
                 </div>
             </div>
-            @php $completed = $todayCalls->where('status', 'completed')->count(); @endphp
+            @php $completed = $monthCalls->where('status', 'completed')->count(); @endphp
             <p class="text-5xl font-black text-gray-900">{{ $completed }}</p>
             <div class="mt-3 flex items-center gap-2">
-                @if($todayCalls->count() > 0)
-                    @php $pct = round($completed / $todayCalls->count() * 100); @endphp
+                @if($monthCalls->count() > 0)
+                    @php $pct = round($completed / $monthCalls->count() * 100); @endphp
                     <span class="text-xs font-bold text-green-600">{{ $pct }}% Done</span>
                     <div class="flex-1 h-1.5 bg-green-100 rounded-full overflow-hidden">
                         <div class="bg-green-600 h-full rounded-full" style="width:{{ $pct }}%"></div>
                     </div>
                 @else
-                    <span class="text-xs text-gray-400">No calls today</span>
+                    <span class="text-xs text-gray-400">No calls this month</span>
                 @endif
             </div>
         </div>
@@ -46,7 +46,7 @@
                     <span class="material-symbols-outlined text-amber-500">pending</span>
                 </div>
             </div>
-            <p class="text-5xl font-black text-gray-900">{{ $todayCalls->where('status', 'in_progress')->count() }}</p>
+            <p class="text-5xl font-black text-gray-900">{{ $monthCalls->where('status', 'in_progress')->count() }}</p>
             <p class="text-xs text-gray-400 mt-3 font-medium">Currently active</p>
         </div>
 
@@ -57,7 +57,7 @@
                     <span class="material-symbols-outlined text-orange-500">hourglass_empty</span>
                 </div>
             </div>
-            <p class="text-5xl font-black text-gray-900">{{ str_pad($todayCalls->where('status', 'scheduled')->count(), 2, '0', STR_PAD_LEFT) }}</p>
+            <p class="text-5xl font-black text-gray-900">{{ str_pad($monthCalls->where('status', 'scheduled')->count(), 2, '0', STR_PAD_LEFT) }}</p>
             <div class="mt-3">
                 <span class="px-2 py-1 bg-yellow-100 text-yellow-700 text-[10px] font-black rounded uppercase">Pending</span>
             </div>

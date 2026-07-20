@@ -57,12 +57,29 @@
         maximized: false,
         isMobile: window.innerWidth < 1024,
         checkedIn: false,
-        submitting: false,
         syncStatus: null,
         pulling: false,
         isOnline: true,
         showBackOnline: false,
         showLegend: false,
+
+        // null | 'checking' | 'syncing' | 'success' | 'skipped-slow' | 'failed'
+        autoSyncStatus: null,
+        autoSyncMbps: null,
+        autoSyncRetries: 0,
+        autoSyncMaxRetries: 5,
+        autoSyncTimer: null,
+        async attemptAutoSync() {
+            if (!this.isOnline || this.autoSyncStatus === 'checking' || this.autoSyncStatus === 'syncing') return;
+            clearTimeout(this.autoSyncTimer);
+            this.autoSyncStatus = 'checking';
+            await $wire.autoSyncIfFast();
+        },
+        scheduleAutoSyncRetry() {
+            if (this.autoSyncRetries >= this.autoSyncMaxRetries) return;
+            this.autoSyncRetries++;
+            this.autoSyncTimer = setTimeout(() => this.attemptAutoSync(), 30000);
+        },
         async checkConnectivity() {
             const wasOnline = this.isOnline;
             try {
@@ -109,11 +126,67 @@
             this.pulling = true;
             await $wire.pullNow();
         },
+        lastPullAt: 0,
+        async autoPull() {
+            if (Date.now() - this.lastPullAt < 60000) return;
+            this.lastPullAt = Date.now();
+            await this.startPull();
+        },
 
-        submitForm: {
-            collection_amount: '', remarks: '', concerns: '',
-            material_group_id: null, brand_id: null, brand_other: '',
-            category_id: null, sub_category_id: null, sub_sub_category_id: null
+        brandForm: {
+            1: [{ brand_id: '', quantity: '', brand_other: '' }],
+            2: [{ brand_id: '', quantity: '', brand_other: '' }],
+            3: [{ brand_id: '', quantity: '', brand_other: '' }],
+            4: [{ brand_id: '', quantity: '', brand_other: '' }],
+            5: [{ brand_id: '', quantity: '', brand_other: '' }],
+        },
+        currentBrands: @entangle('currentBrands'),
+        brandsSaving: false,
+        brandsForGroup(groupId) {
+            return this.brands.filter(b => b.material_group_id === groupId);
+        },
+        isNoneBrand(groupId, brandId) {
+            return this.brandsForGroup(groupId).find(b => b.id == brandId)?.name === 'None';
+        },
+        isOthersBrand(groupId, brandId) {
+            return this.brandsForGroup(groupId).find(b => b.id == brandId)?.name === 'Others';
+        },
+        groupAddDisabled(groupId) {
+            return (this.brandForm[groupId] || []).some(r => this.isNoneBrand(groupId, r.brand_id));
+        },
+        onBrandRowChange(groupId, idx) {
+            const row = this.brandForm[groupId][idx];
+            if (!this.isOthersBrand(groupId, row.brand_id)) row.brand_other = '';
+            if (this.isNoneBrand(groupId, row.brand_id)) this.brandForm[groupId] = [row];
+        },
+        addBrandItem(groupId) {
+            if (this.groupAddDisabled(groupId)) return;
+            this.brandForm[groupId].push({ brand_id: '', quantity: '', brand_other: '' });
+        },
+        removeBrandItem(groupId, idx) {
+            const rows = this.brandForm[groupId];
+            if (rows.length === 1) { rows[0] = { brand_id: '', quantity: '', brand_other: '' }; return; }
+            rows.splice(idx, 1);
+        },
+        groupIsValid(groupId) {
+            const rows = this.brandForm[groupId] || [];
+            if (rows.some(r => this.isNoneBrand(groupId, r.brand_id))) return true;
+            return rows.some(r => r.brand_id && r.quantity !== '' && r.quantity !== null && Number(r.quantity) > 0);
+        },
+        async saveBrands() {
+            const invalidGroups = [1, 2, 3, 4, 5].filter(g => !this.groupIsValid(g));
+            if (invalidGroups.length) {
+                const names = invalidGroups.map(g => '- ' + (this.materialGroups.find(mg => mg.id === g)?.name || ('Group ' + g))).join('\n');
+                alert('Please select at least one brand with a quantity for:\n' + names + '\n(Or choose None for that group.)');
+                return;
+            }
+
+            this.brandsSaving = true;
+            try {
+                await $wire.saveBrands(this.selected, this.brandForm);
+            } finally {
+                this.brandsSaving = false;
+            }
         },
 
         imageCategories: {{ $imageCategoriesJson }},
@@ -121,6 +194,19 @@
         photoCategory: null,
         photoType: null,
         photoInputKey: 0,
+        previewPhoto: null,
+        photoToDelete: null,
+        deletingPhoto: false,
+        async confirmDeletePhoto() {
+            if (!this.photoToDelete || this.deletingPhoto) return;
+            this.deletingPhoto = true;
+            try {
+                await $wire.deleteImage(this.photoToDelete.id);
+            } finally {
+                this.deletingPhoto = false;
+                this.photoToDelete = null;
+            }
+        },
         get photosGrouped() {
             const groups = {};
             ($wire.callPhotos || []).forEach(p => {
@@ -129,51 +215,55 @@
             });
             return Object.values(groups);
         },
+        categoryCoverage(cat) {
+            const types = cat.types || [];
+            if (!types.length) return 'none';
+            const covered = new Set(
+                ($wire.callPhotos || [])
+                    .filter(p => p.category === cat.name)
+                    .map(p => p.type)
+            );
+            if (covered.size === 0) return 'none';
+            return covered.size >= types.length ? 'complete' : 'partial';
+        },
         startPhotoFlow()         { this.photoStep = 1; },
         selectPhotoCategory(cat) { this.photoCategory = cat; this.photoStep = 2; },
         selectPhotoType(type)    { this.photoType = type; this.photoStep = 3; },
         cancelPhoto()            { this.photoStep = 0; this.photoCategory = null; this.photoType = null; },
         capturePhoto(e) {
             const file = e.target.files[0];
+            e.target.value = null;
             if (!file || !this.photoType) return;
             const reader = new FileReader();
             reader.onload = (ev) => {
                 $wire.saveImage(this.selected, this.photoType.id, ev.target.result);
-                this.cancelPhoto();
+                // Jump straight back to category selection (not the plain list) so
+                // multiple categories can be covered without an extra tap each time.
+                this.photoStep = 1;
+                this.photoCategory = null;
+                this.photoType = null;
                 this.photoInputKey++;
             };
             reader.readAsDataURL(file);
         },
 
 
-        categories: {{ $categoriesJson }},
-        subCategories: {{ $subCategoriesJson }},
-        subSubCategories: {{ $subSubCategoriesJson }},
-        get filteredSubCategories() {
-            if (!this.submitForm.category_id) return [];
-            return this.subCategories.filter(s => s.category_id == this.submitForm.category_id);
-        },
-        get filteredSubSubCategories() {
-            if (!this.submitForm.sub_category_id) return [];
-            return this.subSubCategories.filter(s => s.sub_category_id == this.submitForm.sub_category_id);
-        },
-        get selectedSubCategory() {
-            return this.subCategories.find(s => s.id == this.submitForm.sub_category_id);
-        },
-
         calls: {{ $callsJson }},
 
         materialGroups: {{ $materialGroupsJson }},
         brands: {{ $brandsJson }},
-        get filteredBrands() {
-            if (!this.submitForm.material_group_id) return [];
-            return this.brands.filter(b => b.material_group_id == this.submitForm.material_group_id);
+
+        get inProgressCall() {
+            return this.calls.find(c => c.status === 'in_progress') ?? null;
         },
 
         get filteredCalls() {
-            if (this.filter === 'today') return this.calls.filter(c => c.filter_group === 'today');
-            if (this.filter === 'week')  return this.calls.filter(c => ['today','week'].includes(c.filter_group));
-            return this.calls;
+            const base = this.inProgressCall
+                ? this.calls.filter(c => c.status !== 'in_progress')
+                : this.calls;
+            if (this.filter === 'today') return base.filter(c => c.filter_group === 'today');
+            if (this.filter === 'week')  return base.filter(c => ['today','week'].includes(c.filter_group));
+            return base;
         },
 
         get syncButtonClass() {
@@ -210,17 +300,26 @@
             this.tab = 'overview';
 
             $wire.loadPhotos(id);
+            $wire.loadBrands(id);
+            $wire.loadCategories(id);
             this.photoStep = 0;
             this.photoCategory = null;
             this.photoType = null;
 
-            this.submitting = false;
-            this.submitForm = { collection_amount: '', remarks: '', concerns: '' };
+            // Always reset these regardless of tab — $watch('tab') only fires on changes,
+            // so if tab was already 'overview' these would silently persist to the new call.
+            this.showCancelReason = false;
+            this.cancelReason = '';
+            this.showPartialReason = false;
+            this.partialReason = '';
+            this.previewPhoto = null;
+
             const call = this.calls.find(c => c.id === id);
             this.checkedIn = call ? call.status !== 'scheduled' : false;
             this.showDetail = true;
         },
         doCheckIn() {
+            if (this.anyOtherInProgress) return;
             $wire.initiateCheckIn(this.selected);
             const call = this.calls.find(c => c.id === this.selected);
             if (call) { call.status = 'in_progress'; call.sync_status = 'pending'; }
@@ -233,70 +332,87 @@
             this.checkedIn = true;
         },
 
-        doSubmit() {
-            if (!this.submitForm.material_group_id) {
-                alert('Volume is required.');
-                return;
-            }
-            if (!this.submitForm.brand_id) {
-                alert('Sub-Volume is required.');
-                return;
-            }
-
-            const id = this.selected;
-            const data = {
-                collection:      this.submitForm.collection_amount !== '' ? (parseFloat(this.submitForm.collection_amount) || 0) : null,
-                remarks:         this.submitForm.remarks || null,
-                concerns:        this.submitForm.concerns || null,
-                materialGroupId: this.submitForm.material_group_id || null,
-                brandId:         this.submitForm.brand_id || null,
-                brandOther:      this.submitForm.brand_other || null,
-
-                categoryId:       this.submitForm.category_id || null,
-                subCategoryId:    this.submitForm.sub_category_id || null,
-                subSubCategoryId: this.submitForm.sub_sub_category_id || null,
-
-            };
-
-            const call = this.calls.find(c => c.id === id);
-            if (call) { call.status = 'completed'; call.sync_status = 'pending'; }
-            this.submitting = false;
-            this.submitForm = {
-                collection_amount: '', remarks: '', concerns: '',
-                material_group_id: null, brand_id: null, brand_other: '',
-                category_id: null, sub_category_id: null, sub_sub_category_id: null
-            };
-
-            $wire.initiateSubmit(id, data.collection, data.remarks, data.concerns, data.materialGroupId, data.brandId, data.brandOther, data.categoryId, data.subCategoryId, data.subSubCategoryId, this.isOnline);
+        get anyOtherInProgress() {
+            return this.calls.some(c => c.status === 'in_progress' && c.id !== this.selected);
         },
 
+        hasSavedBrands: @entangle('hasSavedBrands'),
+        photosComplete: @entangle('photosComplete'),
+        finishing: false,
+        showCancelReason: false,
+        cancelReason: '',
+        showPartialReason: false,
+        partialReason: '',
+        get canSubmitSalescall() {
+            return this.hasSavedBrands && this.photosComplete;
+        },
+        finishVisit(outcome, reason = null) {
+            if (this.finishing) return;
+            if (outcome === 'cancelled' && !reason) { this.showCancelReason = true; return; }
+            if (outcome === 'partially_completed' && !reason) { this.showPartialReason = true; return; }
+            this.finishing = true;
+            // Safety net: reset finishing if finish-done event never fires (network/Livewire failure)
+            setTimeout(() => { this.finishing = false; }, 15000);
+            $wire.initiateFinish(this.selected, outcome, reason);
+            const call = this.calls.find(c => c.id === this.selected);
+            if (call) { call.status = outcome; call.sync_status = 'pending'; }
+            this.showCancelReason = false;
+            this.cancelReason = '';
+            this.showPartialReason = false;
+            this.partialReason = '';
+        },
+        confirmCancel() {
+            if (!this.cancelReason.trim()) return;
+            this.finishVisit('cancelled', this.cancelReason.trim());
+        },
+        confirmPartial() {
+            if (!this.partialReason.trim()) return;
+            this.finishVisit('partially_completed', this.partialReason.trim());
+        },
+        _persistFinishLocation(lat, lng) {
+            $wire.finishLocation(this.selected, lat, lng);
+        },
 
         statusLabel(s) {
-            return { in_progress: 'In Progress', scheduled: 'Scheduled', completed: 'Completed' }[s] ?? s;
+            return {
+                in_progress: 'In Progress',
+                scheduled: 'Scheduled',
+                completed: 'Completed',
+                partially_completed: 'Partially Completed',
+                cancelled: 'Cancelled',
+            }[s] ?? s;
         },
         statusBadgeClass(s) {
             return {
-                in_progress: 'bg-amber-100 text-amber-700',
-                scheduled:   'bg-blue-100 text-blue-700',
-                completed:   'bg-green-100 text-green-700',
+                in_progress:          'bg-amber-100 text-amber-700',
+                scheduled:            'bg-blue-100 text-blue-700',
+                completed:            'bg-green-100 text-green-700',
+                partially_completed:  'bg-orange-100 text-orange-700',
+                cancelled:            'bg-gray-200 text-gray-600',
             }[s] ?? '';
         },
         seqBgClass(s) {
             return {
-                in_progress: 'bg-primary-fixed text-primary',
-                scheduled:   'bg-surface-high text-on-surface-var',
-                completed:   'bg-secondary-cont text-on-secondary-cont',
+                in_progress:          'bg-primary-fixed text-primary',
+                scheduled:            'bg-surface-high text-on-surface-var',
+                completed:            'bg-secondary-cont text-on-secondary-cont',
+                partially_completed:  'bg-orange-100 text-orange-700',
+                cancelled:            'bg-gray-200 text-gray-600',
             }[s] ?? '';
         },
         tabLabel(t) {
-            return { overview: 'Overview', ccr: 'CCR', mrf: 'MRF', photos: 'Photos', profile: 'Change Profile', activity: 'Activity Log' }[t] ?? t;
+            return { overview: 'Overview', brands: 'Brands', ccr: 'CCR', mrf: 'MRF', photos: 'Photos', profile: 'Change Profile', activity: 'Activity Log' }[t] ?? t;
         },
 
         currentProfile: @entangle('currentProfile'),
+        categories: {{ $categoriesJson }},
+        subCategories: {{ $subCategoriesJson }},
+        profileCategoryId: '',
         profileSubCategoryId: null,
         profileWithForm: false,
         profileFormType: null,
-        profileOptions: {{ $profileOptionsJson }},
+        currentCategory: @entangle('currentCategory'),
+        categorySaving: false,
         profile: {
             registered_name: '', owner_name: '', address: '', tin: '',
             landline: '', mobile: '', classification: '',
@@ -310,15 +426,34 @@
         profileSigDrawing: false,
         profileSaving: false,
 
-        selectProfileProgram(option) {
-            this.profileSubCategoryId = option.id;
-            this.profileWithForm = !!option.with_form;
-            const n = option.name.toLowerCase();
+        get profileSubCategoryOptions() {
+            if (!this.profileCategoryId) return [];
+            return this.subCategories.filter(s => s.category_id == this.profileCategoryId);
+        },
+        get categoryChanged() {
+            if (!this.profileSubCategoryId) return false;
+            if (!this.currentCategory?.category_id) return true;
+            return String(this.profileCategoryId) !== String(this.currentCategory.category_id)
+                || String(this.profileSubCategoryId) !== String(this.currentCategory.sub_category_id);
+        },
+        onProfileSubCategoryChange() {
+            const sub = this.subCategories.find(s => s.id == this.profileSubCategoryId);
+            this.profileWithForm = !!sub?.with_form;
+            const n = (sub?.name || '').toLowerCase();
             if (n.includes('madp')) this.profileFormType = 'madp';
             else if (n.includes('smdp')) this.profileFormType = 'smdp';
             else if (n.includes('vip')) this.profileFormType = 'vip';
             else this.profileFormType = null;
             if (this.profileWithForm) this.$nextTick(() => this.initProfileSig());
+        },
+        async saveCategory() {
+            if (!this.profileCategoryId || !this.profileSubCategoryId) return;
+            this.categorySaving = true;
+            try {
+                await $wire.saveCategory(this.selected, this.profileCategoryId, this.profileSubCategoryId);
+            } finally {
+                this.categorySaving = false;
+            }
         },
         profileComputedAge() {
             if (!this.profile.birthday) return '';
@@ -379,6 +514,7 @@
             if (!this.profileSubCategoryId) return;
             this.profileSaving = true;
             try {
+                await $wire.saveCategory(this.selected, this.profileCategoryId, this.profileSubCategoryId, true);
                 await $wire.saveProfile(
                     this.selected, this.profileSubCategoryId,
                     this.profile.registered_name, this.profile.owner_name, this.profile.address,
@@ -399,23 +535,46 @@
     x-init="
         checkedIn = selectedCall ? selectedCall.status !== 'scheduled' : false;
         
-        if (selected) { $wire.loadPhotos(selected); }
+        if (selected) { $wire.loadPhotos(selected); $wire.loadBrands(selected); $wire.loadCategories(selected); }
 
-        $watch('currentProfile', (p) => {
-            if (!p || !p.registered_name) return;
-            this.profile = { ...this.profile, ...p };
-            if (p.sub_category_id) {
-                const opt = this.profileOptions.find(o => o.id == p.sub_category_id);
-                if (opt) this.selectProfileProgram(opt);
+        $watch('currentBrands', (b) => {
+            if (!b || !Object.keys(b).length) return;
+            brandForm = JSON.parse(JSON.stringify(b));
+        });
+        $watch('currentCategory', (c) => {
+            if (!c) return;
+            profileCategoryId = c.category_id ?? '';
+            profileSubCategoryId = c.sub_category_id ?? null;
+            if (profileSubCategoryId) {
+                onProfileSubCategoryChange();
+            } else {
+                profileWithForm = false;
+                profileFormType = null;
             }
         });
+        $watch('currentProfile', (p) => {
+            if (!p || !p.registered_name) return;
+            profile = { ...profile, ...p };
+        });
         $watch('tab', (value) => {
-            if (value === 'profile' && this.selected) $wire.loadProfile(this.selected);
+            if (value === 'profile' && selected) { $wire.loadProfile(selected); $wire.loadCategories(selected); }
+            // Defensive reset: don't let a half-finished cancel-reason panel or photo
+            // modal from a previous tab silently hide the finish-action buttons.
+            showCancelReason = false;
+            cancelReason = '';
+            showPartialReason = false;
+            partialReason = '';
+            photoToDelete = null;
+            previewPhoto = null;
         });
 
 
-        checkConnectivity();
+        checkConnectivity().then(() => attemptAutoSync());
+        autoPull();
         window.addEventListener('resize', () => { isMobile = window.innerWidth < 1024; });
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') autoPull();
+        });
 
         document.addEventListener('focusin', (e) => {
             const tag = e.target.tagName;
@@ -456,8 +615,24 @@
         setTimeout(() => pullStatus = null, 3000)
     "
 
-    @online.window="isOnline = true"
-    @offline.window="isOnline = false"
+    @online.window="isOnline = true; attemptAutoSync()"
+    @offline.window="isOnline = false; autoSyncStatus = null; clearTimeout(autoSyncTimer)"
+
+    @auto-sync-skipped.window="
+        autoSyncMbps = $event.detail.mbps ?? null;
+        if ($event.detail.reason === 'slow-connection') {
+            autoSyncStatus = 'skipped-slow';
+            scheduleAutoSyncRetry();
+        } else {
+            autoSyncStatus = null;
+        }
+        setTimeout(() => { if (autoSyncStatus === 'skipped-slow') autoSyncStatus = null; }, 6000);
+    "
+    @auto-sync-started.window="autoSyncStatus = 'syncing'; autoSyncRetries = 0;"
+    @auto-sync-done.window="
+        autoSyncStatus = $event.detail.success ? 'success' : 'failed';
+        setTimeout(() => autoSyncStatus = null, 4000);
+    "
 
     x-on:use-browser-geolocation.window="
         const id = $event.detail.salescallId;
@@ -469,21 +644,18 @@
         )
     "
 
-    x-on:get-submit-location.window="
-        const { salescallId, collectionAmount, remarks, concerns, materialGroupId, brandId, brandOther, categoryId, subCategoryId, subSubCategoryId, isOnline: online } = $event.detail;
-        const submit = (lat, lng) => $wire.submitSalesCall(salescallId, collectionAmount, remarks, concerns, materialGroupId, brandId, brandOther, categoryId, subCategoryId, subSubCategoryId, lat, lng, online);
-
-        if (!navigator.geolocation) { submit(0, 0); return; }
+    x-on:use-browser-geolocation-submit.window="
+        const id = $event.detail.salescallId;
+        if (!navigator.geolocation) { _persistFinishLocation(0, 0); return; }
         navigator.geolocation.getCurrentPosition(
-            (pos) => submit(pos.coords.latitude, pos.coords.longitude),
-            (err) => {
-                console.warn('GPS submit error:', err.code, err.message);
-                if (err.code === 1) { submit(14.5995, 120.9842); } else { submit(0, 0); }
-            },
+            (pos) => _persistFinishLocation(pos.coords.latitude, pos.coords.longitude),
+            (err) => { console.warn('GPS error:', err.code, err.message); _persistFinishLocation(0, 0); },
             { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
         )
     "
 
+    @finish-done.window="finishing = false"
+    @sync-done.window="syncStatus = 'success'; setTimeout(() => syncStatus = null, 2500)"
 
     class="flex flex-col bg-gray-50"
     style="height: calc(100dvh - 5rem); overflow: hidden;"
@@ -524,6 +696,58 @@
                     <p class="font-black text-xl text-[#191c1e]">All Synced!</p>
                     <p class="text-sm text-[#737685] mt-1">Data uploaded successfully</p>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    {{-- PHOTO PREVIEW MODAL --}}
+    <div
+        x-cloak
+        x-show="previewPhoto"
+        x-transition.opacity
+        @click.self="previewPhoto = null"
+        class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center">
+        <div class="relative w-[90vw] h-[90vh] flex flex-col items-center justify-center">
+            <button @click="previewPhoto = null"
+                class="absolute -top-2 right-0 w-10 h-10 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors">
+                <span class="material-symbols-outlined text-white text-2xl">close</span>
+            </button>
+            <img :src="previewPhoto?.url" class="flex-1 min-h-0 w-full object-contain rounded-2xl shadow-2xl" />
+            <div class="mt-3 text-center shrink-0">
+                <p class="text-white font-bold text-sm" x-text="previewPhoto?.type"></p>
+                <p class="text-white/60 text-xs" x-text="previewPhoto?.category"></p>
+            </div>
+        </div>
+    </div>
+
+    {{-- DELETE PHOTO CONFIRMATION MODAL --}}
+    <div
+        x-cloak
+        x-show="photoToDelete"
+        x-transition.opacity
+        @click.self="photoToDelete = null"
+        class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div x-transition.scale class="bg-white rounded-3xl p-6 shadow-2xl w-full max-w-xs flex flex-col items-center gap-4">
+            <div class="w-14 h-14 rounded-full bg-red-50 flex items-center justify-center">
+                <span class="material-symbols-outlined text-red-600 text-3xl">warning</span>
+            </div>
+            <div class="text-center">
+                <p class="font-black text-[#191c1e]">Delete this photo?</p>
+                <p class="text-xs text-[#737685] mt-1">This can't be undone. If it's already synced, it may still exist on the portal.</p>
+            </div>
+            <img :src="photoToDelete?.url" class="w-24 h-24 object-cover rounded-xl border border-gray-100" />
+            <div class="grid grid-cols-2 gap-2 w-full">
+                <button @click="photoToDelete = null" :disabled="deletingPhoto"
+                    class="h-11 bg-gray-100 text-[#737685] rounded-2xl font-bold text-sm disabled:opacity-50">
+                    Cancel
+                </button>
+                <button @click="confirmDeletePhoto()" :disabled="deletingPhoto"
+                    class="h-11 bg-red-600 text-white rounded-2xl font-bold text-sm disabled:opacity-50">
+                    <span x-show="!deletingPhoto">Delete</span>
+                    <span x-show="deletingPhoto" class="flex items-center justify-center gap-1.5">
+                        <span class="material-symbols-outlined text-base animate-spin">progress_activity</span>
+                    </span>
+                </button>
             </div>
         </div>
     </div>
@@ -792,8 +1016,54 @@
         <span class="material-symbols-outlined mat-fill text-xl shrink-0">wifi</span>
         <div>
             <p class="font-bold text-sm leading-tight">You're back online</p>
-            <p class="text-xs opacity-80">Your pending data will sync on your next action.</p>
+            <p class="text-xs opacity-80">Pending data will auto-sync once the connection is fast enough.</p>
         </div>
+    </div>
+
+    {{-- AUTO-SYNC: checking / slow connection --}}
+    <div
+        x-show="autoSyncStatus === 'checking' || autoSyncStatus === 'skipped-slow'"
+        x-transition
+        class="mx-4 lg:mx-6 mt-2 flex items-center gap-3 bg-amber-50 border border-amber-200 text-amber-700 px-4 py-3 rounded-2xl shrink-0">
+        <span class="material-symbols-outlined mat-fill text-xl shrink-0 animate-pulse">speed</span>
+        <div>
+            <template x-if="autoSyncStatus === 'checking'">
+                <p class="font-bold text-sm leading-tight">Checking connection speed...</p>
+            </template>
+            <template x-if="autoSyncStatus === 'skipped-slow'">
+                <p class="font-bold text-sm leading-tight">
+                    Connection too slow to auto-sync<span x-show="autoSyncMbps"> (~<span x-text="autoSyncMbps ? autoSyncMbps.toFixed(1) : ''"></span> Mbps)</span>.
+                    <span class="font-normal opacity-80">Will retry, or tap sync to force it now.</span>
+                </p>
+            </template>
+        </div>
+    </div>
+
+    {{-- AUTO-SYNC: uploading --}}
+    <div
+        x-show="autoSyncStatus === 'syncing'"
+        x-transition
+        class="mx-4 lg:mx-6 mt-2 flex items-center gap-3 bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-2xl shrink-0">
+        <span class="material-symbols-outlined mat-fill text-xl shrink-0 animate-spin">progress_activity</span>
+        <p class="font-bold text-sm">Auto-syncing pending data...</p>
+    </div>
+
+    {{-- AUTO-SYNC: done --}}
+    <div
+        x-show="autoSyncStatus === 'success'"
+        x-transition
+        class="mx-4 lg:mx-6 mt-2 flex items-center gap-3 bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-2xl shrink-0">
+        <span class="material-symbols-outlined mat-fill text-xl shrink-0">cloud_done</span>
+        <p class="font-bold text-sm">Auto-synced successfully.</p>
+    </div>
+
+    {{-- AUTO-SYNC: failed --}}
+    <div
+        x-show="autoSyncStatus === 'failed'"
+        x-transition
+        class="mx-4 lg:mx-6 mt-2 flex items-center gap-3 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl shrink-0">
+        <span class="material-symbols-outlined mat-fill text-xl shrink-0">cloud_off</span>
+        <p class="font-bold text-sm">Auto-sync failed. Will retry, or tap sync to try now.</p>
     </div>
 
     {{-- PULL SUCCESS BANNER --}}
@@ -828,6 +1098,40 @@
             x-show="!(isMobile && showDetail) && !(!isMobile && maximized)"
             :class="isMobile ? 'w-full' : 'w-2/5'"
             class="flex flex-col gap-3 overflow-hidden">
+
+            {{-- In Progress Pin --}}
+            <template x-if="inProgressCall">
+                <div
+                    @click="selectCall(inProgressCall?.id)"
+                    :class="selected === inProgressCall?.id
+                        ? 'border-2 border-orange-500 shadow-md bg-orange-50'
+                        : 'border-2 border-orange-300 bg-orange-50 hover:bg-orange-100'"
+                    class="rounded-2xl p-4 lg:p-5 flex items-center justify-between cursor-pointer transition-all active:scale-[0.98] shrink-0">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <div class="relative shrink-0">
+                            <div class="w-10 h-10 rounded-full bg-orange-500 flex items-center justify-center font-bold text-sm text-white"
+                                 x-text="inProgressCall?.seq"></div>
+                            <span class="absolute -top-0.5 -right-0.5 w-3 h-3 bg-orange-400 rounded-full animate-ping"></span>
+                            <span class="absolute -top-0.5 -right-0.5 w-3 h-3 bg-orange-500 rounded-full"></span>
+                        </div>
+                        <div class="min-w-0">
+                            <p class="text-[9px] font-extrabold text-orange-600 uppercase tracking-widest mb-0.5">In Progress</p>
+                            <h4 class="font-semibold text-sm text-[#191c1e] leading-tight truncate" x-text="inProgressCall?.name"></h4>
+                            <p class="text-[11px] text-[#737685] mt-0.5 truncate" x-text="(inProgressCall?.location ?? '') + ' • ' + (inProgressCall?.time ?? '')"></p>
+                        </div>
+                    </div>
+                    <div class="flex flex-col items-end gap-1.5 shrink-0 ml-2">
+                        <span class="px-2.5 py-1 rounded-full text-[10px] font-black uppercase whitespace-nowrap bg-orange-200 text-orange-700">Active</span>
+                        <span class="material-symbols-outlined text-base text-orange-500">chevron_right</span>
+                        <span
+                            class="material-symbols-outlined text-sm mat-fill"
+                            :class="syncIconClass(inProgressCall?.sync_status)"
+                            :title="syncIconTitle(inProgressCall?.sync_status)"
+                            x-text="syncIcon(inProgressCall?.sync_status)">
+                        </span>
+                    </div>
+                </div>
+            </template>
 
             {{-- Filter Pills --}}
             <div class="flex items-center gap-2 pb-1 shrink-0">
@@ -877,6 +1181,7 @@
                             </div>
                             <div class="min-w-0">
                                 <h4 class="font-semibold text-sm text-[#191c1e] leading-tight truncate" x-text="call.name"></h4>
+                                <p x-show="call.unique_id" class="text-[10px] text-[#890f00] font-mono truncate" x-text="call.unique_id"></p>
                                 <p class="text-[11px] text-[#737685] mt-0.5 truncate"
                                    x-text="filter === 'today'
                                        ? call.location + ' • ' + call.time
@@ -892,9 +1197,9 @@
                             </span>
                             <span
                                 class="material-symbols-outlined text-base"
-                                :class="call.status === 'completed' ? 'text-green-600' : 'text-[#737685]'"
-                                :title="call.status === 'completed' ? 'Visit completed' : 'View details'"
-                                x-text="call.status === 'completed' ? 'check_circle' : 'chevron_right'">
+                                :class="['completed','partially_completed','cancelled'].includes(call.status) ? 'text-green-600' : 'text-[#737685]'"
+                                :title="['completed','partially_completed','cancelled'].includes(call.status) ? 'Visit finished' : 'View details'"
+                                x-text="['completed','partially_completed','cancelled'].includes(call.status) ? 'check_circle' : 'chevron_right'">
                             </span>
                             <span
                                 class="material-symbols-outlined text-sm mat-fill"
@@ -932,6 +1237,7 @@
                             Sequence #<span x-text="selectedCall?.seq"></span>
                         </span>
                         <h2 class="text-xl lg:text-2xl font-extrabold text-[#191c1e] leading-tight truncate" x-text="selectedCall?.name"></h2>
+                        <p x-show="selectedCall?.unique_id" class="text-xs text-[#890f00] font-mono truncate" x-text="selectedCall?.unique_id"></p>
                         <p class="text-sm text-[#737685] flex items-center gap-1">
                             <span class="material-symbols-outlined text-base shrink-0" title="Store address">location_on</span>
                             <span class="truncate" x-text="selectedCall?.location"></span>
@@ -952,16 +1258,21 @@
                 <div class="flex-1 flex flex-col items-center justify-center gap-6 px-8">
                     <button
                         @click="doCheckIn()"
+                        :disabled="anyOtherInProgress"
+                        :class="anyOtherInProgress ? 'opacity-40 cursor-not-allowed' : 'hover:opacity-90 active:scale-95'"
                         title="Tap to record your GPS arrival location and start the visit"
-                        class="flex flex-col items-center gap-3 bg-[#890f00] text-white w-48 lg:w-52 py-8 rounded-3xl shadow-xl hover:opacity-90 active:scale-95 transition-all">
+                        class="flex flex-col items-center gap-3 bg-[#890f00] text-white w-48 lg:w-52 py-8 rounded-3xl shadow-xl transition-all">
                         <span class="material-symbols-outlined text-5xl mat-fill">my_location</span>
                         <div class="text-center">
                             <p class="font-black text-2xl leading-none tracking-wide">Mark Arrival</p>
                             <p class="text-xs opacity-75 mt-1">Capture GPS location</p>
                         </div>
                     </button>
-                    <p class="text-xs text-[#737685] text-center max-w-xs leading-relaxed">
+                    <p x-show="!anyOtherInProgress" class="text-xs text-[#737685] text-center max-w-xs leading-relaxed">
                         Tap <strong class="text-[#191c1e]">Mark Arrival</strong> when you arrive at the store to record your GPS location and start the visit.
+                    </p>
+                    <p x-show="anyOtherInProgress" class="text-xs text-amber-700 text-center max-w-xs leading-relaxed font-medium">
+                        Finish your current in-progress visit before starting a new one.
                     </p>
                 </div>
 
@@ -969,173 +1280,6 @@
 
             {{-- FULL DETAIL — after Check In --}}
             <div x-show="checkedIn" class="flex flex-col flex-1 overflow-hidden relative">
-
-                {{-- SUBMIT FORM OVERLAY --}}
-                <div
-                    x-show="submitting"
-                    x-transition
-                    class="absolute inset-0 bg-white z-10 flex flex-col rounded-[28px] overflow-hidden">
-
-                    <div class="flex items-center gap-4 px-5 lg:px-7 py-5 border-b border-gray-100 shrink-0">
-                        <button
-                            @click="submitting = false"
-                            title="Cancel and go back"
-                            class="w-10 h-10 rounded-full bg-[#edeef0] flex items-center justify-center hover:bg-[#e7e8ea] transition-colors shrink-0">
-                            <span class="material-symbols-outlined text-[#434654]">arrow_back</span>
-                        </button>
-                        <div class="min-w-0">
-                            <h2 class="text-lg lg:text-xl font-extrabold text-[#191c1e]">Process Sales Call</h2>
-                            <p class="text-sm text-[#737685] truncate" x-text="selectedCall?.name"></p>
-                        </div>
-                    </div>
-
-                    <div class="flex-1 overflow-y-auto p-5 lg:p-7 space-y-6 keyboard-scroll">
-                        
-                       {{-- Brand Observation --}}
-                        <div class="pt-2 border-t border-gray-100">
-                            {{-- <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
-                                Brand Observation
-                            </p> --}}
-                            <div class="flex gap-3">
-                                <div class="flex-1">
-                                    {{-- <label class="block text-xs font-semibold text-[#737685] mb-2"> --}}
-                                    <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
-                                        {{-- Material Group --}}
-                                        Ramcar & Competitor Brand
-                                    </p>
-                                    {{-- </label> --}}
-                                    <select x-model="submitForm.material_group_id"
-                                        @change="submitForm.brand_id = null; submitForm.brand_other = ''"
-                                        class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
-                                        <option value="">— Select —</option>
-                                        <template x-for="group in materialGroups" :key="group.id">
-                                            <option :value="group.id" x-text="group.name"></option>
-                                        </template>
-                                    </select>
-                                </div>
-
-                                <div class="flex-1">
-                                    <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
-                                        {{-- Brand --}}
-                                        Brand
-                                    </p>
-                                    <select x-model="submitForm.brand_id"
-                                        @change="submitForm.brand_other = ''"
-                                        :disabled="!submitForm.material_group_id"
-                                        :class="!submitForm.material_group_id ? 'opacity-40 cursor-not-allowed' : ''"
-                                        class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
-                                        <option value="">— Select —</option>
-                                        <template x-for="brand in filteredBrands" :key="brand.id">
-                                            <option :value="brand.id" x-text="brand.name"></option>
-                                        </template>
-                                    </select>
-                                </div>
-                            </div>
-
-
-                                                        <div class="mt-3" x-show="submitForm.brand_id && filteredBrands.find(b => b.id == submitForm.brand_id)?.name === 'Others'" x-transition>
-                                <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
-                                    Specify Sub-Volume
-                                </p>
-                                <input type="text" x-model="submitForm.brand_other"
-                                    placeholder="Enter brand name..."
-                                    class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none" />
-                            </div>
-
-                            {{-- Categories + Sub Category --}}
-                            <div class="mt-3 flex gap-3">
-                                <div class="flex-1">
-                                    <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
-                                        Category <span class="text-red-500">*</span>
-                                    </p>
-                                    <select x-model="submitForm.category_id"
-                                        @change="submitForm.sub_category_id = null; submitForm.sub_sub_category_id = null"
-                                        class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
-                                        <option value="">— Select —</option>
-                                        <template x-for="cat in categories" :key="cat.id">
-                                            <option :value="cat.id" x-text="cat.name"></option>
-                                        </template>
-                                    </select>
-                                </div>
-
-                                <div class="flex-1">
-                                    <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
-                                        Sub Category <span class="text-red-500">*</span>
-                                    </p>
-                                    <select x-model="submitForm.sub_category_id"
-                                        @change="submitForm.sub_sub_category_id = null"
-                                        :disabled="!submitForm.category_id"
-                                        :class="!submitForm.category_id ? 'opacity-40 cursor-not-allowed' : ''"
-                                        class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
-                                        <option value="">— Select —</option>
-                                        <template x-for="sub in filteredSubCategories" :key="sub.id">
-                                            <option :value="sub.id" x-text="sub.name"></option>
-                                        </template>
-                                    </select>
-                                </div>
-                            </div>
-
-                            {{-- Sub Sub Categories (only when applicable e.g. AB SMDP) --}}
-                            <div class="mt-3" x-show="submitForm.sub_category_id && filteredSubSubCategories.length" x-transition>
-                                <p class="text-xs font-black text-[#434654] uppercase tracking-wider mb-4">
-                                    <span x-text="selectedSubCategory?.name"></span> — Type
-                                </p>
-                                <select x-model="submitForm.sub_sub_category_id"
-                                    class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
-                                    <option value="">— Select —</option>
-                                    <template x-for="ssc in filteredSubSubCategories" :key="ssc.id">
-                                        <option :value="ssc.id" x-text="ssc.name"></option>
-                                    </template>
-                                </select>
-                            </div>
-
-
-                          
-
-
-                        </div>
-
-
-
-
-
-
-
-                        {{-- <div>
-                            <label class="block text-xs font-black text-[#434654] uppercase tracking-wider mb-2">Collection Amount</label>
-                            <div class="relative">
-                                <span class="absolute left-4 top-1/2 -translate-y-1/2 text-[#737685] font-bold text-sm">₱</span>
-                                <input type="number" step="0.01" min="0" x-model="submitForm.collection_amount" placeholder="0.00"
-                                    class="w-full pl-8 pr-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] font-semibold text-base focus:ring-2 focus:ring-[#890f00] outline-none" />
-                            </div>
-                            <p class="text-[11px] text-[#737685] mt-1.5 ml-1">Leave blank if no collection was made.</p>
-                        </div> --}}
-                        <div>
-                            <label class="block text-xs font-black text-[#434654] uppercase tracking-wider mb-2">Remarks</label>
-                            <textarea x-model="submitForm.remarks" placeholder="How did the visit go? Any observations?" rows="2"
-                                class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm resize-none focus:ring-2 focus:ring-[#890f00] outline-none leading-relaxed">
-                            </textarea>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-black text-[#434654] uppercase tracking-wider mb-2">Concerns</label>
-                            <textarea x-model="submitForm.concerns" placeholder="Any issues or concerns raised by the customer?" rows="2"
-                                class="w-full px-4 py-3.5 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm resize-none focus:ring-2 focus:ring-[#890f00] outline-none leading-relaxed">
-                            </textarea>
-                        </div>
-                    </div>
-
-                    <div class="p-5 lg:p-6 border-t border-gray-100 bg-white flex gap-4 shrink-0">
-                        <button @click="submitting = false"
-                            class="flex-1 h-12 bg-[#edeef0] text-[#434654] rounded-2xl font-bold text-sm hover:bg-[#e7e8ea] transition-colors">
-                            Cancel
-                        </button>
-                        <button @click="doSubmit()"
-                            class="flex-2 h-12 bg-[#890f00] text-white rounded-2xl font-black text-base shadow-lg hover:opacity-95 active:scale-[0.98] transition-all px-8">
-                            Confirm Submit
-                        </button>
-                    </div>
-
-                </div>{{-- end overlay --}}
 
                 {{-- Detail Header --}}
                 <div class="px-5 lg:px-7 pt-5 pb-0 border-b border-gray-100 shrink-0">
@@ -1149,6 +1293,7 @@
                                     Sequence #<span x-text="selectedCall?.seq"></span>
                                 </span>
                                 <h2 class="text-lg lg:text-2xl font-extrabold text-[#191c1e] leading-tight truncate" x-text="selectedCall?.name"></h2>
+                                <p x-show="selectedCall?.unique_id" class="text-xs text-[#890f00] font-mono truncate" x-text="selectedCall?.unique_id"></p>
                                 <p class="text-sm text-[#737685] truncate" x-text="selectedCall?.location"></p>
                                 <p class="text-[10px] text-gray-300 font-mono truncate mt-0.5" x-text="selectedCall?.local_uuid"></p>
 
@@ -1173,8 +1318,9 @@
                     </div>
 
                     {{-- Tabs --}}
+                    {{-- CCR, MRF, and Activity Log are hidden for now — phase 2. Content blocks below are commented out, not deleted. --}}
                     <div class="flex gap-4 lg:gap-6 border-b border-gray-100 overflow-x-auto scrollbar-hide">
-                        <template x-for="t in ['overview','ccr','mrf','photos','profile','activity']">
+                        <template x-for="t in ['overview','brands','profile','photos']">
                             <button
                                 @click="tab = t"
                                 :class="tab === t
@@ -1216,13 +1362,14 @@
                             <h3 class="text-base font-bold text-[#191c1e] mb-3">Visit Actions</h3>
                             <div class="grid grid-cols-2 gap-3">
                                 @foreach([
-                                    ['assignment','Fill CRCR','Customer Call Report'],
-                                    ['inventory','Fill TSF','Merchandising Report'],
-                                    ['photo_camera','Upload Photo','Store display audit'],
-                                    ['note_alt','Add Quick Note','Capture instant feedback'],
-                                ] as [$icon, $label, $sub])
+                                    {{-- ['assignment','Fill CCR','Customer Call Report', null], --}}
+                                    {{-- ['inventory','Fill TSF','Merchandising Report', null], --}}
+                                    ['photo_camera','Upload Photo','Store display audit', 'photos'],
+                                    ['note_alt','Add Quick Note','Capture instant feedback', null],
+                                ] as [$icon, $label, $sub, $targetTab])
                                 <button
                                     title="{{ $label }} — {{ $sub }}"
+                                    @if($targetTab) @click="tab = '{{ $targetTab }}'" @endif
                                     class="h-18 lg:h-20 bg-white border border-gray-200 rounded-2xl flex items-center px-4 lg:px-5 gap-3 lg:gap-4 hover:border-[#890f00] hover:bg-red-50 group transition-all">
                                     <div class="w-9 h-9 lg:w-10 lg:h-10 rounded-full bg-[#edeef0] group-hover:bg-[#ffdad3] flex items-center justify-center shrink-0">
                                         <span class="material-symbols-outlined text-lg text-[#737685] group-hover:text-[#890f00]">{{ $icon }}</span>
@@ -1246,15 +1393,69 @@
 
                     </div>
 
-                    {{-- CCR TAB --}}
+                    {{-- BRANDS TAB --}}
+                    <div x-show="tab === 'brands'" class="space-y-4">
+                        <template x-for="groupId in [1, 2, 3, 4, 5]" :key="groupId">
+                            <div class="p-4 lg:p-5 bg-[#f8f9fa] rounded-2xl space-y-3">
+                                <select disabled
+                                    class="w-full px-4 py-3 bg-[#edeef0] border-0 rounded-2xl text-[#191c1e] text-sm font-bold opacity-80 appearance-none">
+                                    <option x-text="materialGroups.find(g => g.id === groupId)?.name"></option>
+                                </select>
+
+                                <template x-for="(row, idx) in brandForm[groupId]" :key="idx">
+                                    <div class="flex flex-wrap gap-3 items-start">
+                                        <select x-model="row.brand_id" @change="onBrandRowChange(groupId, idx)"
+                                            class="flex-1 min-w-[140px] px-4 py-3 bg-white border border-gray-200 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
+                                            <option value="">— Select Brand —</option>
+                                            <template x-for="brand in brandsForGroup(groupId)" :key="brand.id">
+                                                <option :value="brand.id" x-text="brand.name"></option>
+                                            </template>
+                                        </select>
+
+                                        <input type="number" min="0" x-model="row.quantity" placeholder="Qty"
+                                            x-show="!isNoneBrand(groupId, row.brand_id)"
+                                            class="w-24 px-3 py-3 bg-white border border-gray-200 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none" />
+
+                                        <input type="text" x-model="row.brand_other" placeholder="Specify brand"
+                                            x-show="isOthersBrand(groupId, row.brand_id)" x-transition
+                                            class="flex-1 min-w-[140px] px-4 py-3 bg-white border border-gray-200 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none" />
+
+                                        <button @click="removeBrandItem(groupId, idx)"
+                                            title="Remove item"
+                                            class="w-10 h-10 rounded-full bg-[#edeef0] flex items-center justify-center hover:bg-red-50 shrink-0">
+                                            <span class="material-symbols-outlined text-[#890f00] text-lg">close</span>
+                                        </button>
+                                    </div>
+                                </template>
+
+                                <button @click="addBrandItem(groupId)" :disabled="groupAddDisabled(groupId)"
+                                    class="text-sm font-bold text-[#890f00] disabled:opacity-30 disabled:cursor-not-allowed">
+                                    + Add Item
+                                </button>
+                            </div>
+                        </template>
+
+                        <button @click="saveBrands()" :disabled="brandsSaving"
+                            class="w-full h-12 bg-[#890f00] text-white rounded-2xl font-black text-base shadow-lg hover:opacity-95 active:scale-[0.98] transition-all disabled:opacity-50">
+                            <span x-show="!brandsSaving">Save Brands</span>
+                            <span x-show="brandsSaving" class="flex items-center justify-center gap-2">
+                                <span class="material-symbols-outlined text-base animate-spin">progress_activity</span>
+                                Saving...
+                            </span>
+                        </button>
+                    </div>
+
+                    {{--
+                    CCR TAB
                     <div x-show="tab === 'ccr'" class="flex items-center justify-center h-40">
                         <p class="text-[#737685] text-sm">CCR form will appear here.</p>
                     </div>
 
-                    {{-- MRF TAB --}}
+                    MRF TAB
                     <div x-show="tab === 'mrf'" class="flex items-center justify-center h-40">
                         <p class="text-[#737685] text-sm">MRF form will appear here.</p>
                     </div>
+                    --}}
 
                     {{-- PHOTOS TAB --}}
                     <div x-show="tab === 'photos'" class="space-y-4">
@@ -1279,8 +1480,13 @@
                                        x-text="group.name"></p>
                                     <div class="grid grid-cols-3 gap-2">
                                         <template x-for="photo in group.photos" :key="photo.id">
-                                            <div class="aspect-square rounded-xl overflow-hidden bg-gray-100 relative">
+                                            <div @click="previewPhoto = photo"
+                                                 class="aspect-square rounded-xl overflow-hidden bg-gray-100 relative cursor-pointer active:scale-[0.97] transition-transform">
                                                 <img :src="photo.url" class="w-full h-full object-cover" loading="lazy" />
+                                                <button @click.stop="photoToDelete = photo"
+                                                    class="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/60 flex items-center justify-center hover:bg-red-600 transition-colors">
+                                                    <span class="material-symbols-outlined text-white text-sm">delete</span>
+                                                </button>
                                                 <div class="absolute bottom-0 left-0 right-0 bg-black/50 px-2 py-1">
                                                     <p class="text-white text-[9px] font-bold truncate" x-text="photo.type"></p>
                                                 </div>
@@ -1309,7 +1515,16 @@
                             <div class="grid grid-cols-2 gap-3">
                                 <template x-for="cat in imageCategories" :key="cat.id">
                                     <button @click="selectPhotoCategory(cat)"
-                                        class="flex flex-col items-center justify-center gap-3 h-32 bg-white border-2 border-gray-200 rounded-2xl hover:border-[#890f00] hover:bg-red-50 active:scale-[0.97] transition-all">
+                                        class="relative flex flex-col items-center justify-center gap-3 h-32 bg-white border-2 rounded-2xl hover:border-[#890f00] hover:bg-red-50 active:scale-[0.97] transition-all"
+                                        :class="{
+                                            'border-green-400': categoryCoverage(cat) === 'complete',
+                                            'border-orange-400': categoryCoverage(cat) === 'partial',
+                                            'border-gray-200': categoryCoverage(cat) === 'none',
+                                        }">
+                                        <span x-show="categoryCoverage(cat) === 'complete'"
+                                              class="material-symbols-outlined mat-fill absolute top-2 right-2 text-green-600 text-lg">check_circle</span>
+                                        <span x-show="categoryCoverage(cat) === 'partial'"
+                                              class="material-symbols-outlined mat-fill absolute top-2 right-2 text-orange-500 text-lg">check_circle</span>
                                         <span class="material-symbols-outlined text-4xl text-[#890f00]"
                                               x-text="cat.slug === 'exterior' ? 'storefront' : 'battery_charging_full'"></span>
                                         <p class="font-black text-sm text-[#191c1e]" x-text="cat.name"></p>
@@ -1334,10 +1549,14 @@
                             <div class="space-y-2">
                                 <template x-for="type in (photoCategory?.types || [])" :key="type.id">
                                     <button @click="selectPhotoType(type)"
-                                        class="w-full flex items-center gap-4 px-5 py-4 bg-white border border-gray-200 rounded-2xl hover:border-[#890f00] hover:bg-red-50 active:scale-[0.98] transition-all text-left">
+                                        class="w-full flex items-center gap-4 px-5 py-4 bg-white border rounded-2xl hover:border-[#890f00] hover:bg-red-50 active:scale-[0.98] transition-all text-left"
+                                        :class="($wire.callPhotos || []).some(p => p?.type === type.name) ? 'border-green-400' : 'border-gray-200'">
                                         <span class="material-symbols-outlined text-[#890f00]">photo_camera</span>
                                         <p class="font-bold text-sm text-[#191c1e]" x-text="type.name"></p>
-                                        <span class="material-symbols-outlined text-gray-300 ml-auto">chevron_right</span>
+                                        <span x-show="($wire.callPhotos || []).some(p => p?.type === type.name)"
+                                              class="material-symbols-outlined mat-fill text-green-600 ml-auto">check_circle</span>
+                                        <span x-show="!($wire.callPhotos || []).some(p => p?.type === type.name)"
+                                              class="material-symbols-outlined text-gray-300 ml-auto">chevron_right</span>
                                     </button>
                                 </template>
                             </div>
@@ -1382,22 +1601,47 @@
                     {{-- CHANGE PROFILE TAB --}}
                     <div x-show="tab === 'profile'" class="space-y-5">
 
-                        {{-- Program selector --}}
+                        {{-- Category / Sub Category selector --}}
                         <div>
-                            <label class="block text-xs font-bold text-[#737685] uppercase tracking-wider mb-2">Select Program</label>
-                            <div class="space-y-2">
-                                <template x-for="opt in profileOptions" :key="opt.id">
-                                    <button
-                                        @click="selectProfileProgram(opt)"
-                                        :class="profileSubCategoryId === opt.id
-                                            ? 'border-2 border-[#890f00] bg-[#fdf4f4] text-[#890f00] font-bold'
-                                            : 'border-2 border-gray-200 bg-white text-[#434654] hover:border-gray-300'"
-                                        class="w-full text-left px-4 py-3 rounded-xl text-sm transition-all flex items-center justify-between">
-                                        <span x-text="opt.name"></span>
-                                        <span x-show="opt.with_form" class="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">Form</span>
-                                    </button>
-                                </template>
+                            <label class="block text-xs font-bold text-[#737685] uppercase tracking-wider mb-2">Category</label>
+                            <div class="grid grid-cols-2 gap-3">
+                                <select x-model="profileCategoryId"
+                                    @change="profileSubCategoryId = ''; profileWithForm = false; profileFormType = null"
+                                    class="w-full px-4 py-3 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
+                                    <option value="">— Select —</option>
+                                    <template x-for="cat in categories" :key="cat.id">
+                                        <option :value="cat.id" x-text="cat.name"></option>
+                                    </template>
+                                </select>
+
+                                <select x-model="profileSubCategoryId"
+                                    @change="onProfileSubCategoryChange()"
+                                    :disabled="!profileCategoryId"
+                                    :class="!profileCategoryId ? 'opacity-40 cursor-not-allowed' : ''"
+                                    class="w-full px-4 py-3 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
+                                    <option value="">— Select —</option>
+                                    <template x-for="sub in profileSubCategoryOptions" :key="sub.id">
+                                        <option :value="sub.id" x-text="sub.name"></option>
+                                    </template>
+                                </select>
                             </div>
+
+                            {{-- Category-change approval warning --}}
+                            <div x-show="categoryChanged" x-transition class="mt-3 flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                                <span class="material-symbols-outlined mat-fill text-amber-600 text-lg shrink-0">warning</span>
+                                <p class="text-xs text-amber-800 leading-relaxed">
+                                    You're changing this customer's category. Saving will submit it for drm/rsm approval before it takes effect — the customer's current category stays active until then.
+                                </p>
+                            </div>
+
+                            <button @click="saveCategory()" :disabled="categorySaving || !profileSubCategoryId" x-show="!profileWithForm"
+                                class="mt-3 w-full h-11 bg-[#890f00] text-white rounded-2xl font-black text-sm shadow-lg hover:opacity-95 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                                <span x-show="!categorySaving">Save Category</span>
+                                <span x-show="categorySaving" class="flex items-center justify-center gap-2">
+                                    <span class="material-symbols-outlined text-base animate-spin">progress_activity</span>
+                                    Saving...
+                                </span>
+                            </button>
                         </div>
 
                         {{-- No-form notice --}}
@@ -1589,29 +1833,112 @@
                         </div>
                     </div>
 
-                    {{-- ACTIVITY TAB --}}
+                    {{--
+                    ACTIVITY TAB — phase 2
                     <div x-show="tab === 'activity'" class="flex items-center justify-center h-40">
                         <p class="text-[#737685] text-sm">Activity log will appear here.</p>
                     </div>
+                    --}}
 
 
                 </div>
 
                 {{-- Sticky Footer --}}
-                <div class="p-5 lg:p-6 border-t border-gray-100 bg-white shrink-0">
+                <div class="p-5 lg:p-6 border-t border-gray-100 bg-white shrink-0 space-y-3">
+
+                    {{-- IN PROGRESS: finish actions --}}
+                    <template x-if="selectedCall?.status === 'in_progress'">
+                        <div class="space-y-2">
+                            <div x-show="!showCancelReason && !showPartialReason" class="space-y-2">
+                                <button
+                                    @click="finishVisit('completed')"
+                                    :disabled="!canSubmitSalescall || finishing"
+                                    :class="(!canSubmitSalescall || finishing) ? 'opacity-40 cursor-not-allowed' : 'hover:opacity-95 active:scale-[0.98]'"
+                                    class="w-full h-12 bg-[#890f00] text-white rounded-2xl font-black text-sm shadow-lg transition-all">
+                                    Submit Salescall
+                                </button>
+                                <div class="text-[11px] leading-relaxed space-y-1 px-1">
+                                    <p class="font-bold text-[10px] uppercase tracking-wider text-[#737685]">Requires:</p>
+                                    <p class="flex items-center gap-1.5" :class="hasSavedBrands ? 'text-green-600' : 'text-red-500'">
+                                        <span class="material-symbols-outlined text-sm mat-fill" x-text="hasSavedBrands ? 'check_circle' : 'radio_button_unchecked'"></span>
+                                        <span>Brands<span x-show="!hasSavedBrands"> (missing)</span></span>
+                                    </p>
+                                    <p class="flex items-center gap-1.5" :class="photosComplete ? 'text-green-600' : 'text-red-500'">
+                                        <span class="material-symbols-outlined text-sm mat-fill" x-text="photosComplete ? 'check_circle' : 'radio_button_unchecked'"></span>
+                                        <span>Photo in every subcategory<span x-show="!photosComplete"> (missing)</span></span>
+                                    </p>
+                                </div>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <button
+                                        @click="showPartialReason = true"
+                                        :disabled="finishing"
+                                        class="h-11 bg-orange-50 text-orange-700 border border-orange-200 rounded-2xl font-bold text-xs hover:bg-orange-100 transition-colors disabled:opacity-50">
+                                        Partially Completed
+                                    </button>
+                                    <button
+                                        @click="showCancelReason = true"
+                                        :disabled="finishing"
+                                        class="h-11 bg-gray-50 text-gray-600 border border-gray-200 rounded-2xl font-bold text-xs hover:bg-gray-100 transition-colors disabled:opacity-50">
+                                        Cancel / Abandon Visit
+                                    </button>
+                                </div>
+                            </div>
+
+                            {{-- Partial reason panel --}}
+                            <div x-show="showPartialReason" x-transition class="space-y-2 p-3 bg-orange-50 border border-orange-200 rounded-2xl">
+                                <div class="grid grid-cols-2 gap-2">
+                                    <button @click="showPartialReason = false; partialReason = ''"
+                                        class="h-10 bg-white border border-gray-200 text-[#737685] rounded-xl font-bold text-xs">
+                                        Back
+                                    </button>
+                                    <button @click="confirmPartial()" :disabled="!partialReason.trim() || finishing"
+                                        class="h-10 bg-orange-600 text-white rounded-xl font-bold text-xs disabled:opacity-40">
+                                        Confirm Partial
+                                    </button>
+                                </div>
+                                <label class="block text-xs font-bold text-[#737685] uppercase tracking-wider">Reason for partial completion</label>
+                                <textarea x-model="partialReason" rows="2" placeholder="e.g. Some items not available, follow-up needed..."
+                                    class="w-full border border-orange-200 rounded-xl px-3 py-2 text-sm text-[#191c1e] focus:outline-none focus:ring-2 focus:ring-orange-300 focus:border-orange-400 resize-none"></textarea>
+                            </div>
+
+                            {{-- Cancel reason panel --}}
+                            <div x-show="showCancelReason" x-transition class="space-y-2 p-3 bg-gray-50 border border-gray-200 rounded-2xl">
+                                <div class="grid grid-cols-2 gap-2">
+                                    <button @click="showCancelReason = false; cancelReason = ''"
+                                        class="h-10 bg-white border border-gray-200 text-[#737685] rounded-xl font-bold text-xs">
+                                        Back
+                                    </button>
+                                    <button @click="confirmCancel()" :disabled="!cancelReason.trim() || finishing"
+                                        class="h-10 bg-red-600 text-white rounded-xl font-bold text-xs disabled:opacity-40">
+                                        Confirm Cancel
+                                    </button>
+                                </div>
+                                <label class="block text-xs font-bold text-[#737685] uppercase tracking-wider">Reason for cancelling</label>
+                                <textarea x-model="cancelReason" rows="2" placeholder="e.g. Store was closed, owner not around..."
+                                    class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-[#191c1e] focus:outline-none focus:ring-2 focus:ring-[#890f00]/30 focus:border-[#890f00] resize-none"></textarea>
+                            </div>
+                        </div>
+                    </template>
+
+                    {{-- TERMINAL STATES --}}
                     <div
                         x-show="selectedCall?.status === 'completed'"
                         class="flex items-center justify-center gap-2 h-12 bg-green-50 rounded-2xl border border-green-200">
                         <span class="material-symbols-outlined text-green-600 mat-fill" title="Visit completed and pending upload">check_circle</span>
                         <span class="font-bold text-sm text-green-700">Visit Completed — Pending Sync</span>
                     </div>
-                    <button
-                        x-show="selectedCall?.status !== 'completed'"
-                        @click="submitting = true"
-                        title="Submit this sales call and record GPS checkout location"
-                        class="w-full h-12 bg-[#890f00] text-white rounded-2xl font-black text-base shadow-lg hover:opacity-95 active:scale-[0.98] transition-all">
-                        Continue Process Sales Call
-                    </button>
+                    <div
+                        x-show="selectedCall?.status === 'partially_completed'"
+                        class="flex items-center justify-center gap-2 h-12 bg-orange-50 rounded-2xl border border-orange-200">
+                        <span class="material-symbols-outlined text-orange-600 mat-fill" title="Visit partially completed">incomplete_circle</span>
+                        <span class="font-bold text-sm text-orange-700">Partially Completed — Pending Sync</span>
+                    </div>
+                    <div
+                        x-show="selectedCall?.status === 'cancelled'"
+                        class="flex items-center justify-center gap-2 h-12 bg-gray-100 rounded-2xl border border-gray-200">
+                        <span class="material-symbols-outlined text-gray-500 mat-fill" title="Visit cancelled">cancel</span>
+                        <span class="font-bold text-sm text-gray-600">Visit Cancelled — Pending Sync</span>
+                    </div>
                 </div>
 
             </div>

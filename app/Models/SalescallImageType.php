@@ -10,6 +10,6 @@ class SalescallImageType extends Model
 
     public function category()
     {
-        return $this->belongsTo(SalescallImageCategory::class);
+        return $this->belongsTo(SalescallImageCategory::class, 'salescall_image_category_id');
     }
 }

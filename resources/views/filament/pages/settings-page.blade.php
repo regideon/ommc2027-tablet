@@ -8,6 +8,27 @@
         <p class="text-sm text-[#737685] mt-0.5">Manage your account and preferences</p>
     </div>
 
+    @if (auth()->user()?->hasAnyRole(['admin', 'rsm', 'vp']))
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        <div class="px-5 py-3 border-b border-gray-100">
+            <p class="text-[10px] font-black text-[#737685] uppercase tracking-widest">Itinerary</p>
+        </div>
+        <div class="divide-y divide-gray-100">
+            <a href="http://ommc2027.test/ommcpanel/my-itineraries" target="_blanks"
+               class="flex items-center gap-4 px-5 py-4 hover:bg-gray-50 transition-colors active:bg-gray-100">
+                <div class="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center shrink-0">
+                    <span class="material-symbols-outlined text-blue-600">notifications</span>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <p class="font-semibold text-sm text-[#191c1e]">Itineraries</p>
+                    <p class="text-xs text-[#737685]">Manage salescalls</p>
+                </div>
+                <span class="material-symbols-outlined text-gray-300 text-xl">chevron_right</span>
+            </a>
+        </div>
+    </div>
+    @endif
+
     {{-- Account Section --}}
     <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <div class="px-5 py-3 border-b border-gray-100">

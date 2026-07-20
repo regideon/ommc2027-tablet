@@ -2,8 +2,13 @@
 
 namespace App\Services;
 
+use App\Models\CustomerBrand;
+use App\Models\CustomerCategory;
+use App\Models\CustomerProfile;
 use App\Models\Itinerary;
 use App\Models\Salescall;
+use App\Models\SalescallBrand;
+use App\Models\SalescallCategory;
 use App\Models\SalescallImage;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
@@ -11,8 +16,6 @@ use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Spatie\Permission\Models\Role;
-use App\Models\CustomerProfile;
-
 
 class SyncService
 {
@@ -24,6 +27,54 @@ class SyncService
     {
         $this->serverUrl = rtrim(config('sync.server_url', ''), '/');
         $this->timeout = (int) config('sync.timeout', 15);
+    }
+
+    public function hasPendingChanges(): bool
+    {
+        $pendingOrRetryable = fn ($query) => $query
+            ->where('sync_status', 'pending')
+            ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+
+        return $pendingOrRetryable(Itinerary::query())->exists()
+            || $pendingOrRetryable(Salescall::query())->exists()
+            || $pendingOrRetryable(SalescallBrand::query())->exists()
+            || $pendingOrRetryable(SalescallCategory::query())->exists()
+            || $pendingOrRetryable(SalescallImage::query())->exists()
+            || $pendingOrRetryable(CustomerProfile::query())->exists();
+    }
+
+    /**
+     * Uploads a small timed payload to the sync server and returns the
+     * measured throughput in Mbps, or null if the request failed.
+     */
+    public function measureSpeedMbps(): ?float
+    {
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (! $user || blank($user->api_token)) {
+            return null;
+        }
+
+        $bytes = (int) config('sync.speedtest_bytes', 300_000);
+        $payload = str_repeat('0', $bytes);
+
+        try {
+            $start = microtime(true);
+
+            $response = $this->client($user->api_token)
+                ->withBody($payload, 'application/octet-stream')
+                ->post("{$this->serverUrl}/api/sync/speedtest");
+
+            $elapsed = microtime(true) - $start;
+
+            if (! $response->successful() || $elapsed <= 0) {
+                return null;
+            }
+
+            return (($bytes * 8) / $elapsed) / 1_000_000;
+        } catch (\Exception) {
+            return null;
+        }
     }
 
     public function isReachable(): bool
@@ -74,7 +125,7 @@ class SyncService
 
             return SyncResult::ok('Token refreshed.');
         } catch (\Exception $e) {
-            return SyncResult::fail('Could not reach server: ' . $e->getMessage(), 'connection_error');
+            return SyncResult::fail('Could not reach server: '.$e->getMessage(), 'connection_error');
         }
     }
 
@@ -115,24 +166,76 @@ class SyncService
 
                 foreach ($itinerary['salescalls'] ?? [] as $sc) {
                     $visitDate = $sc['route_start_at'] ?? $sc['actual_in'] ?? null;
+                    $localUuid = $sc['local_uuid'] ?? (string) $sc['id'];
 
-                    Salescall::updateOrCreate(
-                        ['local_uuid' => $sc['local_uuid'] ?? (string) $sc['id']],
-                        [
-                            'server_id' => $sc['id'],
-                            'itinerary_id' => $local->id,
-                            'customer_id' => $sc['customer_id'],
-                            'created_by' => $user->id,        // ← add this line
-                            'visit_date' => $visitDate,
-                            'route_start_at' => $sc['route_start_at'] ?? null,
-                            'actual_in' => $sc['actual_in'] ?? null,
-                            'actual_out' => $sc['actual_out'] ?? null,
-                            'collection_amount' => $sc['collection_amount'] ?? null,
-                            'remarks' => $sc['remarks'] ?? null,
-                            'concerns' => $sc['concerns'] ?? null,
+                    // A salescall with unsynced local changes (e.g. a check-in or
+                    // finish action not yet pushed) must not be clobbered by an
+                    // incoming pull — the server's copy is stale until the push
+                    // completes. Leave it untouched; the next push will resolve it.
+                    $hasPendingLocalChanges = Salescall::where('local_uuid', $localUuid)
+                        ->whereIn('sync_status', ['pending', 'failed'])
+                        ->exists();
+
+                    if ($hasPendingLocalChanges) {
+                        $localSalescall = Salescall::where('local_uuid', $localUuid)->first();
+                    } else {
+                        $localSalescall = Salescall::updateOrCreate(
+                            ['local_uuid' => $localUuid],
+                            [
+                                'server_id' => $sc['id'],
+                                'itinerary_id' => $local->id,
+                                'customer_id' => $sc['customer_id'],
+                                'created_by' => $user->id,
+                                'visit_date' => $visitDate,
+                                'route_start_at' => $sc['route_start_at'] ?? null,
+                                'actual_in' => $sc['actual_in'] ?? null,
+                                'actual_out' => $sc['actual_out'] ?? null,
+                                'salescall_status_id' => $sc['salescall_status_id'] ?? null,
+                                'salescall_type_id' => $sc['salescall_type_id'] ?? null,
+                                'outcome_reason' => $sc['outcome_reason'] ?? null,
+                                'collection_amount' => $sc['collection_amount'] ?? null,
+                                'remarks' => $sc['remarks'] ?? null,
+                                'concerns' => $sc['concerns'] ?? null,
+                                'sync_status' => 'synced',
+                            ]
+                        );
+                    }
+
+                    if (SalescallBrand::where('salescall_id', $localSalescall->id)->where('sync_status', 'pending')->doesntExist()) {
+                        SalescallBrand::where('salescall_id', $localSalescall->id)->delete();
+
+                        foreach ($sc['salescall_brands'] ?? [] as $brandRow) {
+                            SalescallBrand::create([
+                                'salescall_id' => $localSalescall->id,
+                                'customer_id' => $localSalescall->customer_id,
+                                'material_group_id' => $brandRow['material_group_id'],
+                                'brand_id' => $brandRow['brand_id'],
+                                'quantity' => $brandRow['quantity'] ?? null,
+                                'brand_other' => $brandRow['brand_other'] ?? null,
+                                'local_uuid' => (string) \Str::uuid(),
+                                'sync_status' => 'synced',
+                            ]);
+                        }
+                    }
+
+                    $incomingCategory = $sc['salescall_category'] ?? null;
+
+                    if ($incomingCategory && SalescallCategory::where('salescall_id', $localSalescall->id)->where('sync_status', 'pending')->doesntExist()) {
+                        $categoryRecord = SalescallCategory::firstOrNew(['salescall_id' => $localSalescall->id]);
+
+                        if (! $categoryRecord->local_uuid) {
+                            $categoryRecord->local_uuid = (string) \Str::uuid();
+                        }
+
+                        $categoryRecord->fill([
+                            'customer_id' => $localSalescall->customer_id,
+                            'category_id' => $incomingCategory['category_id'],
+                            'sub_category_id' => $incomingCategory['sub_category_id'],
                             'sync_status' => 'synced',
-                        ]
-                    );
+                        ]);
+
+                        $categoryRecord->save();
+                    }
                 }
             }
 
@@ -143,6 +246,7 @@ class SyncService
                         'region_specific_id' => $customer['region_specific_id'] ?? null,
                         'municipality_id' => $customer['municipality_id'] ?? null,
                         'name' => $customer['name'],
+                        'unique_id' => $customer['unique_id'] ?? null,
                         'contact_person' => $customer['contact_person'] ?? null,
                         'contact_number' => $customer['contact_number'] ?? null,
                         'address' => $customer['address'] ?? null,
@@ -156,8 +260,15 @@ class SyncService
 
             $itineraryCount = count($data['itineraries'] ?? []);
             $salescallCount = array_sum(
-                array_map(fn($i) => count($i['salescalls'] ?? []), $data['itineraries'] ?? [])
+                array_map(fn ($i) => count($i['salescalls'] ?? []), $data['itineraries'] ?? [])
             );
+
+            foreach ($data['salescall_statuses'] ?? [] as $status) {
+                DB::table('salescall_statuses')->updateOrInsert(
+                    ['id' => $status['id']],
+                    ['name' => $status['name'], 'updated_at' => now()]
+                );
+            }
 
             foreach ($data['material_groups'] ?? [] as $group) {
                 DB::table('material_groups')->updateOrInsert(
@@ -174,6 +285,52 @@ class SyncService
                         'name' => $brand['name'],
                         'enabled' => $brand['enabled'],
                         'updated_at' => now(),
+                    ]
+                );
+            }
+
+            $incomingCustomerBrands = collect($data['customer_brands'] ?? [])->groupBy('customer_id');
+
+            foreach ($incomingCustomerBrands as $customerId => $rows) {
+                $hasPendingLocalChanges = SalescallBrand::where('customer_id', $customerId)
+                    ->where('sync_status', 'pending')
+                    ->exists();
+
+                if ($hasPendingLocalChanges) {
+                    continue;
+                }
+
+                CustomerBrand::where('customer_id', $customerId)->delete();
+
+                foreach ($rows as $row) {
+                    CustomerBrand::create([
+                        'customer_id' => $customerId,
+                        'material_group_id' => $row['material_group_id'],
+                        'brand_id' => $row['brand_id'],
+                        'quantity' => $row['quantity'] ?? null,
+                        'brand_other' => $row['brand_other'] ?? null,
+                        'last_salescall_id' => $row['last_salescall_id'] ?? null,
+                        'last_updated_by' => $row['last_updated_by'] ?? null,
+                    ]);
+                }
+            }
+
+            foreach ($data['customer_categories'] ?? [] as $categoryRow) {
+                $hasPendingLocalChanges = SalescallCategory::where('customer_id', $categoryRow['customer_id'])
+                    ->where('sync_status', 'pending')
+                    ->exists();
+
+                if ($hasPendingLocalChanges) {
+                    continue;
+                }
+
+                CustomerCategory::updateOrCreate(
+                    ['customer_id' => $categoryRow['customer_id']],
+                    [
+                        'category_id' => $categoryRow['category_id'],
+                        'sub_category_id' => $categoryRow['sub_category_id'],
+                        'last_salescall_id' => $categoryRow['last_salescall_id'] ?? null,
+                        'last_updated_by' => $categoryRow['last_updated_by'] ?? null,
                     ]
                 );
             }
@@ -230,7 +387,7 @@ class SyncService
 
             return SyncResult::ok("Pulled {$itineraryCount} itineraries, {$salescallCount} salescalls, {$customerCount} customers.");
         } catch (\Exception $e) {
-            return SyncResult::fail('Pull error: ' . $e->getMessage(), 'exception');
+            return SyncResult::fail('Pull error: '.$e->getMessage(), 'exception');
         }
     }
 
@@ -247,7 +404,7 @@ class SyncService
         $failed = 0;
 
         $pendingItineraries = Itinerary::where('sync_status', 'pending')
-            ->orWhere(fn($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
+            ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
             ->get();
 
         foreach ($pendingItineraries as $itinerary) {
@@ -268,7 +425,7 @@ class SyncService
                     $itinerary->update(['sync_status' => 'synced', 'server_id' => $response->json('server_id'), 'sync_error' => null]);
                     $pushed++;
                 } else {
-                    $this->markFailed($itinerary, $response->status() . ': ' . $response->body());
+                    $this->markFailed($itinerary, $response->status().': '.$response->body());
                     $failed++;
                 }
             } catch (\Exception $e) {
@@ -279,7 +436,7 @@ class SyncService
 
         $pendingSalescalls = Salescall::with('itinerary')
             ->where('sync_status', 'pending')
-            ->orWhere(fn($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
+            ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
             ->get();
 
         foreach ($pendingSalescalls as $salescall) {
@@ -291,6 +448,7 @@ class SyncService
                 $response = $client->post("{$this->serverUrl}/api/sync/push/salescall", [
                     'local_uuid' => $salescall->local_uuid,
                     'itinerary_uuid' => $salescall->itinerary->local_uuid,
+                    'itinerary_server_id' => $salescall->itinerary->server_id,
                     'customer_id' => $salescall->customer_id,
                     'salescall_type_id' => $salescall->salescall_type_id,
                     'latitude' => $salescall->latitude,
@@ -301,6 +459,8 @@ class SyncService
                     'longitude_actual_out' => $salescall->longitude_actual_out,
                     'actual_in' => $salescall->actual_in?->toDateTimeString(),
                     'actual_out' => $salescall->actual_out?->toDateTimeString(),
+                    'salescall_status_id' => $salescall->salescall_status_id,
+                    'outcome_reason' => $salescall->outcome_reason,
 
                     'material_group_id' => $salescall->material_group_id,
                     'brand_id' => $salescall->brand_id,
@@ -323,7 +483,7 @@ class SyncService
                     $salescall->update(['sync_status' => 'synced', 'server_id' => $response->json('server_id'), 'sync_error' => null]);
                     $pushed++;
                 } else {
-                    $this->markFailed($salescall, $response->status() . ': ' . $response->body());
+                    $this->markFailed($salescall, $response->status().': '.$response->body());
                     $failed++;
                 }
             } catch (\Exception $e) {
@@ -332,10 +492,95 @@ class SyncService
             }
         }
 
+        $pendingBrandSalescallIds = SalescallBrand::where('sync_status', 'pending')
+            ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
+            ->distinct()
+            ->pluck('salescall_id');
+
+        foreach ($pendingBrandSalescallIds as $salescallId) {
+            $salescall = Salescall::find($salescallId);
+
+            if (! $salescall?->server_id) {
+                continue; // wait for salescall to sync first
+            }
+
+            $rows = SalescallBrand::where('salescall_id', $salescallId)->get();
+
+            try {
+                $response = $client->post("{$this->serverUrl}/api/sync/push/salescall-brands", [
+                    'salescall_server_id' => $salescall->server_id,
+                    'brands' => $rows->map(fn ($r) => [
+                        'material_group_id' => $r->material_group_id,
+                        'brand_id' => $r->brand_id,
+                        'quantity' => $r->quantity,
+                        'brand_other' => $r->brand_other,
+                    ])->values()->all(),
+                ]);
+
+                if ($response->status() === 401) {
+                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+                }
+
+                if ($response->successful()) {
+                    SalescallBrand::where('salescall_id', $salescallId)->update(['sync_status' => 'synced', 'sync_error' => null]);
+                    $pushed++;
+                } else {
+                    SalescallBrand::where('salescall_id', $salescallId)->update([
+                        'sync_status' => 'failed',
+                        'sync_attempts' => DB::raw('sync_attempts + 1'),
+                        'sync_error' => $response->status().': '.$response->body(),
+                    ]);
+                    $failed++;
+                }
+            } catch (\Exception $e) {
+                SalescallBrand::where('salescall_id', $salescallId)->update([
+                    'sync_status' => 'failed',
+                    'sync_attempts' => DB::raw('sync_attempts + 1'),
+                    'sync_error' => $e->getMessage(),
+                ]);
+                $failed++;
+            }
+        }
+
+        $pendingCategories = SalescallCategory::where('sync_status', 'pending')
+            ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
+            ->get();
+
+        foreach ($pendingCategories as $categoryRecord) {
+            $salescall = Salescall::find($categoryRecord->salescall_id);
+
+            if (! $salescall?->server_id) {
+                continue; // wait for salescall to sync first
+            }
+
+            try {
+                $response = $client->post("{$this->serverUrl}/api/sync/push/salescall-category", [
+                    'salescall_server_id' => $salescall->server_id,
+                    'category_id' => $categoryRecord->category_id,
+                    'sub_category_id' => $categoryRecord->sub_category_id,
+                ]);
+
+                if ($response->status() === 401) {
+                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+                }
+
+                if ($response->successful()) {
+                    $categoryRecord->update(['sync_status' => 'synced', 'sync_error' => null]);
+                    $pushed++;
+                } else {
+                    $this->markFailed($categoryRecord, $response->status().': '.$response->body());
+                    $failed++;
+                }
+            } catch (\Exception $e) {
+                $this->markFailed($categoryRecord, $e->getMessage());
+                $failed++;
+            }
+        }
+
         $pendingImages = SalescallImage::with('salescall')
             ->where(function ($q) {
                 $q->where('sync_status', 'pending')
-                    ->orWhere(fn($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                    ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
             })
             ->get();
 
@@ -345,7 +590,7 @@ class SyncService
             }
 
             if (! file_exists($image->local_path)) {
-                $this->markFailed($image, 'Local file not found: ' . $image->local_path);
+                $this->markFailed($image, 'Local file not found: '.$image->local_path);
                 $failed++;
 
                 continue;
@@ -359,6 +604,8 @@ class SyncService
                         'salescall_server_id' => $image->salescall->server_id,
                         'salescall_image_type_id' => $image->salescall_image_type_id,
                         'notes' => $image->notes,
+                        'latitude' => $image->latitude,
+                        'longitude' => $image->longitude,
                     ]);
 
                 if ($response->status() === 401) {
@@ -373,7 +620,7 @@ class SyncService
                     ]);
                     $pushed++;
                 } else {
-                    $this->markFailed($image, $response->status() . ': ' . $response->body());
+                    $this->markFailed($image, $response->status().': '.$response->body());
                     $failed++;
                 }
             } catch (\Exception $e) {
@@ -385,7 +632,7 @@ class SyncService
         $pendingProfiles = CustomerProfile::with('salescall')
             ->where(function ($q) {
                 $q->where('sync_status', 'pending')
-                    ->orWhere(fn($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                    ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
             })
             ->get();
 
@@ -397,26 +644,26 @@ class SyncService
             try {
                 $signature = null;
                 if ($profile->signature_path && file_exists($profile->signature_path)) {
-                    $signature = 'data:image/png;base64,' . base64_encode(file_get_contents($profile->signature_path));
+                    $signature = 'data:image/png;base64,'.base64_encode(file_get_contents($profile->signature_path));
                 }
 
                 $response = $client->post("{$this->serverUrl}/api/sync/push/customer-profile", [
-                    'local_uuid'          => $profile->local_uuid,
+                    'local_uuid' => $profile->local_uuid,
                     'salescall_server_id' => $profile->salescall->server_id,
-                    'sub_category_id'     => $profile->sub_category_id,
-                    'registered_name'     => $profile->registered_name,
-                    'owner_name'          => $profile->owner_name,
-                    'address'             => $profile->address,
-                    'tin'                 => $profile->tin,
-                    'landline'            => $profile->landline,
-                    'mobile'              => $profile->mobile,
-                    'classification'      => $profile->classification,
-                    'incentive_type'      => $profile->incentive_type,
-                    'birthday'            => $profile->birthday?->format('Y-m-d'),
-                    'gender'              => $profile->gender,
-                    'marital_status'      => $profile->marital_status,
-                    'brand_products'      => $profile->brand_products,
-                    'signature'           => $signature,
+                    'sub_category_id' => $profile->sub_category_id,
+                    'registered_name' => $profile->registered_name,
+                    'owner_name' => $profile->owner_name,
+                    'address' => $profile->address,
+                    'tin' => $profile->tin,
+                    'landline' => $profile->landline,
+                    'mobile' => $profile->mobile,
+                    'classification' => $profile->classification,
+                    'incentive_type' => $profile->incentive_type,
+                    'birthday' => $profile->birthday?->format('Y-m-d'),
+                    'gender' => $profile->gender,
+                    'marital_status' => $profile->marital_status,
+                    'brand_products' => $profile->brand_products,
+                    'signature' => $signature,
                 ]);
 
                 if ($response->status() === 401) {
@@ -426,12 +673,12 @@ class SyncService
                 if ($response->successful()) {
                     $profile->update([
                         'sync_status' => 'synced',
-                        'server_id'   => $response->json('server_id'),
-                        'sync_error'  => null,
+                        'server_id' => $response->json('server_id'),
+                        'sync_error' => null,
                     ]);
                     $pushed++;
                 } else {
-                    $this->markFailed($profile, $response->status() . ': ' . $response->body());
+                    $this->markFailed($profile, $response->status().': '.$response->body());
                     $failed++;
                 }
             } catch (\Exception $e) {
@@ -439,7 +686,6 @@ class SyncService
                 $failed++;
             }
         }
-
 
         if ($pushed === 0 && $failed === 0) {
             return SyncResult::ok('Nothing to push.');

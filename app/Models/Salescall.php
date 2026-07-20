@@ -23,6 +23,11 @@ class Salescall extends Model
         return $this->belongsTo(Customer::class);
     }
 
+    public function createdBy()
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
     public function itinerary()
     {
         return $this->belongsTo(Itinerary::class);
@@ -47,11 +52,30 @@ class Salescall extends Model
             return 'in_progress';
         }
 
-        return 'completed';
+        return match ($this->salescallStatus?->name) {
+            SalescallStatus::PARTIALLY_COMPLETED => 'partially_completed',
+            SalescallStatus::CANCELLED => 'cancelled',
+            default => 'completed',
+        };
+    }
+
+    public function salescallStatus()
+    {
+        return $this->belongsTo(SalescallStatus::class);
     }
 
     public function images()
     {
         return $this->hasMany(SalescallImage::class);
+    }
+
+    public function salescallBrands()
+    {
+        return $this->hasMany(SalescallBrand::class);
+    }
+
+    public function salescallCategory()
+    {
+        return $this->hasOne(SalescallCategory::class);
     }
 }

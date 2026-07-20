@@ -10,39 +10,41 @@ class DashboardSalesrepWidget extends Widget
 {
     protected string $view = 'filament.widgets.dashboard-salesrep-widget';
 
-    protected int | string | array $columnSpan = 'full';
+    protected int|string|array $columnSpan = 'full';
 
     protected function getViewData(): array
     {
         $monthStart = Carbon::now()->startOfMonth();
-        $monthEnd   = Carbon::now()->endOfMonth();
+        $monthEnd = Carbon::now()->endOfMonth();
 
-        $todayCalls = Salescall::with('customer')
+        $monthCalls = Salescall::with('customer')
             ->where(function ($q) use ($monthStart, $monthEnd) {
                 $q->whereBetween('actual_in', [$monthStart, $monthEnd])
                     ->orWhereBetween('created_at', [$monthStart, $monthEnd]);
             })
             ->orderByRaw('COALESCE(actual_in, created_at) ASC')
             ->get()
-            ->filter(fn($call) => $call->visit_date->isToday())
+            ->filter(fn ($call) => $call->visit_date->between($monthStart, $monthEnd))
+            ->values();
+
+        $todayCalls = $monthCalls
+            ->filter(fn ($call) => $call->visit_date->isToday())
             ->values();
 
         $mapPins = $todayCalls
-            ->filter(fn($c) => $c->customer?->latitude && $c->customer?->longitude)
-            ->map(fn($c) => [
-                'lat'  => (float) $c->customer->latitude,
-                'lng'  => (float) $c->customer->longitude,
+            ->filter(fn ($c) => $c->customer?->latitude && $c->customer?->longitude)
+            ->map(fn ($c) => [
+                'lat' => (float) $c->customer->latitude,
+                'lng' => (float) $c->customer->longitude,
                 'name' => $c->customer->name ?? '—',
                 'time' => $c->visit_date->format('h:i A'),
             ])
             ->values();
 
-
-
-        $inProgress     = $todayCalls->firstWhere('status', 'in_progress');
+        $inProgress = $todayCalls->firstWhere('status', 'in_progress');
         $scheduledCount = $todayCalls->where('status', 'scheduled')->count();
         $completedCount = $todayCalls->where('status', 'completed')->count();
-        $totalCount     = $todayCalls->count();
+        $totalCount = $todayCalls->count();
 
         [$notifTitle, $notifMessage] = match (true) {
             $inProgress !== null => [
@@ -67,14 +69,12 @@ class DashboardSalesrepWidget extends Widget
             ],
         };
 
-
-
-
         return [
-            'todayCalls'  => $todayCalls,
+            'todayCalls' => $todayCalls,
+            'monthCalls' => $monthCalls,
             'mapPinsJson' => $mapPins->toJson(),
 
-            'notifTitle'   => $notifTitle,
+            'notifTitle' => $notifTitle,
             'notifMessage' => $notifMessage,
         ];
     }
