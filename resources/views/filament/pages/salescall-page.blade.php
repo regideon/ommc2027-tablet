@@ -299,6 +299,8 @@
             this.selected = id;
             this.tab = 'overview';
 
+            if (this.miniMap) { this.miniMap.remove(); this.miniMap = null; }
+
             $wire.loadPhotos(id);
             $wire.loadBrands(id);
             $wire.loadCategories(id);
@@ -317,6 +319,7 @@
             const call = this.calls.find(c => c.id === id);
             this.checkedIn = call ? call.status !== 'scheduled' : false;
             this.showDetail = true;
+            this.initMiniMap();
         },
         doCheckIn() {
             if (this.anyOtherInProgress) return;
@@ -402,6 +405,36 @@
         },
         tabLabel(t) {
             return { overview: 'Overview', brands: 'Brands', ccr: 'CCR', mrf: 'MRF', photos: 'Photos', profile: 'Change Profile', activity: 'Activity Log' }[t] ?? t;
+        },
+
+        miniMap: null,
+        initMiniMap() {
+            // $nextTick alone isn't enough — x-show removes display:none but the browser
+            // may not have painted and measured the container yet. A 150ms delay lets the
+            // layout settle before Leaflet reads the container dimensions.
+            this.$nextTick(() => setTimeout(() => {
+                if (!this.checkedIn || this.tab !== 'overview') return;
+                const el = document.getElementById('salescall-mini-map');
+                if (!el) return;
+                if (this.miniMap) { this.miniMap.remove(); this.miniMap = null; }
+                const lat = this.selectedCall?.lat;
+                const lng = this.selectedCall?.lng;
+                if (!lat || !lng) return;
+                const map = L.map('salescall-mini-map', {
+                    zoomControl: false,
+                    dragging: false,
+                    scrollWheelZoom: false,
+                    doubleClickZoom: false,
+                    touchZoom: false,
+                    attributionControl: false,
+                });
+                L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 18 }).addTo(map);
+                map.setView([lat, lng], 17);
+                L.marker([lat, lng]).addTo(map);
+                this.miniMap = map;
+                // Force Leaflet to recalculate container size after rendering
+                map.invalidateSize();
+            }, 150));
         },
 
         currentProfile: @entangle('currentProfile'),
@@ -558,6 +591,7 @@
         });
         $watch('tab', (value) => {
             if (value === 'profile' && selected) { $wire.loadProfile(selected); $wire.loadCategories(selected); }
+            if (value === 'overview') initMiniMap();
             // Defensive reset: don't let a half-finished cancel-reason panel or photo
             // modal from a previous tab silently hide the finish-action buttons.
             showCancelReason = false;
@@ -567,6 +601,10 @@
             photoToDelete = null;
             previewPhoto = null;
         });
+        $watch('checkedIn', (v) => { if (v) initMiniMap(); });
+        // $watch doesn't fire for the initial value, so manually boot the map
+        // if the page loads with a call already in a checked-in state.
+        if (checkedIn) initMiniMap();
 
 
         checkConnectivity().then(() => attemptAutoSync());
@@ -1383,10 +1421,18 @@
                             </div>
                         </div>
 
-                        <div class="rounded-2xl h-44 lg:h-52 bg-gray-100 overflow-hidden relative border border-gray-200 flex items-center justify-center">
-                            <span class="material-symbols-outlined text-gray-400 text-5xl" title="Store location map">map</span>
-                            <div class="absolute bottom-4 left-4 bg-white/90 backdrop-blur px-4 py-2 rounded-xl border border-gray-200 shadow-sm flex items-center gap-2">
-                                <span class="material-symbols-outlined text-[#006c47] mat-fill text-lg" title="GPS location locked">my_location</span>
+                        <div class="rounded-2xl h-44 lg:h-52 overflow-hidden relative border border-gray-200 isolate">
+                            <div id="salescall-mini-map" class="w-full h-full"></div>
+                            {{-- No-location fallback --}}
+                            <div x-show="!selectedCall?.lat || !selectedCall?.lng"
+                                 class="absolute inset-0 bg-gray-100 flex flex-col items-center justify-center gap-2">
+                                <span class="material-symbols-outlined text-gray-400 text-4xl">location_off</span>
+                                <p class="text-xs text-[#737685]">No location data for this customer</p>
+                            </div>
+                            {{-- GPS badge overlay --}}
+                            <div x-show="selectedCall?.lat && selectedCall?.lng"
+                                 class="absolute bottom-3 left-3 bg-white/90 backdrop-blur px-3 py-1.5 rounded-xl border border-gray-200 shadow-sm flex items-center gap-1.5 pointer-events-none">
+                                <span class="material-symbols-outlined text-[#006c47] mat-fill text-base">my_location</span>
                                 <span class="text-xs font-bold text-[#191c1e]">GPS Locked</span>
                             </div>
                         </div>
