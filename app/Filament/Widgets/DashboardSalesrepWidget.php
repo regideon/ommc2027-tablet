@@ -18,6 +18,7 @@ class DashboardSalesrepWidget extends Widget
         $monthEnd = Carbon::now()->endOfMonth();
 
         $monthCalls = Salescall::with('customer')
+            ->where('created_by', auth()->id())
             ->where(function ($q) use ($monthStart, $monthEnd) {
                 $q->whereBetween('actual_in', [$monthStart, $monthEnd])
                     ->orWhereBetween('created_at', [$monthStart, $monthEnd]);

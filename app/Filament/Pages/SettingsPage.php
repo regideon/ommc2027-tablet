@@ -12,8 +12,11 @@ class SettingsPage extends Page
     protected string $view = 'filament.pages.settings-page';
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedCog6Tooth;
+
     protected static ?string $navigationLabel = 'Settings';
+
     protected static ?string $title = '';
+
     protected static ?int $navigationSort = 500;
 
     public function logout(): void
@@ -21,6 +24,6 @@ class SettingsPage extends Page
         Filament::auth()->logout();
         session()->invalidate();
         session()->regenerateToken();
-        redirect('/app/login');
+        $this->redirect('/app/login', navigate: false);
     }
 }

@@ -1676,7 +1676,7 @@
                             <div x-show="categoryChanged" x-transition class="mt-3 flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl">
                                 <span class="material-symbols-outlined mat-fill text-amber-600 text-lg shrink-0">warning</span>
                                 <p class="text-xs text-amber-800 leading-relaxed">
-                                    You're changing this customer's category. Saving will submit it for drm/rsm approval before it takes effect — the customer's current category stays active until then.
+                                    You're changing this customer's category. Saving will submit it to the approvers before it takes effect — the customer's current category stays active until then.
                                 </p>
                             </div>
 
