@@ -16,6 +16,7 @@ class Salescall extends Model
         'visit_date' => 'datetime',
         'actual_in' => 'datetime',
         'actual_out' => 'datetime',
+        'route_start_at' => 'datetime',
     ];
 
     public function customer()
@@ -62,6 +63,11 @@ class Salescall extends Model
     public function salescallStatus()
     {
         return $this->belongsTo(SalescallStatus::class);
+    }
+
+    public function salescallType()
+    {
+        return $this->belongsTo(SalescallType::class);
     }
 
     public function images()

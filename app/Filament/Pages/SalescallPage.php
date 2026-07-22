@@ -4,8 +4,11 @@ namespace App\Filament\Pages;
 
 use App\Models\Brand;
 use App\Models\Category;
+use App\Models\Customer;
 use App\Models\CustomerBrand;
+use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
+use App\Models\Itinerary;
 use App\Models\MaterialGroup;
 use App\Models\Salescall;
 use App\Models\SalescallBrand;
@@ -14,6 +17,7 @@ use App\Models\SalescallImage;
 use App\Models\SalescallImageCategory;
 use App\Models\SalescallImageType;
 use App\Models\SalescallStatus;
+use App\Models\SalescallType;
 use App\Models\SubCategory;
 use App\Services\SyncService;
 use BackedEnum;
@@ -59,6 +63,8 @@ class SalescallPage extends Page
 
     public array $currentCategory = [];
 
+    public array $customerNotes = [];
+
     public bool $hasSavedBrands = false;
 
     public bool $photosComplete = false;
@@ -79,9 +85,9 @@ class SalescallPage extends Page
             ->orderBy('created_at', 'desc')
             ->get();
 
-        $this->callPhotos = $images->map(fn($img) => [
+        $this->callPhotos = $images->map(fn ($img) => [
             'id' => $img->id,
-            'url' => '/salescall-image/' . $img->id,
+            'url' => '/salescall-image/'.$img->id,
             'type' => $img->type?->name ?? '—',
             'category' => $img->type?->category?->name ?? '—',
         ])->all();
@@ -100,10 +106,103 @@ class SalescallPage extends Page
         return $coveredTypeIds->filter()->unique()->count() >= $totalTypes;
     }
 
+    /**
+     * Quick Notes are customer-level (not visit-level) and private to the author —
+     * written once, then visible on every current/future salescall for that same
+     * customer, regardless of which visit they were jotted down during.
+     */
+    public function loadCustomerNotes(int $customerId): void
+    {
+        $this->customerNotes = CustomerNote::where('customer_id', $customerId)
+            ->where('created_by', auth()->id())
+            ->orderBy('created_at', 'desc')
+            ->get()
+            ->map(fn (CustomerNote $note) => [
+                'id' => $note->id,
+                'title' => $note->title,
+                'body' => $note->body,
+                'created_at' => $note->created_at->diffForHumans(),
+            ])
+            ->all();
+    }
+
+    public function saveCustomerNote(int $customerId, ?string $title, string $body): void
+    {
+        $body = trim($body);
+
+        if ($body === '') {
+            return;
+        }
+
+        $existingCount = CustomerNote::where('customer_id', $customerId)
+            ->where('created_by', auth()->id())
+            ->count();
+
+        if ($existingCount >= CustomerNote::MAX_PER_CUSTOMER_PER_USER) {
+            Notification::make()
+                ->title('Note limit reached — max '.CustomerNote::MAX_PER_CUSTOMER_PER_USER.' notes per customer. Delete an old one first.')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        CustomerNote::create([
+            'customer_id' => $customerId,
+            'created_by' => auth()->id(),
+            'title' => filled($title) ? trim($title) : null,
+            'body' => $body,
+            'local_uuid' => (string) \Str::uuid(),
+            'sync_status' => 'pending',
+        ]);
+
+        $this->loadCustomerNotes($customerId);
+        Notification::make()->title('Note saved.')->success()->send();
+    }
+
+    public function updateCustomerNote(int $noteId, ?string $title, string $body): void
+    {
+        $note = CustomerNote::where('id', $noteId)->where('created_by', auth()->id())->first();
+        $body = trim($body);
+
+        if (! $note || $body === '') {
+            return;
+        }
+
+        $note->update([
+            'title' => filled($title) ? trim($title) : null,
+            'body' => $body,
+            'sync_status' => 'pending',
+        ]);
+
+        $this->loadCustomerNotes($note->customer_id);
+        Notification::make()->title('Note updated.')->success()->send();
+    }
+
+    public function deleteCustomerNote(int $noteId): void
+    {
+        $note = CustomerNote::where('id', $noteId)->where('created_by', auth()->id())->first();
+
+        if (! $note) {
+            return;
+        }
+
+        $customerId = $note->customer_id;
+
+        if ($note->server_id) {
+            app(SyncService::class)->pushCustomerNoteDelete($note->local_uuid);
+        }
+
+        $note->delete();
+
+        $this->loadCustomerNotes($customerId);
+        Notification::make()->title('Note deleted.')->success()->send();
+    }
+
     public function saveImage(int $salescallId, int $typeId, string $base64Data): void
     {
         $raw = preg_replace('#^data:image/\w+;base64,#i', '', $base64Data);
-        $filename = 'salescall_images/' . \Str::uuid() . '.jpg';
+        $filename = 'salescall_images/'.\Str::uuid().'.jpg';
 
         Storage::disk('local')->put($filename, base64_decode($raw));
 
@@ -207,7 +306,75 @@ class SalescallPage extends Page
             'sync_status' => 'pending',
         ]);
 
-        $this->requestGpsCapture('checkin-' . $salescallId, 'use-browser-geolocation', $salescallId);
+        $this->requestGpsCapture('checkin-'.$salescallId, 'use-browser-geolocation', $salescallId);
+    }
+
+    /**
+     * DRM/RSM ad-hoc visit not covered by the AI-generated monthly itinerary.
+     * Attaches to the itinerary matching the chosen scheduled month (must already
+     * exist locally — itineraries are only ever created via sync, never on-device)
+     * and is flagged salescall_type_id = Unplanned so the portal can distinguish it
+     * from AI-generated / RSM-added calls. Mirrors the portal's own "Add Customer"
+     * flow on /ommcpanel/my-itineraries/{id} (ManageSalesItinerary::getHeaderActions()),
+     * which also collects a "Scheduled At" datetime.
+     *
+     * @return array<string, mixed>|null shape matches getViewData()'s $calls map, for the
+     *                                   caller to push straight into Alpine's `calls` array
+     */
+    public function createUnplannedSalescall(int $customerId, string $scheduledAt): ?array
+    {
+        $scheduled = Carbon::parse($scheduledAt);
+
+        $itinerary = Itinerary::where('created_by', auth()->id())
+            ->whereYear('date_month', $scheduled->year)
+            ->whereMonth('date_month', $scheduled->month)
+            ->first();
+
+        if (! $itinerary) {
+            Notification::make()
+                ->title("No itinerary found for {$scheduled->format('F Y')} yet — pull the latest schedule from the server first.")
+                ->danger()
+                ->send();
+
+            return null;
+        }
+
+        $customer = Customer::find($customerId);
+
+        if (! $customer) {
+            return null;
+        }
+
+        $salescall = Salescall::create([
+            'itinerary_id' => $itinerary->id,
+            'customer_id' => $customer->id,
+            'salescall_type_id' => SalescallType::idFor(SalescallType::UNPLANNED),
+            'visit_date' => $scheduled,
+            'route_start_at' => $scheduled,
+            'created_by' => auth()->id(),
+            'local_uuid' => (string) \Str::uuid(),
+            'sync_status' => 'pending',
+        ]);
+
+        Notification::make()->title('Unplanned salescall added.')->success()->send();
+
+        return [
+            'id' => $salescall->id,
+            'seq' => $salescall->id,
+            'local_uuid' => $salescall->local_uuid,
+            'customer_id' => $customer->id,
+            'name' => $customer->name ?? '—',
+            'unique_id' => $customer->unique_id ?? '',
+            'location' => $customer->address ?? '',
+            'lat' => $customer->latitude ?? null,
+            'lng' => $customer->longitude ?? null,
+            'time' => $scheduled->format('h:i A'),
+            'date_label' => $scheduled->format('D, M j'),
+            'status' => 'scheduled',
+            'type' => SalescallType::UNPLANNED,
+            'sync_status' => 'pending',
+            'filter_group' => $scheduled->isToday() ? 'today' : ($scheduled->between(Carbon::now()->startOfWeek(), Carbon::now()->endOfWeek()) ? 'week' : 'month'),
+        ];
     }
 
     public function loadBrands(int $salescallId): void
@@ -221,7 +388,7 @@ class SalescallPage extends Page
 
             $items = $groupRows->isEmpty()
                 ? [['brand_id' => null, 'quantity' => null, 'brand_other' => '']]
-                : $groupRows->map(fn($r) => [
+                : $groupRows->map(fn ($r) => [
                     'brand_id' => $r->brand_id,
                     'quantity' => $r->quantity,
                     'brand_other' => $r->brand_other ?? '',
@@ -404,7 +571,7 @@ class SalescallPage extends Page
             'sync_status' => 'pending',
         ]);
 
-        $this->requestGpsCapture('submit-' . $salescallId, 'use-browser-geolocation-submit', $salescallId);
+        $this->requestGpsCapture('submit-'.$salescallId, 'use-browser-geolocation-submit', $salescallId);
 
         $this->dispatch('finish-done', salescallId: $salescallId);
     }
@@ -430,7 +597,7 @@ class SalescallPage extends Page
                 ->id($requestId)
                 ->get();
         } catch (\Throwable $e) {
-            Log::warning('GPS capture request failed: ' . $e->getMessage());
+            Log::warning('GPS capture request failed: '.$e->getMessage());
         }
     }
 
@@ -568,7 +735,7 @@ class SalescallPage extends Page
 
         if ($signatureData) {
             $raw = preg_replace('#^data:image/\w+;base64,#i', '', $signatureData);
-            $filename = 'customer_profiles/' . \Str::uuid() . '.png';
+            $filename = 'customer_profiles/'.\Str::uuid().'.png';
             Storage::disk('local')->put($filename, base64_decode($raw));
             $profile->signature_path = Storage::disk('local')->path($filename);
         }
@@ -596,7 +763,7 @@ class SalescallPage extends Page
         $monthStart = Carbon::now()->startOfMonth();
         $monthEnd = Carbon::now()->endOfMonth();
 
-        $calls = Salescall::with(['customer', 'salescallStatus'])
+        $calls = Salescall::with(['customer', 'salescallStatus', 'salescallType'])
             ->where('created_by', auth()->id())
             ->where(function ($q) use ($monthStart, $monthEnd) {
                 $q->whereBetween('actual_in', [$monthStart, $monthEnd])
@@ -618,6 +785,7 @@ class SalescallPage extends Page
                     'id' => $call->id,
                     'seq' => $call->id,
                     'local_uuid' => $call->local_uuid,
+                    'customer_id' => $call->customer_id,
                     'name' => $call->customer->name ?? '—',
                     'unique_id' => $call->customer->unique_id ?? '',
                     'location' => $call->customer->address ?? '',
@@ -626,6 +794,7 @@ class SalescallPage extends Page
                     'time' => $visitDate->format('h:i A'),
                     'date_label' => $visitDate->format('D, M j'),
                     'status' => $call->status,
+                    'type' => $call->salescallType?->name,
                     'sync_status' => $call->sync_status,
                     'filter_group' => $filterGroup,
                 ];
@@ -634,11 +803,11 @@ class SalescallPage extends Page
         $imageCategories = SalescallImageCategory::with('types:id,salescall_image_category_id,name,slug')
             ->orderBy('sort')
             ->get(['id', 'name', 'slug'])
-            ->map(fn($cat) => [
+            ->map(fn ($cat) => [
                 'id' => $cat->id,
                 'name' => $cat->name,
                 'slug' => $cat->slug,
-                'types' => $cat->types->map(fn($t) => ['id' => $t->id, 'name' => $t->name])->values()->all(),
+                'types' => $cat->types->map(fn ($t) => ['id' => $t->id, 'name' => $t->name])->values()->all(),
             ]);
 
         return [
@@ -650,6 +819,9 @@ class SalescallPage extends Page
             'imageCategoriesJson' => $imageCategories->toJson(),
             'categoriesJson' => Category::orderBy('name')->get(['id', 'name'])->toJson(),
             'subCategoriesJson' => SubCategory::orderBy('name')->get(['id', 'category_id', 'name', 'with_form'])->toJson(),
+            'customersJson' => Customer::where('is_active', true)->orderBy('name')
+                ->get(['id', 'name', 'unique_id', 'address', 'latitude', 'longitude'])->toJson(),
+            'canAddSalescall' => auth()->user()?->hasAnyRole(['drm', 'rsm']) ?? false,
         ];
     }
 }

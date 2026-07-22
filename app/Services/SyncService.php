@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\CustomerBrand;
 use App\Models\CustomerCategory;
+use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
 use App\Models\Itinerary;
 use App\Models\Salescall;
@@ -40,7 +41,8 @@ class SyncService
             || $pendingOrRetryable(SalescallBrand::query())->exists()
             || $pendingOrRetryable(SalescallCategory::query())->exists()
             || $pendingOrRetryable(SalescallImage::query())->exists()
-            || $pendingOrRetryable(CustomerProfile::query())->exists();
+            || $pendingOrRetryable(CustomerProfile::query())->exists()
+            || $pendingOrRetryable(CustomerNote::query())->exists();
     }
 
     /**
@@ -270,6 +272,13 @@ class SyncService
                 );
             }
 
+            foreach ($data['salescall_types'] ?? [] as $type) {
+                DB::table('salescall_types')->updateOrInsert(
+                    ['id' => $type['id']],
+                    ['name' => $type['name'], 'updated_at' => now()]
+                );
+            }
+
             foreach ($data['material_groups'] ?? [] as $group) {
                 DB::table('material_groups')->updateOrInsert(
                     ['id' => $group['id']],
@@ -331,6 +340,35 @@ class SyncService
                         'sub_category_id' => $categoryRow['sub_category_id'],
                         'last_salescall_id' => $categoryRow['last_salescall_id'] ?? null,
                         'last_updated_by' => $categoryRow['last_updated_by'] ?? null,
+                    ]
+                );
+            }
+
+            foreach ($data['customer_notes'] ?? [] as $noteRow) {
+                $hasPendingLocalChanges = CustomerNote::where('local_uuid', $noteRow['local_uuid'])
+                    ->where('sync_status', 'pending')
+                    ->exists();
+
+                if ($hasPendingLocalChanges) {
+                    continue;
+                }
+
+                CustomerNote::updateOrCreate(
+                    ['local_uuid' => $noteRow['local_uuid']],
+                    [
+                        'server_id' => $noteRow['id'],
+                        'customer_id' => $noteRow['customer_id'],
+                        // Portal already scopes the customer_notes payload to created_by = the
+                        // syncing user (see SyncController::pull()), so every row here belongs
+                        // to $user. Use the tablet's own local user id, not the portal's numeric
+                        // id in the payload — portal and tablet user ids differ for the same
+                        // person (see "Portal user IDs ≠ tablet user IDs" gotcha), so writing the
+                        // portal's id here violates the local users FK.
+                        'created_by' => $user->id,
+                        'title' => $noteRow['title'] ?? null,
+                        'body' => $noteRow['body'],
+                        'sync_status' => 'synced',
+                        'synced_at' => now(),
                     ]
                 );
             }
@@ -451,6 +489,7 @@ class SyncService
                     'itinerary_server_id' => $salescall->itinerary->server_id,
                     'customer_id' => $salescall->customer_id,
                     'salescall_type_id' => $salescall->salescall_type_id,
+                    'route_start_at' => $salescall->route_start_at?->toDateTimeString(),
                     'latitude' => $salescall->latitude,
                     'longitude' => $salescall->longitude,
                     'latitude_actual_in' => $salescall->latitude_actual_in,
@@ -687,6 +726,42 @@ class SyncService
             }
         }
 
+        $pendingNotes = CustomerNote::where(function ($q) {
+            $q->where('sync_status', 'pending')
+                ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+        })->get();
+
+        foreach ($pendingNotes as $note) {
+            try {
+                $response = $client->post("{$this->serverUrl}/api/sync/push/customer-note", [
+                    'local_uuid' => $note->local_uuid,
+                    'customer_id' => $note->customer_id,
+                    'title' => $note->title,
+                    'body' => $note->body,
+                ]);
+
+                if ($response->status() === 401) {
+                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+                }
+
+                if ($response->successful()) {
+                    $note->update([
+                        'sync_status' => 'synced',
+                        'server_id' => $response->json('server_id'),
+                        'sync_error' => null,
+                        'synced_at' => now(),
+                    ]);
+                    $pushed++;
+                } else {
+                    $this->markFailed($note, $response->status().': '.$response->body());
+                    $failed++;
+                }
+            } catch (\Exception $e) {
+                $this->markFailed($note, $e->getMessage());
+                $failed++;
+            }
+        }
+
         if ($pushed === 0 && $failed === 0) {
             return SyncResult::ok('Nothing to push.');
         }
@@ -700,6 +775,28 @@ class SyncService
         }
 
         return SyncResult::ok("Pushed {$pushed} items successfully.");
+    }
+
+    /**
+     * Best-effort immediate push of a Quick Note deletion — fired synchronously
+     * when the user deletes a note (not queued through the regular pending-sync
+     * loop, since there's no local row left afterward to track sync_status on).
+     * Silently no-ops if offline; the note is already gone locally either way.
+     */
+    public function pushCustomerNoteDelete(string $localUuid): void
+    {
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (! $user || blank($user->api_token)) {
+            return;
+        }
+
+        try {
+            $this->client($user->api_token)
+                ->post("{$this->serverUrl}/api/sync/push/customer-note/delete", ['local_uuid' => $localUuid]);
+        } catch (\Exception) {
+            // best-effort — nothing local left to mark as failed
+        }
     }
 
     private function client(string $token): PendingRequest

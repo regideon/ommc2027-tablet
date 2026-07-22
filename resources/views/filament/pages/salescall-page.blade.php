@@ -253,6 +253,79 @@
         materialGroups: {{ $materialGroupsJson }},
         brands: {{ $brandsJson }},
 
+        customers: {{ $customersJson }},
+        showAddCall: false,
+        addCallSearch: '',
+        addCallCustomerId: null,
+        addCallScheduledAt: '',
+        addingCall: false,
+        get filteredCustomers() {
+            const q = this.addCallSearch.trim().toLowerCase();
+            if (!q) return this.customers;
+            return this.customers.filter(c => c.name.toLowerCase().includes(q));
+        },
+        nowLocalDatetimeString() {
+            const d = new Date();
+            d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+            return d.toISOString().slice(0, 16);
+        },
+        openAddCall() {
+            this.showAddCall = true;
+            this.addCallSearch = '';
+            this.addCallCustomerId = null;
+            this.addCallScheduledAt = this.nowLocalDatetimeString();
+        },
+        closeAddCall() { this.showAddCall = false; },
+        selectAddCallCustomer(customerId) { this.addCallCustomerId = customerId; },
+        async addCall() {
+            if (this.addingCall || !this.addCallCustomerId || !this.addCallScheduledAt) return;
+            this.addingCall = true;
+            const newCall = await $wire.createUnplannedSalescall(this.addCallCustomerId, this.addCallScheduledAt);
+            this.addingCall = false;
+            if (!newCall) return;
+            this.calls.push(newCall);
+            this.showAddCall = false;
+            this.selectCall(newCall.id);
+        },
+
+        customerNotes: @entangle('customerNotes'),
+        showNoteModal: false,
+        noteModalMode: 'add',
+        noteForm: { id: null, title: '', body: '' },
+        noteSaving: false,
+        noteDeletingId: null,
+        openAddNote() {
+            if (this.atNoteLimit) return;
+            this.noteModalMode = 'add';
+            this.noteForm = { id: null, title: '', body: '' };
+            this.showNoteModal = true;
+        },
+        openEditNote(note) {
+            this.noteModalMode = 'edit';
+            this.noteForm = { id: note.id, title: note.title || '', body: note.body };
+            this.showNoteModal = true;
+        },
+        closeNoteModal() { this.showNoteModal = false; },
+        noteLimit: 50,
+        get atNoteLimit() { return this.customerNotes.length >= this.noteLimit; },
+        async saveNote() {
+            if (this.noteSaving || !this.noteForm.body.trim()) return;
+            this.noteSaving = true;
+            if (this.noteModalMode === 'edit') {
+                await $wire.updateCustomerNote(this.noteForm.id, this.noteForm.title.trim() || null, this.noteForm.body.trim());
+            } else {
+                await $wire.saveCustomerNote(this.selectedCall?.customer_id, this.noteForm.title.trim() || null, this.noteForm.body.trim());
+            }
+            this.noteSaving = false;
+            this.showNoteModal = false;
+        },
+        async deleteNote(noteId) {
+            if (this.noteDeletingId) return;
+            this.noteDeletingId = noteId;
+            await $wire.deleteCustomerNote(noteId);
+            this.noteDeletingId = null;
+        },
+
         get inProgressCall() {
             return this.calls.find(c => c.status === 'in_progress') ?? null;
         },
@@ -304,6 +377,8 @@
             $wire.loadPhotos(id);
             $wire.loadBrands(id);
             $wire.loadCategories(id);
+            const call = this.calls.find(c => c.id === id);
+            if (call?.customer_id) { $wire.loadCustomerNotes(call.customer_id); }
             this.photoStep = 0;
             this.photoCategory = null;
             this.photoType = null;
@@ -316,7 +391,6 @@
             this.partialReason = '';
             this.previewPhoto = null;
 
-            const call = this.calls.find(c => c.id === id);
             this.checkedIn = call ? call.status !== 'scheduled' : false;
             this.showDetail = true;
             this.initMiniMap();
@@ -790,6 +864,143 @@
         </div>
     </div>
 
+    {{-- ADD UNPLANNED SALESCALL MODAL --}}
+    <div
+        x-cloak
+        x-show="showAddCall"
+        x-transition.opacity
+        @click.self="closeAddCall()"
+        class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-end lg:items-center justify-center">
+        <div
+            x-transition:enter="transition ease-out duration-200"
+            x-transition:enter-start="translate-y-4 opacity-0"
+            x-transition:enter-end="translate-y-0 opacity-100"
+            class="bg-white rounded-t-3xl lg:rounded-3xl w-full lg:max-w-md shadow-2xl overflow-hidden flex flex-col"
+            style="max-height: 80vh;">
+
+            {{-- Modal Header --}}
+            <div class="flex items-center justify-between px-6 py-5 border-b border-gray-100 shrink-0">
+                <div class="flex items-center gap-3">
+                    <span class="material-symbols-outlined mat-fill text-[#890f00] text-2xl">add_circle</span>
+                    <h2 class="text-lg font-extrabold text-[#191c1e]">Add Unplanned Salescall</h2>
+                </div>
+                <button @click="closeAddCall()"
+                    class="w-8 h-8 rounded-full bg-[#edeef0] flex items-center justify-center hover:bg-[#e7e8ea] transition-colors">
+                    <span class="material-symbols-outlined text-[#434654] text-lg">close</span>
+                </button>
+            </div>
+
+            {{-- Scheduled At --}}
+            <div class="px-6 py-4 border-b border-gray-100 shrink-0">
+                <label class="text-[11px] font-extrabold text-[#737685] uppercase tracking-wider block mb-1.5">Scheduled At</label>
+                <input
+                    x-model="addCallScheduledAt"
+                    type="datetime-local"
+                    class="w-full bg-[#edeef0] border-none rounded-xl px-4 py-2.5 text-sm text-[#191c1e] focus:ring-2 focus:ring-[#890f00]"
+                />
+            </div>
+
+            {{-- Search --}}
+            <div class="px-6 py-4 border-b border-gray-100 shrink-0">
+                <div class="flex items-center bg-[#edeef0] rounded-full px-4 py-2 gap-2">
+                    <span class="material-symbols-outlined text-[#737685] text-lg">search</span>
+                    <input
+                        x-model="addCallSearch"
+                        class="bg-transparent border-none focus:ring-0 text-sm w-full text-[#191c1e]"
+                        placeholder="Search customer name..."
+                        type="text"
+                    />
+                </div>
+            </div>
+
+            {{-- Customer List --}}
+            <div class="flex-1 overflow-y-auto px-3 py-2">
+                <template x-for="customer in filteredCustomers" :key="customer.id">
+                    <button
+                        @click="selectAddCallCustomer(customer.id)"
+                        :class="addCallCustomerId === customer.id ? 'bg-red-50 border-2 border-[#890f00]' : 'border-2 border-transparent hover:bg-gray-50'"
+                        class="w-full text-left px-3 py-3 rounded-2xl transition-colors flex items-center justify-between gap-2">
+                        <span class="min-w-0">
+                            <span class="text-sm font-semibold text-[#191c1e] block truncate" x-text="customer.name"></span>
+                            <span class="text-xs text-[#737685] block truncate" x-text="customer.address || '—'"></span>
+                        </span>
+                        <span x-show="addCallCustomerId === customer.id" class="material-symbols-outlined text-[#890f00] shrink-0">check_circle</span>
+                    </button>
+                </template>
+                <p x-show="filteredCustomers.length === 0" class="text-center text-sm text-[#737685] py-8">No customers found.</p>
+            </div>
+
+            {{-- Footer --}}
+            <div class="px-6 py-4 border-t border-gray-100 shrink-0">
+                <button
+                    @click="addCall()"
+                    :disabled="addingCall || !addCallCustomerId || !addCallScheduledAt"
+                    class="w-full bg-[#890f00] text-white font-bold text-sm rounded-full py-3 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#6f0c00] transition-colors">
+                    <span x-text="addingCall ? 'Adding...' : 'Add Salescall'"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    {{-- QUICK NOTE MODAL (add / edit) --}}
+    <div
+        x-cloak
+        x-show="showNoteModal"
+        x-transition.opacity
+        @click.self="closeNoteModal()"
+        class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-end lg:items-center justify-center">
+        <div
+            x-transition:enter="transition ease-out duration-200"
+            x-transition:enter-start="translate-y-4 opacity-0"
+            x-transition:enter-end="translate-y-0 opacity-100"
+            class="bg-white rounded-t-3xl lg:rounded-3xl w-full lg:max-w-md shadow-2xl overflow-hidden flex flex-col">
+
+            {{-- Modal Header --}}
+            <div class="flex items-center justify-between px-6 py-5 border-b border-gray-100 shrink-0">
+                <div class="flex items-center gap-3">
+                    <span class="material-symbols-outlined mat-fill text-[#890f00] text-2xl">note_alt</span>
+                    <h2 class="text-lg font-extrabold text-[#191c1e]" x-text="noteModalMode === 'edit' ? 'Edit Note' : 'Add Quick Note'"></h2>
+                </div>
+                <button @click="closeNoteModal()"
+                    class="w-8 h-8 rounded-full bg-[#edeef0] flex items-center justify-center hover:bg-[#e7e8ea] transition-colors">
+                    <span class="material-symbols-outlined text-[#434654] text-lg">close</span>
+                </button>
+            </div>
+
+            {{-- Form --}}
+            <div class="px-6 py-5 space-y-4">
+                <div>
+                    <label class="text-[11px] font-extrabold text-[#737685] uppercase tracking-wider block mb-1.5">Title <span class="normal-case font-medium text-gray-400">(optional)</span></label>
+                    <input
+                        x-model="noteForm.title"
+                        type="text"
+                        placeholder="e.g. Owner preferences"
+                        class="w-full bg-[#edeef0] border-none rounded-xl px-4 py-2.5 text-sm text-[#191c1e] focus:ring-2 focus:ring-[#890f00]"
+                    />
+                </div>
+                <div>
+                    <label class="text-[11px] font-extrabold text-[#737685] uppercase tracking-wider block mb-1.5">Note</label>
+                    <textarea
+                        x-model="noteForm.body"
+                        rows="4"
+                        placeholder="Write a short note about this customer..."
+                        class="w-full bg-[#edeef0] border-none rounded-xl px-4 py-2.5 text-sm text-[#191c1e] focus:ring-2 focus:ring-[#890f00] resize-none"
+                    ></textarea>
+                </div>
+            </div>
+
+            {{-- Footer --}}
+            <div class="px-6 pb-6 shrink-0">
+                <button
+                    @click="saveNote()"
+                    :disabled="noteSaving || !noteForm.body.trim() || (noteModalMode === 'add' && atNoteLimit)"
+                    class="w-full bg-[#890f00] text-white font-bold text-sm rounded-full py-3 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#6f0c00] transition-colors">
+                    <span x-text="noteSaving ? 'Saving...' : (noteModalMode === 'edit' ? 'Save Changes' : 'Add Note')"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+
     {{-- LEGENDS MODAL --}}
     <div
         x-cloak
@@ -995,6 +1206,14 @@
                     class="w-9 h-9 rounded-full bg-[#edeef0] flex items-center justify-center hover:bg-[#e7e8ea] transition-colors shrink-0">
                     <span class="material-symbols-outlined text-[#155dfc] text-xl">info</span>
                 </button>
+                @if($canAddSalescall)
+                <button
+                    @click="openAddCall()"
+                    title="Add unplanned salescall"
+                    class="w-9 h-9 rounded-full bg-[#890f00] flex items-center justify-center hover:bg-[#6f0c00] transition-colors shrink-0">
+                    <span class="material-symbols-outlined text-white text-xl">add</span>
+                </button>
+                @endif
             </div>
         </div>
 
@@ -1015,6 +1234,14 @@
                     class="w-9 h-9 rounded-full bg-[#edeef0] flex items-center justify-center hover:bg-[#e7e8ea] transition-colors shrink-0">
                     <span class="material-symbols-outlined text-[#434654] text-xl">info</span>
                 </button>
+                @if($canAddSalescall)
+                <button
+                    @click="openAddCall()"
+                    title="Add unplanned salescall"
+                    class="w-9 h-9 rounded-full bg-[#890f00] flex items-center justify-center hover:bg-[#6f0c00] transition-colors shrink-0">
+                    <span class="material-symbols-outlined text-white text-xl">add</span>
+                </button>
+                @endif
                 <button
                     @click="startSync()"
                     :class="syncButtonClass"
@@ -1218,7 +1445,10 @@
                                 x-text="call.seq">
                             </div>
                             <div class="min-w-0">
-                                <h4 class="font-semibold text-sm text-[#191c1e] leading-tight truncate" x-text="call.name"></h4>
+                                <h4 class="font-semibold text-sm text-[#191c1e] leading-tight truncate flex items-center gap-1.5">
+                                    <span x-text="call.name"></span>
+                                    <span x-show="call.type === 'Unplanned'" class="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-purple-100 text-purple-700">Unplanned</span>
+                                </h4>
                                 <p x-show="call.unique_id" class="text-[10px] text-[#890f00] font-mono truncate" x-text="call.unique_id"></p>
                                 <p class="text-[11px] text-[#737685] mt-0.5 truncate"
                                    x-text="filter === 'today'
@@ -1274,7 +1504,10 @@
                         <span class="text-[10px] font-black text-[#890f00] tracking-widest uppercase">
                             Sequence #<span x-text="selectedCall?.seq"></span>
                         </span>
-                        <h2 class="text-xl lg:text-2xl font-extrabold text-[#191c1e] leading-tight truncate" x-text="selectedCall?.name"></h2>
+                        <h2 class="text-xl lg:text-2xl font-extrabold text-[#191c1e] leading-tight truncate flex items-center gap-2">
+                            <span x-text="selectedCall?.name"></span>
+                            <span x-show="selectedCall?.type === 'Unplanned'" class="shrink-0 px-2 py-0.5 rounded text-[10px] font-black uppercase bg-purple-100 text-purple-700">Unplanned</span>
+                        </h2>
                         <p x-show="selectedCall?.unique_id" class="text-xs text-[#890f00] font-mono truncate" x-text="selectedCall?.unique_id"></p>
                         <p class="text-sm text-[#737685] flex items-center gap-1">
                             <span class="material-symbols-outlined text-base shrink-0" title="Store address">location_on</span>
@@ -1403,7 +1636,6 @@
                                     {{-- ['assignment','Fill CCR','Customer Call Report', null], --}}
                                     {{-- ['inventory','Fill TSF','Merchandising Report', null], --}}
                                     ['photo_camera','Upload Photo','Store display audit', 'photos'],
-                                    ['note_alt','Add Quick Note','Capture instant feedback', null],
                                 ] as [$icon, $label, $sub, $targetTab])
                                 <button
                                     title="{{ $label }} — {{ $sub }}"
@@ -1418,6 +1650,52 @@
                                     </div>
                                 </button>
                                 @endforeach
+                                <button
+                                    :title="atNoteLimit ? `Limit reached — ${noteLimit} notes max for this customer` : 'Add Quick Note — Capture instant feedback'"
+                                    @click="openAddNote()"
+                                    :disabled="atNoteLimit"
+                                    :class="atNoteLimit ? 'opacity-50 cursor-not-allowed' : 'hover:border-[#890f00] hover:bg-red-50'"
+                                    class="h-18 lg:h-20 bg-white border border-gray-200 rounded-2xl flex items-center px-4 lg:px-5 gap-3 lg:gap-4 group transition-all">
+                                    <div class="w-9 h-9 lg:w-10 lg:h-10 rounded-full bg-[#edeef0] group-hover:bg-[#ffdad3] flex items-center justify-center shrink-0">
+                                        <span class="material-symbols-outlined text-lg text-[#737685] group-hover:text-[#890f00]">note_alt</span>
+                                    </div>
+                                    <div class="text-left min-w-0">
+                                        <p class="font-bold text-sm text-[#191c1e]">Add Quick Note</p>
+                                        <p class="text-xs text-[#737685] truncate" x-text="atNoteLimit ? `Limit reached (${noteLimit})` : 'Capture instant feedback'"></p>
+                                    </div>
+                                </button>
+                            </div>
+                        </div>
+
+                        {{-- Quick Notes — customer-level, private to author, shown regardless of which visit is open --}}
+                        <div>
+                            <div class="flex items-center justify-between mb-3">
+                                <h3 class="text-base font-bold text-[#191c1e]">Quick Notes</h3>
+                                <span class="text-xs" :class="atNoteLimit ? 'text-red-500 font-bold' : 'text-[#737685]'" x-text="customerNotes.length + ' / ' + noteLimit + ' notes'"></span>
+                            </div>
+                            <div class="space-y-2">
+                                <template x-for="note in customerNotes" :key="note.id">
+                                    <div class="bg-[#fef9e7] border border-[#f5e6a8] rounded-2xl p-4">
+                                        <div class="flex items-start justify-between gap-2">
+                                            <div class="min-w-0 flex-1">
+                                                <h4 x-show="note.title" class="font-bold text-sm text-[#191c1e] mb-0.5" x-text="note.title"></h4>
+                                                <p class="text-sm text-[#434654] whitespace-pre-wrap break-words" x-text="note.body"></p>
+                                                <p class="text-[10px] text-[#8a7f3f] font-medium mt-1.5" x-text="note.created_at"></p>
+                                            </div>
+                                            <div class="flex items-center gap-1 shrink-0">
+                                                <button @click="openEditNote(note)" title="Edit note"
+                                                    class="w-7 h-7 rounded-full hover:bg-black/5 flex items-center justify-center transition-colors">
+                                                    <span class="material-symbols-outlined text-[#8a7f3f] text-base">edit</span>
+                                                </button>
+                                                <button @click="deleteNote(note.id)" :disabled="noteDeletingId === note.id" title="Delete note"
+                                                    class="w-7 h-7 rounded-full hover:bg-black/5 flex items-center justify-center transition-colors disabled:opacity-40">
+                                                    <span class="material-symbols-outlined text-[#8a7f3f] text-base">delete</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+                                <p x-show="customerNotes.length === 0" class="text-center text-sm text-[#737685] py-6 bg-gray-50 rounded-2xl">No notes yet for this customer.</p>
                             </div>
                         </div>
 
@@ -1893,8 +2171,7 @@
                 <div class="p-5 lg:p-6 border-t border-gray-100 bg-white shrink-0 space-y-3">
 
                     {{-- IN PROGRESS: finish actions --}}
-                    <template x-if="selectedCall?.status === 'in_progress'">
-                        <div class="space-y-2">
+                    <div x-show="selectedCall?.status === 'in_progress'" class="space-y-2">
                             <div x-show="!showCancelReason && !showPartialReason" class="space-y-2">
                                 <button
                                     @click="finishVisit('completed')"
@@ -1903,15 +2180,17 @@
                                     class="w-full h-12 bg-[#890f00] text-white rounded-2xl font-black text-sm shadow-lg transition-all">
                                     Submit Salescall
                                 </button>
-                                <div class="text-[11px] leading-relaxed space-y-1 px-1">
-                                    <p class="font-bold text-[10px] uppercase tracking-wider text-[#737685]">Requires:</p>
-                                    <p class="flex items-center gap-1.5" :class="hasSavedBrands ? 'text-green-600' : 'text-red-500'">
-                                        <span class="material-symbols-outlined text-sm mat-fill" x-text="hasSavedBrands ? 'check_circle' : 'radio_button_unchecked'"></span>
-                                        <span>Brands<span x-show="!hasSavedBrands"> (missing)</span></span>
-                                    </p>
-                                    <p class="flex items-center gap-1.5" :class="photosComplete ? 'text-green-600' : 'text-red-500'">
-                                        <span class="material-symbols-outlined text-sm mat-fill" x-text="photosComplete ? 'check_circle' : 'radio_button_unchecked'"></span>
-                                        <span>Photo in every subcategory<span x-show="!photosComplete"> (missing)</span></span>
+                                <div class="text-[11px] leading-relaxed px-1">
+                                    <p class="font-bold text-[10px] uppercase tracking-wider text-[#737685] mb-1">Requires:</p>
+                                    <p class="flex flex-nowrap items-center gap-x-3 overflow-x-auto whitespace-nowrap scrollbar-hide">
+                                        <span class="flex items-center gap-1.5 shrink-0" :class="hasSavedBrands ? 'text-green-600' : 'text-red-500'">
+                                            <span class="material-symbols-outlined text-sm mat-fill" x-text="hasSavedBrands ? 'check_circle' : 'radio_button_unchecked'"></span>
+                                            <span>Brands<span x-show="!hasSavedBrands"> (missing)</span></span>
+                                        </span>
+                                        <span class="flex items-center gap-1.5 shrink-0" :class="photosComplete ? 'text-green-600' : 'text-red-500'">
+                                            <span class="material-symbols-outlined text-sm mat-fill" x-text="photosComplete ? 'check_circle' : 'radio_button_unchecked'"></span>
+                                            <span>Photo in every subcategory<span x-show="!photosComplete"> (missing)</span></span>
+                                        </span>
                                     </p>
                                 </div>
                                 <div class="grid grid-cols-2 gap-2">
@@ -1963,8 +2242,7 @@
                                 <textarea x-model="cancelReason" rows="2" placeholder="e.g. Store was closed, owner not around..."
                                     class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm text-[#191c1e] focus:outline-none focus:ring-2 focus:ring-[#890f00]/30 focus:border-[#890f00] resize-none"></textarea>
                             </div>
-                        </div>
-                    </template>
+                    </div>
 
                     {{-- TERMINAL STATES --}}
                     <div
