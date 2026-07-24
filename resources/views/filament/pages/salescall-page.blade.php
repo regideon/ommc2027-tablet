@@ -280,7 +280,7 @@
         async addCall() {
             if (this.addingCall || !this.addCallCustomerId || !this.addCallScheduledAt) return;
             this.addingCall = true;
-            const newCall = await $wire.createUnplannedSalescall(this.addCallCustomerId, this.addCallScheduledAt);
+            const newCall = await $wire.createUnplannedSalescall(this.addCallCustomerId, this.addCallScheduledAt, this.isOnline);
             this.addingCall = false;
             if (!newCall) return;
             this.calls.push(newCall);
@@ -447,7 +447,7 @@
             this.finishVisit('partially_completed', this.partialReason.trim());
         },
         _persistFinishLocation(lat, lng) {
-            $wire.finishLocation(this.selected, lat, lng);
+            $wire.finishLocation(this.selected, lat, lng, this.isOnline);
         },
 
         statusLabel(s) {

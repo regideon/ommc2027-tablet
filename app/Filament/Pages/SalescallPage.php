@@ -321,7 +321,7 @@ class SalescallPage extends Page
      * @return array<string, mixed>|null shape matches getViewData()'s $calls map, for the
      *                                   caller to push straight into Alpine's `calls` array
      */
-    public function createUnplannedSalescall(int $customerId, string $scheduledAt): ?array
+    public function createUnplannedSalescall(int $customerId, string $scheduledAt, bool $isOnline = false): ?array
     {
         $scheduled = Carbon::parse($scheduledAt);
 
@@ -349,6 +349,7 @@ class SalescallPage extends Page
             'itinerary_id' => $itinerary->id,
             'customer_id' => $customer->id,
             'salescall_type_id' => SalescallType::idFor(SalescallType::UNPLANNED),
+            'salescall_status_id' => SalescallStatus::idFor(SalescallStatus::PENDING),
             'visit_date' => $scheduled,
             'route_start_at' => $scheduled,
             'created_by' => auth()->id(),
@@ -357,6 +358,10 @@ class SalescallPage extends Page
         ]);
 
         Notification::make()->title('Unplanned salescall added.')->success()->send();
+
+        if ($isOnline) {
+            $this->runSync();
+        }
 
         return [
             'id' => $salescall->id,
@@ -601,12 +606,16 @@ class SalescallPage extends Page
         }
     }
 
-    public function finishLocation(int $salescallId, float $lat, float $lng): void
+    public function finishLocation(int $salescallId, float $lat, float $lng, bool $isOnline = false): void
     {
         Salescall::findOrFail($salescallId)->update([
             'latitude_actual_out' => $lat ?: null,
             'longitude_actual_out' => $lng ?: null,
         ]);
+
+        if ($isOnline) {
+            $this->runSync();
+        }
     }
 
     private function canSubmitSalescall(int $salescallId): bool
