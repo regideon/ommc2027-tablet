@@ -11,7 +11,7 @@ class CustomerProfile extends Model
 
     protected $casts = [
         'brand_products' => 'array',
-        'birthday'       => 'date',
+        'birthday' => 'date',
     ];
 
     public function salescall(): BelongsTo

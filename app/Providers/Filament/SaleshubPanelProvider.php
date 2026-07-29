@@ -2,6 +2,7 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\Pages\Auth\Login;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -9,14 +10,17 @@ use Filament\Http\Middleware\DispatchServingFilamentEvent;
 use Filament\Pages\Dashboard;
 use Filament\Panel;
 use Filament\PanelProvider;
+use Filament\Support\Assets\Css;
 use Filament\Support\Colors\Color;
 use Filament\Widgets\AccountWidget;
 use Filament\Widgets\FilamentInfoWidget;
+use Hammadzafar05\MobileBottomNav\MobileBottomNav;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\HtmlString;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 
 class SaleshubPanelProvider extends PanelProvider
@@ -32,21 +36,21 @@ class SaleshubPanelProvider extends PanelProvider
             ->databaseNotifications()
             ->profile(isSimple: false)
             ->assets([
-                \Filament\Support\Assets\Css::make('custom-stylesheet', asset('css/app/custom-stylesheet-saleshub.css')),
-                \Filament\Support\Assets\Css::make('custom-stylesheet-fontawesome-all.min', asset('css/app/custom-stylesheet-fontawesome-all.min.css')),
+                Css::make('custom-stylesheet', asset('css/app/custom-stylesheet-saleshub.css')),
+                Css::make('custom-stylesheet-fontawesome-all.min', asset('css/app/custom-stylesheet-fontawesome-all.min.css')),
             ])
 
             ->renderHook(
                 'panels::head.end',
-                fn() => new \Illuminate\Support\HtmlString(
-                    '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />' . "\n" .
-                        '<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>' . "\n" .
+                fn () => new HtmlString(
+                    '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />'."\n".
+                        '<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'."\n".
                         '<style>
                         .fi-topbar { padding-top: max(env(safe-area-inset-top, 28px), 28px) !important; z-index: 50 !important; }
                         body.dashboard-map-open .fi-main { position: relative; z-index: 0; }
                         </style>'
 
-                        . "\n" .
+                        ."\n".
                         '<script>
 document.addEventListener("DOMContentLoaded", function () {
     document.addEventListener("focusin", function (e) {
@@ -75,17 +79,12 @@ document.addEventListener("DOMContentLoaded", function () {
                 ),
             )
 
+            ->login(Login::class)
 
-
-
-            ->login(\App\Filament\Pages\Auth\Login::class)
-
-            ->brandLogo(asset("images/motolite-logo.png"))
+            ->brandLogo(asset('images/motolite-logo.png'))
             ->viteTheme('resources/css/filament/saleshub/theme.css')
             ->topNavigation()
             ->darkMode(false)
-
-
 
             ->colors([
                 'primary' => Color::Red,
@@ -112,7 +111,7 @@ document.addEventListener("DOMContentLoaded", function () {
                 DispatchServingFilamentEvent::class,
             ])
             ->plugins([
-                \Hammadzafar05\MobileBottomNav\MobileBottomNav::make(),
+                MobileBottomNav::make(),
             ])
             ->authMiddleware([
                 Authenticate::class,

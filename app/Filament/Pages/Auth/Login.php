@@ -13,11 +13,11 @@ class Login extends \Filament\Auth\Pages\Login
 {
     public function authenticate(): ?LoginResponse
     {
-        $data     = $this->form->getState();
-        $email    = $data['email'];
+        $data = $this->form->getState();
+        $email = $data['email'];
         $password = $data['password'];
         $remember = $data['remember'] ?? false;
-        $sync     = app(SyncService::class);
+        $sync = app(SyncService::class);
 
         $user = User::where('email', $email)->first();
 
@@ -32,6 +32,9 @@ class Login extends \Filament\Auth\Pages\Login
             if ($sync->isReachable()) {
                 $sync->refreshToken($email, $password);
                 $sync->pull();
+
+                $user = User::where('email', $email)->firstOrFail();
+                Filament::auth()->login($user, $remember);
             }
 
             return app(LoginResponse::class);
@@ -56,6 +59,9 @@ class Login extends \Filament\Auth\Pages\Login
         session()->regenerate();
 
         $sync->pull();
+
+        $user = User::where('email', $email)->firstOrFail();
+        Filament::auth()->login($user, $remember);
 
         return app(LoginResponse::class);
     }

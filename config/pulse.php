@@ -167,7 +167,7 @@ return [
         ],
 
         Recorders\Servers::class => [
-            'server_name' => env('PULSE_SERVER_NAME', gethostname()),
+            'server_name' => env('PULSE_SERVER_NAME', function_exists('gethostname') ? gethostname() : php_uname('n')),
             'directories' => explode(':', env('PULSE_SERVER_DIRECTORIES', '/')),
         ],
 

@@ -5,11 +5,10 @@ namespace App\Providers;
 use App\Console\Commands\SyncLoginCommand;
 use App\Console\Commands\SyncPullCommand;
 use App\Console\Commands\SyncPushCommand;
-use Illuminate\Support\Facades\Artisan;
-use Illuminate\Support\ServiceProvider;
-use Native\Mobile\Events\Geolocation\LocationReceived;
 use App\Listeners\HandleLocationReceived;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\ServiceProvider;
+use Native\Mobile\Events\Geolocation\LocationReceived;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -23,8 +22,5 @@ class AppServiceProvider extends ServiceProvider
             SyncLoginCommand::class,
         ]);
 
-        if (function_exists('nativephp_call')) {
-            Artisan::call('migrate', ['--force' => true]);
-        }
     }
 }

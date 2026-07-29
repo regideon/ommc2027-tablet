@@ -1,6 +1,9 @@
 <?php
 
+use App\Providers\AppServiceProvider;
+use App\Providers\Filament\SaleshubPanelProvider;
+
 return [
-    App\Providers\AppServiceProvider::class,
-    App\Providers\Filament\SaleshubPanelProvider::class,
+    AppServiceProvider::class,
+    SaleshubPanelProvider::class,
 ];

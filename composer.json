@@ -6,7 +6,7 @@
     "keywords": ["laravel", "framework"],
     "license": "MIT",
     "require": {
-        "php": "^8.3",
+        "php": "^8.5.4",
         "filament/filament": "^5.6",
         "hammadzafar05/mobile-bottom-nav": "^1.2",
         "laravel/ai": "^0.6.3",
@@ -17,7 +17,7 @@
         "livewire/livewire": "^4.2",
         "nativephp/mobile": "^3.2",
         "relaticle/flowforge": "^4.0",
-        "spatie/laravel-activitylog": "^5.0",
+        "spatie/laravel-activitylog": "^4.10",
         "spatie/laravel-permission": "^7.3",
         "stechstudio/filament-impersonate": "^5.4"
     },
@@ -85,10 +85,15 @@
     },
     "extra": {
         "laravel": {
-            "dont-discover": []
+            "dont-discover": [
+                "laravel/pulse"
+            ]
         }
     },
     "config": {
+        "platform": {
+            "php": "8.5.4"
+        },
         "optimize-autoloader": true,
         "preferred-install": "dist",
         "sort-packages": true,

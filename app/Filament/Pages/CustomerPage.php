@@ -15,8 +15,11 @@ class CustomerPage extends Page
     protected string $view = 'filament.pages.customer-page';
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedUserGroup;
+
     protected static ?string $navigationLabel = 'Customers';
+
     protected static ?string $title = '';
+
     protected static ?int $navigationSort = 450;
 
     // public function getViewData(): array
