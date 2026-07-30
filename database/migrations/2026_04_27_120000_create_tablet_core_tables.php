@@ -105,6 +105,7 @@ return new class extends Migration
             $table->id();
             $table->unsignedBigInteger('itinerary_id');
             $table->unsignedBigInteger('customer_id');
+            $table->dateTime('visit_date')->nullable();
             $table->unsignedSmallInteger('salescall_type_id')->default(1);
             $table->decimal('latitude', 10, 6)->nullable();
             $table->decimal('longitude', 10, 6)->nullable();

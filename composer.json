@@ -85,9 +85,7 @@
     },
     "extra": {
         "laravel": {
-            "dont-discover": [
-                "laravel/pulse"
-            ]
+            "dont-discover": []
         }
     },
     "config": {

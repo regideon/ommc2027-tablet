@@ -6,6 +6,7 @@ use App\Models\User;
 use App\Services\SyncService;
 use Filament\Auth\Http\Responses\Contracts\LoginResponse;
 use Filament\Facades\Filament;
+use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
@@ -31,7 +32,11 @@ class Login extends \Filament\Auth\Pages\Login
 
             if ($sync->isReachable()) {
                 $sync->refreshToken($email, $password);
-                $sync->pull();
+                $pullResult = $sync->pull();
+
+                if (! $pullResult->success) {
+                    Notification::make()->title($pullResult->message)->danger()->send();
+                }
 
                 $user = User::where('email', $email)->firstOrFail();
                 Filament::auth()->login($user, $remember);
@@ -58,7 +63,11 @@ class Login extends \Filament\Auth\Pages\Login
         Filament::auth()->login($user, $remember);
         session()->regenerate();
 
-        $sync->pull();
+        $pullResult = $sync->pull();
+
+        if (! $pullResult->success) {
+            Notification::make()->title($pullResult->message)->danger()->send();
+        }
 
         $user = User::where('email', $email)->firstOrFail();
         Filament::auth()->login($user, $remember);
