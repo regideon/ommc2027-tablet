@@ -821,7 +821,7 @@ class SalescallPage extends Page
 
         return [
             'callsJson' => $calls->toJson(),
-            'firstId' => $calls->first()['id'] ?? null,
+            'firstId' => $calls->first(fn ($c) => $c['status'] === 'in_progress')['id'] ?? $calls->first()['id'] ?? null,
             'materialGroupsJson' => MaterialGroup::orderBy('name')->get(['id', 'name'])->toJson(),
             'brandsJson' => Brand::where('enabled', true)->orderBy('name')->get(['id', 'material_group_id', 'name'])->toJson(),
             'preselectedId' => $this->preselectedId,
