@@ -80,6 +80,18 @@
         </div>
         <div class="divide-y divide-gray-100">
 
+            <a href="/pulse"
+               class="flex items-center gap-4 px-5 py-4 hover:bg-gray-50 transition-colors active:bg-gray-100">
+                <div class="w-10 h-10 bg-green-50 rounded-xl flex items-center justify-center shrink-0">
+                    <span class="material-symbols-outlined text-green-600">bug_report</span>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <p class="font-semibold text-sm text-[#191c1e]">Error Log</p>
+                    <p class="text-xs text-[#737685]">View app errors for troubleshooting</p>
+                </div>
+                <span class="material-symbols-outlined text-gray-300 text-xl">chevron_right</span>
+            </a>
+
             <div class="flex items-center gap-4 px-5 py-4 opacity-50">
                 <div class="w-10 h-10 bg-green-50 rounded-xl flex items-center justify-center shrink-0">
                     <span class="material-symbols-outlined text-green-600">storage</span>

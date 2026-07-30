@@ -152,6 +152,107 @@ class SyncService
 
             $data = $response->json();
 
+            // Reference/lookup tables must be populated before anything below that
+            // holds a foreign key into them (salescall_brands -> material_groups/brands,
+            // salescall_categories/customer_categories -> categories/sub_categories,
+            // salescall_brands/salescall_categories -> customers). On a fresh install
+            // with these tables still empty, a first pull whose itineraries already
+            // carry salescall_brands/salescall_categories data (e.g. an RSM-added call)
+            // would otherwise throw a foreign key integrity violation and abort the
+            // entire pull before customers/brands/categories ever get written.
+            foreach ($data['customers'] ?? [] as $customer) {
+                DB::table('customers')->updateOrInsert(
+                    ['id' => $customer['id']],
+                    [
+                        'region_specific_id' => $customer['region_specific_id'] ?? null,
+                        'municipality_id' => $customer['municipality_id'] ?? null,
+                        'name' => $customer['name'],
+                        'unique_id' => $customer['unique_id'] ?? null,
+                        'contact_person' => $customer['contact_person'] ?? null,
+                        'contact_number' => $customer['contact_number'] ?? null,
+                        'address' => $customer['address'] ?? null,
+                        'latitude' => $customer['latitude'] ?? null,
+                        'longitude' => $customer['longitude'] ?? null,
+                        'is_active' => $customer['is_active'] ?? true,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
+            foreach ($data['salescall_statuses'] ?? [] as $status) {
+                DB::table('salescall_statuses')->updateOrInsert(
+                    ['id' => $status['id']],
+                    ['name' => $status['name'], 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['salescall_types'] ?? [] as $type) {
+                DB::table('salescall_types')->updateOrInsert(
+                    ['id' => $type['id']],
+                    ['name' => $type['name'], 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['material_groups'] ?? [] as $group) {
+                DB::table('material_groups')->updateOrInsert(
+                    ['id' => $group['id']],
+                    ['name' => $group['name'], 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['brands'] ?? [] as $brand) {
+                DB::table('brands')->updateOrInsert(
+                    ['id' => $brand['id']],
+                    [
+                        'material_group_id' => $brand['material_group_id'],
+                        'name' => $brand['name'],
+                        'enabled' => $brand['enabled'],
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
+            foreach ($data['categories'] ?? [] as $item) {
+                DB::table('categories')->updateOrInsert(
+                    ['id' => $item['id']],
+                    ['name' => $item['name'], 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['sub_categories'] ?? [] as $item) {
+                DB::table('sub_categories')->updateOrInsert(
+                    ['id' => $item['id']],
+                    ['category_id' => $item['category_id'], 'name' => $item['name'], 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['sub_sub_categories'] ?? [] as $item) {
+                DB::table('sub_sub_categories')->updateOrInsert(
+                    ['id' => $item['id']],
+                    ['sub_category_id' => $item['sub_category_id'], 'name' => $item['name'], 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['salescall_image_categories'] ?? [] as $item) {
+                DB::table('salescall_image_categories')->updateOrInsert(
+                    ['id' => $item['id']],
+                    ['name' => $item['name'], 'slug' => $item['slug'], 'sort' => $item['sort'] ?? 0, 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['salescall_image_types'] ?? [] as $item) {
+                DB::table('salescall_image_types')->updateOrInsert(
+                    ['id' => $item['id']],
+                    [
+                        'salescall_image_category_id' => $item['salescall_image_category_id'],
+                        'name' => $item['name'],
+                        'slug' => $item['slug'],
+                        'sort' => $item['sort'] ?? 0,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
             foreach ($data['itineraries'] ?? [] as $itinerary) {
                 $local = Itinerary::updateOrCreate(
                     ['local_uuid' => $itinerary['local_uuid'] ?? (string) $itinerary['id']],
@@ -207,96 +308,57 @@ class SyncService
                         SalescallBrand::where('salescall_id', $localSalescall->id)->delete();
 
                         foreach ($sc['salescall_brands'] ?? [] as $brandRow) {
-                            SalescallBrand::create([
-                                'salescall_id' => $localSalescall->id,
-                                'customer_id' => $localSalescall->customer_id,
-                                'material_group_id' => $brandRow['material_group_id'],
-                                'brand_id' => $brandRow['brand_id'],
-                                'quantity' => $brandRow['quantity'] ?? null,
-                                'brand_other' => $brandRow['brand_other'] ?? null,
-                                'local_uuid' => (string) \Str::uuid(),
-                                'sync_status' => 'synced',
-                            ]);
+                            // A single row referencing a material_group_id/brand_id that
+                            // doesn't exist locally (e.g. a brand disabled on the portal
+                            // after this data was recorded) must not abort the entire pull
+                            // and lose every other itinerary/customer for this user — skip
+                            // just this row and report it so it's still visible in Pulse.
+                            try {
+                                SalescallBrand::create([
+                                    'salescall_id' => $localSalescall->id,
+                                    'customer_id' => $localSalescall->customer_id,
+                                    'material_group_id' => $brandRow['material_group_id'],
+                                    'brand_id' => $brandRow['brand_id'],
+                                    'quantity' => $brandRow['quantity'] ?? null,
+                                    'brand_other' => $brandRow['brand_other'] ?? null,
+                                    'local_uuid' => (string) \Str::uuid(),
+                                    'sync_status' => 'synced',
+                                ]);
+                            } catch (\Throwable $e) {
+                                report($e);
+                            }
                         }
                     }
 
                     $incomingCategory = $sc['salescall_category'] ?? null;
 
                     if ($incomingCategory && SalescallCategory::where('salescall_id', $localSalescall->id)->where('sync_status', 'pending')->doesntExist()) {
-                        $categoryRecord = SalescallCategory::firstOrNew(['salescall_id' => $localSalescall->id]);
+                        try {
+                            $categoryRecord = SalescallCategory::firstOrNew(['salescall_id' => $localSalescall->id]);
 
-                        if (! $categoryRecord->local_uuid) {
-                            $categoryRecord->local_uuid = (string) \Str::uuid();
+                            if (! $categoryRecord->local_uuid) {
+                                $categoryRecord->local_uuid = (string) \Str::uuid();
+                            }
+
+                            $categoryRecord->fill([
+                                'customer_id' => $localSalescall->customer_id,
+                                'category_id' => $incomingCategory['category_id'],
+                                'sub_category_id' => $incomingCategory['sub_category_id'],
+                                'sync_status' => 'synced',
+                            ]);
+
+                            $categoryRecord->save();
+                        } catch (\Throwable $e) {
+                            report($e);
                         }
-
-                        $categoryRecord->fill([
-                            'customer_id' => $localSalescall->customer_id,
-                            'category_id' => $incomingCategory['category_id'],
-                            'sub_category_id' => $incomingCategory['sub_category_id'],
-                            'sync_status' => 'synced',
-                        ]);
-
-                        $categoryRecord->save();
                     }
                 }
-            }
-
-            foreach ($data['customers'] ?? [] as $customer) {
-                DB::table('customers')->updateOrInsert(
-                    ['id' => $customer['id']],
-                    [
-                        'region_specific_id' => $customer['region_specific_id'] ?? null,
-                        'municipality_id' => $customer['municipality_id'] ?? null,
-                        'name' => $customer['name'],
-                        'unique_id' => $customer['unique_id'] ?? null,
-                        'contact_person' => $customer['contact_person'] ?? null,
-                        'contact_number' => $customer['contact_number'] ?? null,
-                        'address' => $customer['address'] ?? null,
-                        'latitude' => $customer['latitude'] ?? null,
-                        'longitude' => $customer['longitude'] ?? null,
-                        'is_active' => $customer['is_active'] ?? true,
-                        'updated_at' => now(),
-                    ]
-                );
             }
 
             $itineraryCount = count($data['itineraries'] ?? []);
             $salescallCount = array_sum(
                 array_map(fn ($i) => count($i['salescalls'] ?? []), $data['itineraries'] ?? [])
             );
-
-            foreach ($data['salescall_statuses'] ?? [] as $status) {
-                DB::table('salescall_statuses')->updateOrInsert(
-                    ['id' => $status['id']],
-                    ['name' => $status['name'], 'updated_at' => now()]
-                );
-            }
-
-            foreach ($data['salescall_types'] ?? [] as $type) {
-                DB::table('salescall_types')->updateOrInsert(
-                    ['id' => $type['id']],
-                    ['name' => $type['name'], 'updated_at' => now()]
-                );
-            }
-
-            foreach ($data['material_groups'] ?? [] as $group) {
-                DB::table('material_groups')->updateOrInsert(
-                    ['id' => $group['id']],
-                    ['name' => $group['name'], 'updated_at' => now()]
-                );
-            }
-
-            foreach ($data['brands'] ?? [] as $brand) {
-                DB::table('brands')->updateOrInsert(
-                    ['id' => $brand['id']],
-                    [
-                        'material_group_id' => $brand['material_group_id'],
-                        'name' => $brand['name'],
-                        'enabled' => $brand['enabled'],
-                        'updated_at' => now(),
-                    ]
-                );
-            }
 
             $incomingCustomerBrands = collect($data['customer_brands'] ?? [])->groupBy('customer_id');
 
@@ -312,15 +374,19 @@ class SyncService
                 CustomerBrand::where('customer_id', $customerId)->delete();
 
                 foreach ($rows as $row) {
-                    CustomerBrand::create([
-                        'customer_id' => $customerId,
-                        'material_group_id' => $row['material_group_id'],
-                        'brand_id' => $row['brand_id'],
-                        'quantity' => $row['quantity'] ?? null,
-                        'brand_other' => $row['brand_other'] ?? null,
-                        'last_salescall_id' => $row['last_salescall_id'] ?? null,
-                        'last_updated_by' => $row['last_updated_by'] ?? null,
-                    ]);
+                    try {
+                        CustomerBrand::create([
+                            'customer_id' => $customerId,
+                            'material_group_id' => $row['material_group_id'],
+                            'brand_id' => $row['brand_id'],
+                            'quantity' => $row['quantity'] ?? null,
+                            'brand_other' => $row['brand_other'] ?? null,
+                            'last_salescall_id' => $row['last_salescall_id'] ?? null,
+                            'last_updated_by' => $row['last_updated_by'] ?? null,
+                        ]);
+                    } catch (\Throwable $e) {
+                        report($e);
+                    }
                 }
             }
 
@@ -333,15 +399,19 @@ class SyncService
                     continue;
                 }
 
-                CustomerCategory::updateOrCreate(
-                    ['customer_id' => $categoryRow['customer_id']],
-                    [
-                        'category_id' => $categoryRow['category_id'],
-                        'sub_category_id' => $categoryRow['sub_category_id'],
-                        'last_salescall_id' => $categoryRow['last_salescall_id'] ?? null,
-                        'last_updated_by' => $categoryRow['last_updated_by'] ?? null,
-                    ]
-                );
+                try {
+                    CustomerCategory::updateOrCreate(
+                        ['customer_id' => $categoryRow['customer_id']],
+                        [
+                            'category_id' => $categoryRow['category_id'],
+                            'sub_category_id' => $categoryRow['sub_category_id'],
+                            'last_salescall_id' => $categoryRow['last_salescall_id'] ?? null,
+                            'last_updated_by' => $categoryRow['last_updated_by'] ?? null,
+                        ]
+                    );
+                } catch (\Throwable $e) {
+                    report($e);
+                }
             }
 
             foreach ($data['customer_notes'] ?? [] as $noteRow) {
@@ -379,47 +449,6 @@ class SyncService
             //         ['updated_at' => now()]
             //     );
             // }
-
-            foreach ($data['categories'] ?? [] as $item) {
-                DB::table('categories')->updateOrInsert(
-                    ['id' => $item['id']],
-                    ['name' => $item['name'], 'updated_at' => now()]
-                );
-            }
-
-            foreach ($data['sub_categories'] ?? [] as $item) {
-                DB::table('sub_categories')->updateOrInsert(
-                    ['id' => $item['id']],
-                    ['category_id' => $item['category_id'], 'name' => $item['name'], 'updated_at' => now()]
-                );
-            }
-
-            foreach ($data['sub_sub_categories'] ?? [] as $item) {
-                DB::table('sub_sub_categories')->updateOrInsert(
-                    ['id' => $item['id']],
-                    ['sub_category_id' => $item['sub_category_id'], 'name' => $item['name'], 'updated_at' => now()]
-                );
-            }
-
-            foreach ($data['salescall_image_categories'] ?? [] as $item) {
-                DB::table('salescall_image_categories')->updateOrInsert(
-                    ['id' => $item['id']],
-                    ['name' => $item['name'], 'slug' => $item['slug'], 'sort' => $item['sort'] ?? 0, 'updated_at' => now()]
-                );
-            }
-
-            foreach ($data['salescall_image_types'] ?? [] as $item) {
-                DB::table('salescall_image_types')->updateOrInsert(
-                    ['id' => $item['id']],
-                    [
-                        'salescall_image_category_id' => $item['salescall_image_category_id'],
-                        'name' => $item['name'],
-                        'slug' => $item['slug'],
-                        'sort' => $item['sort'] ?? 0,
-                        'updated_at' => now(),
-                    ]
-                );
-            }
 
             $customerCount = count($data['customers'] ?? []);
 
