@@ -33,7 +33,6 @@ class SaleshubPanelProvider extends PanelProvider
             ->path('app')
 
             ->unsavedChangesAlerts()
-            ->databaseNotifications()
             ->profile(isSimple: false)
             ->assets([
                 Css::make('custom-stylesheet', asset('css/app/custom-stylesheet-saleshub.css')),
