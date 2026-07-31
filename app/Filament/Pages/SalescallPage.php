@@ -29,6 +29,9 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Attributes\On;
+use Native\Mobile\Events\Camera\PhotoTaken;
+use Native\Mobile\Events\Gallery\MediaSelected;
+use Native\Mobile\Facades\Camera;
 use Native\Mobile\Facades\Geolocation;
 
 /**
@@ -69,17 +72,20 @@ class SalescallPage extends Page
 
     public bool $photosComplete = false;
 
+    public ?int $pendingPhotoSalescallId = null;
+
+    public ?int $pendingPhotoTypeId = null;
+
     public function mount(): void
     {
         $this->preselectedId = (int) request()->get('call') ?: null;
-
-        if (function_exists('nativephp_call')) {
-            Geolocation::requestPermissions()->get();
-        }
     }
 
-    public function loadPhotos(int $salescallId): void
+    public function loadPhotos(?int $salescallId): void
     {
+        if (! $salescallId) {
+            return;
+        }
         $images = SalescallImage::with('type.category')
             ->where('salescall_id', $salescallId)
             ->orderBy('created_at', 'desc')
@@ -197,6 +203,77 @@ class SalescallPage extends Page
 
         $this->loadCustomerNotes($customerId);
         Notification::make()->title('Note deleted.')->success()->send();
+    }
+
+    public function takePhoto(int $salescallId, int $typeId): void
+    {
+        $this->pendingPhotoSalescallId = $salescallId;
+        $this->pendingPhotoTypeId = $typeId;
+
+        if (function_exists('nativephp_call')) {
+            Camera::getPhoto()->start();
+        }
+    }
+
+    public function pickFromGallery(int $salescallId, int $typeId): void
+    {
+        $this->pendingPhotoSalescallId = $salescallId;
+        $this->pendingPhotoTypeId = $typeId;
+
+        if (function_exists('nativephp_call')) {
+            Camera::pickImages('image')->single()->start();
+        }
+    }
+
+    #[On('native:'.PhotoTaken::class)]
+    public function onPhotoTaken(string $path, string $mimeType = 'image/jpeg', ?string $id = null): void
+    {
+        if (! $this->pendingPhotoSalescallId || ! $this->pendingPhotoTypeId) {
+            return;
+        }
+
+        $this->saveImageFromPath($path, $this->pendingPhotoSalescallId, $this->pendingPhotoTypeId);
+        $this->pendingPhotoSalescallId = null;
+        $this->pendingPhotoTypeId = null;
+    }
+
+    #[On('native:'.MediaSelected::class)]
+    public function onMediaSelected(bool $success, array $files = [], int $count = 0, ?string $error = null, bool $cancelled = false, ?string $id = null): void
+    {
+        if (! $success || $cancelled || empty($files) || ! $this->pendingPhotoSalescallId || ! $this->pendingPhotoTypeId) {
+            $this->pendingPhotoSalescallId = null;
+            $this->pendingPhotoTypeId = null;
+
+            return;
+        }
+
+        $this->saveImageFromPath($files[0], $this->pendingPhotoSalescallId, $this->pendingPhotoTypeId);
+        $this->pendingPhotoSalescallId = null;
+        $this->pendingPhotoTypeId = null;
+    }
+
+    private function saveImageFromPath(string $sourcePath, int $salescallId, int $typeId): void
+    {
+        $ext = strtolower(pathinfo($sourcePath, PATHINFO_EXTENSION)) ?: 'jpg';
+        $filename = 'salescall_images/'.\Str::uuid().'.'.$ext;
+
+        Storage::disk('local')->makeDirectory('salescall_images');
+        $fullPath = Storage::disk('local')->path($filename);
+        copy($sourcePath, $fullPath);
+
+        [$latitude, $longitude] = $this->extractPhotoGps($fullPath);
+
+        SalescallImage::create([
+            'salescall_id' => $salescallId,
+            'salescall_image_type_id' => $typeId,
+            'local_path' => $fullPath,
+            'local_uuid' => (string) \Str::uuid(),
+            'latitude' => $latitude,
+            'longitude' => $longitude,
+            'sync_status' => 'pending',
+        ]);
+
+        $this->loadPhotos($salescallId);
     }
 
     public function saveImage(int $salescallId, int $typeId, string $base64Data): void
@@ -578,7 +655,7 @@ class SalescallPage extends Page
 
         $this->requestGpsCapture('submit-'.$salescallId, 'use-browser-geolocation-submit', $salescallId);
 
-        $this->dispatch('finish-done', salescallId: $salescallId);
+        $this->dispatch('finish-done', salescallId: $salescallId, outcome: $outcome);
     }
 
     /**
@@ -661,7 +738,9 @@ class SalescallPage extends Page
 
         $this->dispatch('auto-sync-done', success: $result->success);
 
-        if (! $result->success) {
+        if ($result->success) {
+            $this->refreshCallsSyncStatus();
+        } else {
             Notification::make()->title($result->message)->danger()->send();
         }
     }
@@ -760,9 +839,20 @@ class SalescallPage extends Page
 
         $this->dispatch('sync-done');
 
-        if (! $result->success) {
+        if ($result->success) {
+            $this->refreshCallsSyncStatus();
+        } else {
             Notification::make()->title($result->message)->danger()->send();
         }
+    }
+
+    private function refreshCallsSyncStatus(): void
+    {
+        $statuses = Salescall::where('created_by', auth()->id())
+            ->pluck('sync_status', 'id')
+            ->toArray();
+
+        $this->dispatch('calls-sync-refreshed', statuses: $statuses);
     }
 
     protected function getViewData(): array

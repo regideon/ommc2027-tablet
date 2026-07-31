@@ -215,14 +215,24 @@ class SyncService
             foreach ($data['categories'] ?? [] as $item) {
                 DB::table('categories')->updateOrInsert(
                     ['id' => $item['id']],
-                    ['name' => $item['name'], 'updated_at' => now()]
+                    [
+                        'name' => $item['name'],
+                        'general_category_id' => $item['general_category_id'] ?? null,
+                        'updated_at' => now(),
+                    ]
                 );
             }
 
             foreach ($data['sub_categories'] ?? [] as $item) {
                 DB::table('sub_categories')->updateOrInsert(
                     ['id' => $item['id']],
-                    ['category_id' => $item['category_id'], 'name' => $item['name'], 'updated_at' => now()]
+                    [
+                        'category_id' => $item['category_id'],
+                        'name' => $item['name'],
+                        'with_form' => $item['with_form'] ?? false,
+                        'is_active' => $item['is_active'] ?? true,
+                        'updated_at' => now(),
+                    ]
                 );
             }
 

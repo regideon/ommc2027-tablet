@@ -79,6 +79,7 @@ document.addEventListener("DOMContentLoaded", function () {
             )
 
             ->login(Login::class)
+            ->passwordReset()
 
             ->brandLogo(asset('images/motolite-logo.png'))
             ->viteTheme('resources/css/filament/saleshub/theme.css')

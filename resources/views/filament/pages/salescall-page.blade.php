@@ -193,7 +193,6 @@
         photoStep: 0,
         photoCategory: null,
         photoType: null,
-        photoInputKey: 0,
         previewPhoto: null,
         photoToDelete: null,
         deletingPhoto: false,
@@ -230,24 +229,6 @@
         selectPhotoCategory(cat) { this.photoCategory = cat; this.photoStep = 2; },
         selectPhotoType(type)    { this.photoType = type; this.photoStep = 3; },
         cancelPhoto()            { this.photoStep = 0; this.photoCategory = null; this.photoType = null; },
-        capturePhoto(e) {
-            const file = e.target.files[0];
-            e.target.value = null;
-            if (!file || !this.photoType) return;
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                $wire.saveImage(this.selected, this.photoType.id, ev.target.result);
-                // Jump straight back to category selection (not the plain list) so
-                // multiple categories can be covered without an extra tap each time.
-                this.photoStep = 1;
-                this.photoCategory = null;
-                this.photoType = null;
-                this.photoInputKey++;
-            };
-            reader.readAsDataURL(file);
-        },
-
-
         calls: {{ $callsJson }},
 
         materialGroups: {{ $materialGroupsJson }},
@@ -369,6 +350,7 @@
 
         get selectedCall() { return this.calls.find(c => c.id === this.selected); },
         selectCall(id) {
+            if (!id) return;
             this.selected = id;
             this.tab = 'overview';
 
@@ -746,6 +728,11 @@
         setTimeout(() => autoSyncStatus = null, 4000);
     "
 
+    @calls-sync-refreshed.window="
+        const statuses = $event.detail.statuses;
+        calls = calls.map(c => ({ ...c, sync_status: statuses[c.id] ?? c.sync_status }));
+    "
+
     x-on:use-browser-geolocation.window="
         const id = $event.detail.salescallId;
         if (!navigator.geolocation) { $wire.checkIn(id, 0, 0, isOnline); return; }
@@ -766,7 +753,18 @@
         )
     "
 
-    @finish-done.window="finishing = false"
+    @finish-done.window="
+        finishing = false;
+        const { salescallId, outcome } = $event.detail;
+        const doneCall = calls.find(c => c.id === salescallId);
+        if (doneCall && outcome) {
+            doneCall.status = outcome;
+            doneCall.sync_status = 'pending';
+        }
+        if (doneCall && salescallId === selected) {
+            checkedIn = false;
+        }
+    "
     @sync-done.window="syncStatus = 'success'; setTimeout(() => syncStatus = null, 2500)"
 
     class="flex flex-col bg-gray-50"
@@ -1899,19 +1897,56 @@
                                     <p class="font-black text-[#191c1e]">Capture Photo</p>
                                 </div>
                             </div>
+                            {{-- Hidden file inputs for browser fallback (ignored on Android WebView) --}}
+                            <input type="file" id="browser-camera-input" accept="image/*" capture="camera" class="hidden"
+                                @change="
+                                    const file = $event.target.files[0];
+                                    if (!file) return;
+                                    const scId = selected;
+                                    const typeId = photoType ? photoType.id : null;
+                                    cancelPhoto();
+                                    if (!scId || !typeId) return;
+                                    const reader = new FileReader();
+                                    reader.onload = e => { $wire.saveImage(scId, typeId, e.target.result); };
+                                    reader.readAsDataURL(file);
+                                    $event.target.value = '';
+                                ">
+                            <input type="file" id="browser-gallery-input" accept="image/*" class="hidden"
+                                @change="
+                                    const file = $event.target.files[0];
+                                    if (!file) return;
+                                    const scId = selected;
+                                    const typeId = photoType ? photoType.id : null;
+                                    cancelPhoto();
+                                    if (!scId || !typeId) return;
+                                    const reader = new FileReader();
+                                    reader.onload = e => { $wire.saveImage(scId, typeId, e.target.result); };
+                                    reader.readAsDataURL(file);
+                                    $event.target.value = '';
+                                ">
                             <div class="grid grid-cols-2 gap-3">
-                                <label class="flex flex-col items-center justify-center gap-3 h-36 bg-[#890f00] text-white rounded-2xl cursor-pointer hover:opacity-95 active:scale-[0.97] transition-all">
+                                <button @click="
+                                        if (document.body.classList.contains('nativephp-android')) {
+                                            $wire.takePhoto(selected, photoType.id); cancelPhoto();
+                                        } else {
+                                            document.getElementById('browser-camera-input').click();
+                                        }
+                                    "
+                                    class="flex flex-col items-center justify-center gap-3 h-36 bg-[#890f00] text-white rounded-2xl cursor-pointer hover:opacity-95 active:scale-[0.97] transition-all">
                                     <span class="material-symbols-outlined text-4xl">photo_camera</span>
                                     <p class="font-black text-sm">Take Photo</p>
-                                    <input :key="photoInputKey" type="file" accept="image/*" capture="environment"
-                                           class="hidden" @change="capturePhoto($event)" />
-                                </label>
-                                <label class="flex flex-col items-center justify-center gap-3 h-36 bg-white border-2 border-gray-200 rounded-2xl cursor-pointer hover:border-[#890f00] hover:bg-red-50 active:scale-[0.97] transition-all">
+                                </button>
+                                <button @click="
+                                        if (document.body.classList.contains('nativephp-android')) {
+                                            $wire.pickFromGallery(selected, photoType.id); cancelPhoto();
+                                        } else {
+                                            document.getElementById('browser-gallery-input').click();
+                                        }
+                                    "
+                                    class="flex flex-col items-center justify-center gap-3 h-36 bg-white border-2 border-gray-200 rounded-2xl cursor-pointer hover:border-[#890f00] hover:bg-red-50 active:scale-[0.97] transition-all">
                                     <span class="material-symbols-outlined text-4xl text-[#890f00]">photo_library</span>
                                     <p class="font-black text-sm text-[#191c1e]">Gallery</p>
-                                    <input :key="photoInputKey" type="file" accept="image/*"
-                                           class="hidden" @change="capturePhoto($event)" />
-                                </label>
+                                </button>
                             </div>
                             <button @click="cancelPhoto()"
                                 class="w-full mt-4 h-11 bg-gray-100 text-[#737685] rounded-2xl font-bold text-sm hover:bg-gray-200 transition-colors">
@@ -2248,20 +2283,32 @@
                     <div
                         x-show="selectedCall?.status === 'completed'"
                         class="flex items-center justify-center gap-2 h-12 bg-green-50 rounded-2xl border border-green-200">
-                        <span class="material-symbols-outlined text-green-600 mat-fill" title="Visit completed and pending upload">check_circle</span>
-                        <span class="font-bold text-sm text-green-700">Visit Completed — Pending Sync</span>
+                        <span class="material-symbols-outlined text-green-600 mat-fill"
+                            :title="selectedCall?.sync_status === 'synced' ? 'Visit completed and synced' : 'Visit completed and pending upload'"
+                            x-text="selectedCall?.sync_status === 'synced' ? 'check_circle' : 'cloud_upload'">check_circle</span>
+                        <span class="font-bold text-sm text-green-700"
+                            x-text="selectedCall?.sync_status === 'synced' ? 'Visit Completed — Synced' : 'Visit Completed — Pending Sync'">
+                        </span>
                     </div>
                     <div
                         x-show="selectedCall?.status === 'partially_completed'"
                         class="flex items-center justify-center gap-2 h-12 bg-orange-50 rounded-2xl border border-orange-200">
-                        <span class="material-symbols-outlined text-orange-600 mat-fill" title="Visit partially completed">incomplete_circle</span>
-                        <span class="font-bold text-sm text-orange-700">Partially Completed — Pending Sync</span>
+                        <span class="material-symbols-outlined text-orange-600 mat-fill"
+                            :title="selectedCall?.sync_status === 'synced' ? 'Visit partially completed and synced' : 'Visit partially completed'"
+                            x-text="selectedCall?.sync_status === 'synced' ? 'incomplete_circle' : 'cloud_upload'">incomplete_circle</span>
+                        <span class="font-bold text-sm text-orange-700"
+                            x-text="selectedCall?.sync_status === 'synced' ? 'Partially Completed — Synced' : 'Partially Completed — Pending Sync'">
+                        </span>
                     </div>
                     <div
                         x-show="selectedCall?.status === 'cancelled'"
                         class="flex items-center justify-center gap-2 h-12 bg-gray-100 rounded-2xl border border-gray-200">
-                        <span class="material-symbols-outlined text-gray-500 mat-fill" title="Visit cancelled">cancel</span>
-                        <span class="font-bold text-sm text-gray-600">Visit Cancelled — Pending Sync</span>
+                        <span class="material-symbols-outlined text-gray-500 mat-fill"
+                            :title="selectedCall?.sync_status === 'synced' ? 'Visit cancelled and synced' : 'Visit cancelled'"
+                            x-text="selectedCall?.sync_status === 'synced' ? 'cancel' : 'cloud_upload'">cancel</span>
+                        <span class="font-bold text-sm text-gray-600"
+                            x-text="selectedCall?.sync_status === 'synced' ? 'Visit Cancelled — Synced' : 'Visit Cancelled — Pending Sync'">
+                        </span>
                     </div>
                 </div>
 

@@ -9,6 +9,7 @@ use Filament\Facades\Filament;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
+use Native\Mobile\Facades\Geolocation;
 
 class Login extends \Filament\Auth\Pages\Login
 {
@@ -42,6 +43,8 @@ class Login extends \Filament\Auth\Pages\Login
                 Filament::auth()->login($user, $remember);
             }
 
+            $this->requestDevicePermissions();
+
             return app(LoginResponse::class);
         }
 
@@ -72,6 +75,15 @@ class Login extends \Filament\Auth\Pages\Login
         $user = User::where('email', $email)->firstOrFail();
         Filament::auth()->login($user, $remember);
 
+        $this->requestDevicePermissions();
+
         return app(LoginResponse::class);
+    }
+
+    protected function requestDevicePermissions(): void
+    {
+        if (function_exists('nativephp_call')) {
+            Geolocation::requestPermissions()->get();
+        }
     }
 }
