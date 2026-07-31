@@ -1,0 +1,33 @@
+.DS_Store
+*.log
+
+# Downloaded PHP runtime binaries
+/binaries
+
+# Machine-specific
+/ios-last-device-id
+
+# Android build outputs
+/android/.gradle
+/android/local.properties
+/android/app/build
+
+# Android app bundle & PHP static libraries (extracted at build time)
+/android/app/src/main/assets
+/android/app/src/main/staticLibs
+/android/app/src/main/include
+
+# iOS build outputs
+/ios/build
+/ios/Pods
+/ios/NativePHP.xcworkspace/xcuserdata
+/ios/NativePHP-simulator-Info.plist
+
+# iOS PHP runtime (extracted at build time)
+/ios/Include
+/ios/Libraries
+
+# iOS app bundle (packaged at build time)
+/ios/NativePHP/app.zip
+/ios/NativePHP/bundle_meta.json
+/ios/NativePHP/bundled.version
