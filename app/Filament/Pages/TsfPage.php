@@ -17,4 +17,6 @@ class TsfPage extends Page
     protected static ?string $title = '';
 
     protected static ?int $navigationSort = 400;
+
+    protected static bool $shouldRegisterNavigation = false; 
 }

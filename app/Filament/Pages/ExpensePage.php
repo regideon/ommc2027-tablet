@@ -17,4 +17,6 @@ class ExpensePage extends Page
     protected static ?string $title = '';
 
     protected static ?int $navigationSort = 200;
+
+    protected static bool $shouldRegisterNavigation = false;
 }

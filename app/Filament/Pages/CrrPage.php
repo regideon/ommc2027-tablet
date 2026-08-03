@@ -17,4 +17,6 @@ class CrrPage extends Page
     protected static ?string $title = '';
 
     protected static ?int $navigationSort = 300;
+
+    protected static bool $shouldRegisterNavigation = false; 
 }
