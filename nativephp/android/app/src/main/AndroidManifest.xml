@@ -11,7 +11,7 @@
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:label="OMMC Henri"
+        android:label="OMMC Henri V2"
         android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true"
         android:theme="@style/Theme.AndroidPHP"
@@ -39,15 +39,6 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- NATIVEPHP-DEEPLINKS-START -->
-            <!-- Deep Links (Custom Scheme) -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="ommc2027tablet" />
-            </intent-filter>
-            <!-- NATIVEPHP-DEEPLINKS-END -->
         </activity>
     </application>
 </manifest>

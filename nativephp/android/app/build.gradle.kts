@@ -14,10 +14,10 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.motolite.ommc2027"
+        applicationId = "com.kaisa.ommc2027tablet"
         minSdk = 33
         targetSdk = 36
-        versionCode = 5
+        versionCode = 23
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
