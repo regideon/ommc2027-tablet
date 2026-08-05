@@ -1,7 +1,7 @@
 <?php
 
 return [
-    'server_url' => env('SYNC_SERVER_URL', ''),
+    'server_url' => env('SYNC_SERVER_URL', 'https://henri.motolite.com'),
     'timeout' => env('SYNC_TIMEOUT', 10),
 
     // Auto-sync only fires once upload throughput is at least this fast.
