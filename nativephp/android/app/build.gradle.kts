@@ -17,7 +17,7 @@ android {
         applicationId = "com.kaisa.ommc2027tablet"
         minSdk = 33
         targetSdk = 36
-        versionCode = 24
+        versionCode = 25
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
