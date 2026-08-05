@@ -82,6 +82,20 @@ document.addEventListener("DOMContentLoaded", function () {
             ->passwordReset()
 
             ->brandLogo(asset('images/motolite-logo.png'))
+            ->renderHook(
+                'panels::user-menu.before',
+                fn () => new HtmlString(
+                    '<button onclick="window.location.reload()" title="Refresh page"
+                        style="display:inline-flex; align-items:center; justify-content:center;
+                               width:2rem; height:2rem; border-radius:9999px; border:none;
+                               background:#000; cursor:pointer; color:#fff; margin-right:0.25rem; font-size:1.1rem;"
+                        onmouseover="this.style.background=\'#333\'"
+                        onmouseout="this.style.background=\'#000\'">
+                        &#x21BB;
+                    </button>'
+                )
+            )
+
             ->viteTheme('resources/css/filament/saleshub/theme.css')
             ->topNavigation()
             ->darkMode(false)

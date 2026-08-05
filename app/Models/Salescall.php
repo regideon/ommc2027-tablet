@@ -46,6 +46,9 @@ class Salescall extends Model
 
     public function getStatusAttribute(): string
     {
+        if ($this->salescallStatus?->name === SalescallStatus::CANCELLED) {
+            return 'cancelled';
+        }
         if (is_null($this->actual_in)) {
             return 'scheduled';
         }
@@ -55,7 +58,6 @@ class Salescall extends Model
 
         return match ($this->salescallStatus?->name) {
             SalescallStatus::PARTIALLY_COMPLETED => 'partially_completed',
-            SalescallStatus::CANCELLED => 'cancelled',
             default => 'completed',
         };
     }
