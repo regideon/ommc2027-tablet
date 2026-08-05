@@ -3,6 +3,7 @@
 namespace App\Providers\Filament;
 
 use App\Filament\Pages\Auth\Login;
+use App\Filament\Widgets\DashboardSalesrepWidget;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -35,8 +36,8 @@ class SaleshubPanelProvider extends PanelProvider
             ->unsavedChangesAlerts()
             ->profile(isSimple: false)
             ->assets([
-                Css::make('custom-stylesheet', asset('css/app/custom-stylesheet-saleshub.css')),
-                Css::make('custom-stylesheet-fontawesome-all.min', asset('css/app/custom-stylesheet-fontawesome-all.min.css')),
+                Css::make('custom-stylesheet', public_path('css/app/custom-stylesheet-saleshub.css')),
+                Css::make('custom-stylesheet-fontawesome-all.min', public_path('css/app/custom-stylesheet-fontawesome-all.min.css')),
             ])
 
             ->renderHook(
@@ -110,8 +111,7 @@ document.addEventListener("DOMContentLoaded", function () {
             ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\Filament\Widgets')
             ->widgets([
-                // AccountWidget::class,
-                // FilamentInfoWidget::class,
+                DashboardSalesrepWidget::class,
             ])
             ->middleware([
                 EncryptCookies::class,

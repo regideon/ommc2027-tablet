@@ -36,7 +36,7 @@ return [
     ],
 
     'sync' => [
-        'url' => env('SYNC_SERVER_URL', 'http://ommc2027.test'),
+        'url' => env('SYNC_SERVER_URL', 'https://henri.motolite.com'),
     ],
 
 ];
