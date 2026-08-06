@@ -245,6 +245,8 @@
 
         customers: {{ $customersJson }},
         showAddCall: false,
+        callSearch: '',
+        callSearchQuery: '',
         addCallSearch: '',
         addCallCustomerId: null,
         addCallScheduledAt: '',
@@ -324,9 +326,16 @@
             const base = this.inProgressCall
                 ? this.calls.filter(c => c.status !== 'in_progress')
                 : this.calls;
-            if (this.filter === 'today') return base.filter(c => c.filter_group === 'today');
-            if (this.filter === 'week')  return base.filter(c => ['today','week'].includes(c.filter_group));
-            return base;
+            const q = this.callSearchQuery.trim().toLowerCase();
+            const searched = q
+                ? base.filter(c =>
+                    (c.name ?? '').toLowerCase().includes(q) ||
+                    (c.unique_id ?? '').toLowerCase().includes(q)
+                )
+                : base;
+            if (this.filter === 'today') return searched.filter(c => c.filter_group === 'today');
+            if (this.filter === 'week')  return searched.filter(c => ['today','week'].includes(c.filter_group));
+            return searched;
         },
 
         get syncButtonClass() {
@@ -382,7 +391,7 @@
             this.partialReason = '';
             this.previewPhoto = null;
 
-            this.checkedIn = call ? call.status !== 'scheduled' : false;
+            this.checkedIn = call ? (call.status !== 'scheduled' && call.status !== 'cancelled') : false;
             this.showDetail = true;
             this.initMiniMap();
         },
@@ -631,7 +640,7 @@
     }"
     
     x-init="
-        checkedIn = selectedCall ? selectedCall.status !== 'scheduled' : false;
+        checkedIn = selectedCall ? (selectedCall.status !== 'scheduled' && selectedCall.status !== 'cancelled') : false;
         
         if (selected) { $wire.loadPhotos(selected); $wire.loadBrands(selected); $wire.loadCategories(selected); }
 
@@ -1205,7 +1214,15 @@
             <div class="flex items-center gap-2">
                 <div class="flex items-center bg-[#edeef0] rounded-full px-4 py-2 flex-1 gap-2">
                     <span class="material-symbols-outlined text-[#737685] text-lg">search</span>
-                    <input class="bg-transparent border-none focus:ring-0 text-sm w-full text-[#191c1e]" placeholder="Search salescalls..." type="text"/>
+                    <input
+                        x-model="callSearch"
+                        @keydown.enter="callSearchQuery = callSearch"
+                        @keydown.escape="callSearch = ''; callSearchQuery = ''"
+                        class="bg-transparent border-none focus:ring-0 text-sm w-full text-[#191c1e]"
+                        placeholder="Search by name or ID, press Enter..."
+                        type="text"/>
+                    <button x-show="callSearchQuery" @click="callSearch = ''; callSearchQuery = ''"
+                        class="text-gray-400 hover:text-gray-600 text-sm leading-none">&times;</button>
                 </div>
                 <button
                     @click="showLegend = true"
@@ -1231,9 +1248,17 @@
                 <p class="text-xs text-[#434654] mt-0.5">All scheduled visits from your itineraries</p>
             </div>
             <div class="flex items-center gap-3">
-                <div class="flex items-center bg-[#edeef0] rounded-full px-4 py-2 w-56 gap-2">
+                <div class="flex items-center bg-[#edeef0] rounded-full px-4 py-2 w-64 gap-2">
                     <span class="material-symbols-outlined text-[#737685] text-lg">search</span>
-                    <input class="bg-transparent border-none focus:ring-0 text-sm w-full text-[#191c1e]" placeholder="Search salescalls..." type="text"/>
+                    <input
+                        x-model="callSearch"
+                        @keydown.enter="callSearchQuery = callSearch"
+                        @keydown.escape="callSearch = ''; callSearchQuery = ''"
+                        class="bg-transparent border-none focus:ring-0 text-sm w-full text-[#191c1e]"
+                        placeholder="Search by name or ID..."
+                        type="text"/>
+                    <button x-show="callSearchQuery" @click="callSearch = ''; callSearchQuery = ''"
+                        class="text-gray-400 hover:text-gray-600 text-sm leading-none">&times;</button>
                 </div>
                 <button
                     @click="showLegend = true"
@@ -1428,6 +1453,21 @@
 
 
 
+            {{-- Active search chip --}}
+            <div x-show="callSearchQuery" x-transition class="flex items-center gap-2 pb-1 shrink-0">
+                <div class="flex items-center gap-1.5 bg-[#890f00] text-white rounded-full px-3 py-1 text-xs font-semibold" style="max-width:100%;">
+                    <span class="material-symbols-outlined shrink-0" style="font-size:13px;">search</span>
+                    <span class="min-w-0 flex-1 truncate" x-text="callSearchQuery"></span>
+                    <button
+                        @click="callSearch = ''; callSearchQuery = ''"
+                        class="ml-1 shrink-0 flex items-center justify-center w-4 h-4 rounded-full bg-white/20 hover:bg-white/40 transition-colors"
+                        title="Clear search">
+                        <span class="material-symbols-outlined" style="font-size:11px; line-height:1;">close</span>
+                    </button>
+                </div>
+                <span class="text-xs text-[#737685]" x-text="filteredCalls.length + ' result' + (filteredCalls.length !== 1 ? 's' : '')"></span>
+            </div>
+
             {{-- Call List --}}
             <div class="flex-1 overflow-y-auto space-y-3 pr-1 scrollbar-hide">
 
@@ -1534,24 +1574,44 @@
                 </div>
 
                 <div class="flex-1 flex flex-col items-center justify-center gap-6 px-8">
-                    <button
-                        @click="doCheckIn()"
-                        :disabled="anyOtherInProgress"
-                        :class="anyOtherInProgress ? 'opacity-40 cursor-not-allowed' : 'hover:opacity-90 active:scale-95'"
-                        title="Tap to record your GPS arrival location and start the visit"
-                        class="flex flex-col items-center gap-3 bg-[#890f00] text-white w-48 lg:w-52 py-8 rounded-3xl shadow-xl transition-all">
-                        <span class="material-symbols-outlined text-5xl mat-fill">my_location</span>
-                        <div class="text-center">
-                            <p class="font-black text-2xl leading-none tracking-wide">Mark Arrival</p>
-                            <p class="text-xs opacity-75 mt-1">Capture GPS location</p>
+
+                    {{-- Cancelled notice --}}
+                    <template x-if="selectedCall?.status === 'cancelled'">
+                        <div class="flex flex-col items-center gap-4 text-center">
+                            <div class="w-20 h-20 rounded-3xl bg-gray-100 flex items-center justify-center">
+                                <span class="material-symbols-outlined text-gray-400 text-5xl">cancel</span>
+                            </div>
+                            <div>
+                                <p class="font-black text-xl text-gray-500 leading-none tracking-wide">Cancelled</p>
+                                <p class="text-xs text-gray-400 mt-1">This visit has been cancelled.</p>
+                            </div>
                         </div>
-                    </button>
-                    <p x-show="!anyOtherInProgress" class="text-xs text-[#737685] text-center max-w-xs leading-relaxed">
-                        Tap <strong class="text-[#191c1e]">Mark Arrival</strong> when you arrive at the store to record your GPS location and start the visit.
-                    </p>
-                    <p x-show="anyOtherInProgress" class="text-xs text-amber-700 text-center max-w-xs leading-relaxed font-medium">
-                        Finish your current in-progress visit before starting a new one.
-                    </p>
+                    </template>
+
+                    {{-- Mark Arrival button --}}
+                    <template x-if="selectedCall?.status !== 'cancelled'">
+                        <div class="flex flex-col items-center gap-6">
+                            <button
+                                @click="doCheckIn()"
+                                :disabled="anyOtherInProgress"
+                                :class="anyOtherInProgress ? 'opacity-40 cursor-not-allowed' : 'hover:opacity-90 active:scale-95'"
+                                title="Tap to record your GPS arrival location and start the visit"
+                                class="flex flex-col items-center gap-3 bg-[#890f00] text-white w-48 lg:w-52 py-8 rounded-3xl shadow-xl transition-all">
+                                <span class="material-symbols-outlined text-5xl mat-fill">my_location</span>
+                                <div class="text-center">
+                                    <p class="font-black text-2xl leading-none tracking-wide">Mark Arrival</p>
+                                    <p class="text-xs opacity-75 mt-1">Capture GPS location</p>
+                                </div>
+                            </button>
+                            <p x-show="!anyOtherInProgress" class="text-xs text-[#737685] text-center max-w-xs leading-relaxed">
+                                Tap <strong class="text-[#191c1e]">Mark Arrival</strong> when you arrive at the store to record your GPS location and start the visit.
+                            </p>
+                            <p x-show="anyOtherInProgress" class="text-xs text-amber-700 text-center max-w-xs leading-relaxed font-medium">
+                                Finish your current in-progress visit before starting a new one.
+                            </p>
+                        </div>
+                    </template>
+
                 </div>
 
             </div>
