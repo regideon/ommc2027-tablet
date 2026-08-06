@@ -80,6 +80,15 @@ enum CameraFunctions {
                 CameraPhotoDelegate.shared.pendingPhotoId = id
                 CameraPhotoDelegate.shared.pendingPhotoEvent = event
 
+                func fireCancel() {
+                    let cancelEventClass = "Native\\Mobile\\Events\\Camera\\PhotoCancelled"
+                    var payload: [String: Any] = ["cancelled": true]
+                    if let id = id {
+                        payload["id"] = id
+                    }
+                    LaravelBridge.shared.send?(cancelEventClass, payload)
+                }
+
                 guard let windowScene = UIApplication.shared.connectedScenes
                     .compactMap({ $0 as? UIWindowScene })
                     .first(where: { $0.activationState == .foregroundActive }),
@@ -87,11 +96,13 @@ enum CameraFunctions {
                         .first(where: { $0.isKeyWindow })?
                         .rootViewController else {
                     print("❌ Failed to get root view controller")
+                    fireCancel()
                     return
                 }
 
                 guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
                     print("❌ Camera not available")
+                    fireCancel()
                     return
                 }
 
@@ -433,6 +444,15 @@ final class CameraPhotoDelegate: NSObject, UIImagePickerControllerDelegate, UINa
                 // Convert to JPEG and save
                 guard let jpegData = image.jpegData(compressionQuality: 0.9) else {
                     print("❌ Failed to convert image to JPEG")
+                    var payload: [String: Any] = ["cancelled": true]
+                    if let id = self?.pendingPhotoId {
+                        payload["id"] = id
+                    }
+                    DispatchQueue.main.async {
+                        LaravelBridge.shared.send?(cancelEventClass, payload)
+                    }
+                    self?.pendingPhotoId = nil
+                    self?.pendingPhotoEvent = nil
                     return
                 }
 
@@ -511,12 +531,28 @@ final class CameraGalleryManager: NSObject {
         // Store id and event for callback
         pendingGalleryId = id
         pendingGalleryEvent = event
+
+        let eventClass = event ?? "Native\\Mobile\\Events\\Gallery\\MediaSelected"
+
         guard let windowScene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive }),
               let rootVC = windowScene.windows
             .first(where: { $0.isKeyWindow })?
             .rootViewController else {
+            var payload: [String: Any] = [
+                "success": false,
+                "files": [],
+                "count": 0,
+                "cancelled": false,
+                "error": "Unable to present gallery picker"
+            ]
+            if let id = id {
+                payload["id"] = id
+            }
+            LaravelBridge.shared.send?(eventClass, payload)
+            pendingGalleryId = nil
+            pendingGalleryEvent = nil
             return
         }
 
@@ -541,7 +577,8 @@ final class CameraGalleryManager: NSObject {
             configuration.selectionLimit = 1
         }
 
-        configuration.preferredAssetRepresentationMode = .current
+        // Prefer a compatible representation when available (reduces HEIC handoff issues).
+        configuration.preferredAssetRepresentationMode = .compatible
 
         let picker = PHPickerViewController(configuration: configuration)
         picker.delegate = self
@@ -582,6 +619,7 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
 
     private func processPickerResults(_ results: [PHPickerResult]) {
         let group = DispatchGroup()
+        let lock = NSLock()
         var processedFiles: [[String: Any]] = []
 
         // Capture event class and id before async processing
@@ -596,24 +634,39 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
                 result.itemProvider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { url, error in
                     defer { group.leave() }
 
-                    if let url = url {
-                        self.copyFileToCache(url: url, index: index, type: "image") { fileInfo in
-                            if let fileInfo = fileInfo {
-                                processedFiles.append(fileInfo)
-                            }
-                        }
+                    if let error = error {
+                        print("❌ Failed to load image representation: \(error)")
+                        return
+                    }
+
+                    guard let url = url else {
+                        return
+                    }
+
+                    // Must copy synchronously before this callback returns.
+                    if let fileInfo = self.copyImageToCache(url: url, index: index) {
+                        lock.lock()
+                        processedFiles.append(fileInfo)
+                        lock.unlock()
                     }
                 }
             } else if result.itemProvider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
                 result.itemProvider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { url, error in
                     defer { group.leave() }
 
-                    if let url = url {
-                        self.copyFileToCache(url: url, index: index, type: "video") { fileInfo in
-                            if let fileInfo = fileInfo {
-                                processedFiles.append(fileInfo)
-                            }
-                        }
+                    if let error = error {
+                        print("❌ Failed to load video representation: \(error)")
+                        return
+                    }
+
+                    guard let url = url else {
+                        return
+                    }
+
+                    if let fileInfo = self.copyVideoToCache(url: url, index: index) {
+                        lock.lock()
+                        processedFiles.append(fileInfo)
+                        lock.unlock()
                     }
                 }
             } else {
@@ -622,11 +675,15 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
         }
 
         group.notify(queue: .main) { [weak self] in
+            let success = !processedFiles.isEmpty
             var payload: [String: Any] = [
-                "success": true,
+                "success": success,
                 "files": processedFiles,
                 "count": processedFiles.count
             ]
+            if !success {
+                payload["error"] = "Failed to import selected media"
+            }
             if let id = capturedId {
                 payload["id"] = id
             }
@@ -639,18 +696,39 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
         }
     }
 
-    private func copyFileToCache(url: URL, index: Int, type: String, completion: @escaping ([String: Any]?) -> Void) {
+    /// Copy a gallery image into app-owned temp storage, converting HEIC/HEIF to JPEG.
+    private func copyImageToCache(url: URL, index: Int) -> [String: Any]? {
         let fileManager = FileManager.default
-
-        // Use temporary directory with Gallery subfolder
         let tempDir = fileManager.temporaryDirectory
         let galleryDir = tempDir.appendingPathComponent("Gallery", isDirectory: true)
-
-        // Ensure Gallery directory exists
         try? fileManager.createDirectory(at: galleryDir, withIntermediateDirectories: true)
 
         let timestamp = Int(Date().timeIntervalSince1970 * 1000)
-        let fileExtension = url.pathExtension.isEmpty ? (type == "image" ? "jpg" : "mp4") : url.pathExtension
+
+        // Always normalize gallery images to JPEG so PHP/GD/exif can read HEIC/HEIF picks.
+        if let image = UIImage(contentsOfFile: url.path) ?? loadUIImage(from: url),
+           let jpegData = image.jpegData(compressionQuality: 0.9) {
+            let fileName = "gallery_selected_\(timestamp)_\(index).jpg"
+            let destinationURL = galleryDir.appendingPathComponent(fileName)
+
+            do {
+                if fileManager.fileExists(atPath: destinationURL.path) {
+                    try fileManager.removeItem(at: destinationURL)
+                }
+                try jpegData.write(to: destinationURL, options: .atomic)
+                return [
+                    "path": destinationURL.path,
+                    "mimeType": "image/jpeg",
+                    "extension": "jpg",
+                    "type": "image"
+                ]
+            } catch {
+                print("Error writing JPEG gallery image: \(error)")
+            }
+        }
+
+        // Fallback: copy original bytes if UIImage decode fails.
+        let fileExtension = url.pathExtension.isEmpty ? "jpg" : url.pathExtension
         let fileName = "gallery_selected_\(timestamp)_\(index).\(fileExtension)"
         let destinationURL = galleryDir.appendingPathComponent(fileName)
 
@@ -658,21 +736,52 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
             if fileManager.fileExists(atPath: destinationURL.path) {
                 try fileManager.removeItem(at: destinationURL)
             }
-
             try fileManager.copyItem(at: url, to: destinationURL)
-
-            let fileInfo: [String: Any] = [
+            return [
                 "path": destinationURL.path,
                 "mimeType": getMimeType(for: fileExtension),
                 "extension": fileExtension,
-                "type": type
+                "type": "image"
             ]
-
-            completion(fileInfo)
         } catch {
-            print("Error copying file: \(error)")
-            completion(nil)
+            print("Error copying gallery image: \(error)")
+            return nil
         }
+    }
+
+    private func copyVideoToCache(url: URL, index: Int) -> [String: Any]? {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory
+        let galleryDir = tempDir.appendingPathComponent("Gallery", isDirectory: true)
+        try? fileManager.createDirectory(at: galleryDir, withIntermediateDirectories: true)
+
+        let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+        let fileExtension = url.pathExtension.isEmpty ? "mp4" : url.pathExtension
+        let fileName = "gallery_selected_\(timestamp)_\(index).\(fileExtension)"
+        let destinationURL = galleryDir.appendingPathComponent(fileName)
+
+        do {
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                try fileManager.removeItem(at: destinationURL)
+            }
+            try fileManager.copyItem(at: url, to: destinationURL)
+            return [
+                "path": destinationURL.path,
+                "mimeType": getMimeType(for: fileExtension),
+                "extension": fileExtension,
+                "type": "video"
+            ]
+        } catch {
+            print("Error copying gallery video: \(error)")
+            return nil
+        }
+    }
+
+    private func loadUIImage(from url: URL) -> UIImage? {
+        guard let data = try? Data(contentsOf: url) else {
+            return nil
+        }
+        return UIImage(data: data)
     }
 
     private func getMimeType(for fileExtension: String) -> String {
@@ -685,6 +794,8 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
             return "image/gif"
         case "webp":
             return "image/webp"
+        case "heic", "heif", "heics":
+            return "image/heic"
         case "mp4":
             return "video/mp4"
         case "mov":

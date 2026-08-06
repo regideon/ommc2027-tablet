@@ -20,6 +20,7 @@ use App\Models\SalescallStatus;
 use App\Models\SalescallType;
 use App\Models\SubCategory;
 use App\Services\SyncService;
+use App\Support\NativeMediaPath;
 use BackedEnum;
 use Carbon\Carbon;
 use Filament\Notifications\Notification;
@@ -29,6 +30,8 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Attributes\On;
+use Native\Mobile\Events\Camera\PermissionDenied;
+use Native\Mobile\Events\Camera\PhotoCancelled;
 use Native\Mobile\Events\Camera\PhotoTaken;
 use Native\Mobile\Events\Gallery\MediaSelected;
 use Native\Mobile\Facades\Camera;
@@ -232,34 +235,97 @@ class SalescallPage extends Page
             return;
         }
 
-        $this->saveImageFromPath($path, $this->pendingPhotoSalescallId, $this->pendingPhotoTypeId);
+        $salescallId = $this->pendingPhotoSalescallId;
+        $typeId = $this->pendingPhotoTypeId;
         $this->pendingPhotoSalescallId = null;
         $this->pendingPhotoTypeId = null;
+
+        $this->saveImageFromPath($path, $salescallId, $typeId);
     }
 
     #[On('native:'.MediaSelected::class)]
     public function onMediaSelected(bool $success, array $files = [], int $count = 0, ?string $error = null, bool $cancelled = false, ?string $id = null): void
     {
-        if (! $success || $cancelled || empty($files) || ! $this->pendingPhotoSalescallId || ! $this->pendingPhotoTypeId) {
-            $this->pendingPhotoSalescallId = null;
-            $this->pendingPhotoTypeId = null;
+        $salescallId = $this->pendingPhotoSalescallId;
+        $typeId = $this->pendingPhotoTypeId;
+        $this->pendingPhotoSalescallId = null;
+        $this->pendingPhotoTypeId = null;
+
+        if ($cancelled) {
+            return;
+        }
+
+        if (! $success || empty($files) || ! $salescallId || ! $typeId) {
+            Notification::make()
+                ->title($error ?: 'Could not import the selected photo.')
+                ->danger()
+                ->send();
 
             return;
         }
 
-        $this->saveImageFromPath($files[0], $this->pendingPhotoSalescallId, $this->pendingPhotoTypeId);
+        $path = NativeMediaPath::resolve($files[0]);
+
+        if ($path === null) {
+            Notification::make()
+                ->title('Selected photo path is invalid.')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $this->saveImageFromPath($path, $salescallId, $typeId);
+    }
+
+    #[On('native:'.PhotoCancelled::class)]
+    public function onPhotoCancelled(bool $cancelled = true, ?string $id = null): void
+    {
         $this->pendingPhotoSalescallId = null;
         $this->pendingPhotoTypeId = null;
     }
 
+    #[On('native:'.PermissionDenied::class)]
+    public function onCameraPermissionDenied(string $action = 'photo', ?string $id = null): void
+    {
+        $this->pendingPhotoSalescallId = null;
+        $this->pendingPhotoTypeId = null;
+
+        Notification::make()
+            ->title('Camera permission is required to take photos.')
+            ->danger()
+            ->send();
+    }
+
     private function saveImageFromPath(string $sourcePath, int $salescallId, int $typeId): void
     {
-        $ext = strtolower(pathinfo($sourcePath, PATHINFO_EXTENSION)) ?: 'jpg';
+        $resolvedPath = NativeMediaPath::resolve($sourcePath) ?? $sourcePath;
+
+        if (! is_file($resolvedPath)) {
+            Log::warning('Sales call photo source file missing', ['path' => $resolvedPath]);
+            Notification::make()
+                ->title('Photo file was not available. Please try again.')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $ext = strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)) ?: 'jpg';
         $filename = 'salescall_images/'.\Str::uuid().'.'.$ext;
 
         Storage::disk('local')->makeDirectory('salescall_images');
         $fullPath = Storage::disk('local')->path($filename);
-        copy($sourcePath, $fullPath);
+
+        if (! @copy($resolvedPath, $fullPath)) {
+            Log::warning('Sales call photo copy failed', ['from' => $resolvedPath, 'to' => $fullPath]);
+            Notification::make()
+                ->title('Could not save the photo.')
+                ->danger()
+                ->send();
+
+            return;
+        }
 
         [$latitude, $longitude] = $this->extractPhotoGps($fullPath);
 
