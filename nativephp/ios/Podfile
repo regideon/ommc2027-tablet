@@ -1,4 +1,4 @@
-platform :ios, '18.2'
+platform :ios, '15.6'
 
 project 'NativePHP.xcodeproj'
 

@@ -92,10 +92,11 @@ struct NativeTopBar: UIViewRepresentable {
                 // Create button with both image and title when available
                 let button = UIBarButtonItem(
                     title: action.data.label,
-                    image: image,
+                    style: .plain,
                     target: context.coordinator,
                     action: #selector(Coordinator.actionTapped(_:))
                 )
+                button.image = image
 
                 button.accessibilityLabel = action.data.label
                 button.accessibilityIdentifier = action.data.id

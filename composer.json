@@ -16,6 +16,7 @@
         "leandrocfe/filament-apex-charts": "^5.1",
         "livewire/livewire": "^4.2",
         "nativephp/mobile": "^3.2",
+        "ommc2027/camera": "^1.0",
         "relaticle/flowforge": "^4.0",
         "spatie/laravel-activitylog": "^4.10",
         "spatie/laravel-permission": "^7.3",
@@ -91,6 +92,15 @@
             "dont-discover": []
         }
     },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "packages/ommc2027/camera",
+            "options": {
+                "symlink": true
+            }
+        }
+    ],
     "config": {
         "platform": {
             "php": "8.5.4"

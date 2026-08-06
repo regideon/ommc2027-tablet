@@ -244,7 +244,7 @@ struct NativePHPApp: App {
             print("Couldn't create php.ini")
         }
 
-        return supportDir.appendingPathComponent("php.ini").path(percentEncoded: false)
+        return supportDir.appendingPathComponent("php.ini").path
     }
 
     private func createDatabase() {

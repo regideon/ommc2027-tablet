@@ -110,9 +110,8 @@ return [
     */
 
     'permissions' => [
-        // 'NSCameraUsageDescription' => 'Used to take a profile photo.',
-        // 'NSMicrophoneUsageDescription' => 'Used to record audio with your videos.',
-        // 'NSPhotoLibraryUsageDescription' => 'Used to select photos for your post.',
+        'NSCameraUsageDescription' => 'This app requires camera access to take photos and record videos.',
+        'NSMicrophoneUsageDescription' => 'This app requires microphone access to record video with audio.',
     ],
 
     /*

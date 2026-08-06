@@ -215,7 +215,7 @@ final class PersistentPHPRuntime {
         try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
         try? phpIni.write(to: iniPath, atomically: true, encoding: .utf8)
 
-        return iniPath.path(percentEncoded: false)
+        return iniPath.path
     }
 
     private func getAppKey() -> String? {

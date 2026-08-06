@@ -1,0 +1,42 @@
+{
+    "namespace": "Camera",
+    "bridge_functions": [
+        {
+            "name": "Camera.GetPhoto",
+            "ios": "CameraFunctions.GetPhoto",
+            "description": "Capture a photo with the device camera"
+        },
+        {
+            "name": "Camera.RecordVideo",
+            "ios": "CameraFunctions.RecordVideo",
+            "description": "Record a video with the device camera"
+        },
+        {
+            "name": "Camera.PickMedia",
+            "ios": "CameraFunctions.PickMedia",
+            "description": "Pick media from the device gallery"
+        }
+    ],
+    "android": {
+        "min_version": 26
+    },
+    "ios": {
+        "min_version": "15.6",
+        "info_plist": {
+            "NSCameraUsageDescription": "This app requires camera access to take photos and record videos.",
+            "NSMicrophoneUsageDescription": "This app requires microphone access to record video with audio."
+        },
+        "dependencies": {
+            "swift_packages": [],
+            "pods": []
+        }
+    },
+    "events": [
+        "Native\\Mobile\\Events\\Camera\\PhotoTaken",
+        "Native\\Mobile\\Events\\Camera\\PhotoCancelled",
+        "Native\\Mobile\\Events\\Camera\\VideoRecorded",
+        "Native\\Mobile\\Events\\Camera\\VideoCancelled",
+        "Native\\Mobile\\Events\\Gallery\\MediaSelected",
+        "Native\\Mobile\\Events\\Camera\\PermissionDenied"
+    ]
+}

@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "59f7f3efd61fdf18856b65adb3ea09f7",
+    "content-hash": "6a8c6d4df56a3576f478f9ce19f157ae",
     "packages": [
         {
             "name": "anourvalar/eloquent-serialize",
@@ -4837,6 +4837,43 @@
                 }
             ],
             "time": "2026-02-16T23:10:27+00:00"
+        },
+        {
+            "name": "ommc2027/camera",
+            "version": "1.0.0",
+            "dist": {
+                "type": "path",
+                "url": "packages/ommc2027/camera",
+                "reference": "54ea085b1f5a24c8dfcc6b6c548b4c7f3029dcea"
+            },
+            "require": {
+                "nativephp/mobile": "^3.2",
+                "php": "^8.2"
+            },
+            "type": "nativephp-plugin",
+            "extra": {
+                "nativephp": {
+                    "manifest": "nativephp.json"
+                },
+                "laravel": {
+                    "providers": [
+                        "Ommc2027\\Camera\\Providers\\CameraServiceProvider"
+                    ]
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Ommc2027\\Camera\\": "src/"
+                }
+            },
+            "license": [
+                "proprietary"
+            ],
+            "description": "App-owned camera plugin for NativePHP Mobile (iOS 15.6 compatible)",
+            "transport-options": {
+                "symlink": true,
+                "relative": true
+            }
         },
         {
             "name": "openspout/openspout",

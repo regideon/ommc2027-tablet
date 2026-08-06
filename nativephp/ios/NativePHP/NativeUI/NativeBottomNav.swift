@@ -288,7 +288,7 @@ struct NativeBottomNavigation: View {
                 .onAppear {
                     ensureSelectedTabInitialized(items: items)
                 }
-                .onChange(of: uiState.bottomNavData) { _, newData in
+                .onChange(of: uiState.bottomNavData) { newData in
                     if let newItems = newData?.children {
                         updateSelectedTab(items: newItems)
                     }
@@ -309,7 +309,7 @@ struct NativeBottomNavigation: View {
                 .onAppear {
                     ensureSelectedTabInitialized(items: items)
                 }
-                .onChange(of: uiState.bottomNavData) { _, newData in
+                .onChange(of: uiState.bottomNavData) { newData in
                     if let newItems = newData?.children {
                         updateSelectedTab(items: newItems)
                     }

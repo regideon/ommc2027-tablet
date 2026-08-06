@@ -175,7 +175,7 @@ struct NativeSideNavigation<Content: View>: View {
                         .zIndex(3)
                 }
             }
-            .onChange(of: uiState.shouldPresentSidebar) { _, newValue in
+            .onChange(of: uiState.shouldPresentSidebar) { newValue in
                 if newValue {
                     withAnimation(.easeInOut(duration: 0.3)) {
                         dragOffset = 0

@@ -1,8 +1,21 @@
 import Foundation
 
 // AUTO-GENERATED FILE - DO NOT EDIT
-// This file is overwritten during the build process with plugin registrations
+// Generated from installed NativePHP plugins
 
 func registerPluginBridgeFunctions() {
-    // No plugins installed - this file will be replaced during build
+    let registry = BridgeFunctionRegistry.shared
+
+    // Initialize plugins
+
+
+    // Register bridge functions
+    // Plugin: ommc2027/camera
+    registry.register("Camera.GetPhoto", function: CameraFunctions.GetPhoto())
+
+    // Plugin: ommc2027/camera
+    registry.register("Camera.RecordVideo", function: CameraFunctions.RecordVideo())
+
+    // Plugin: ommc2027/camera
+    registry.register("Camera.PickMedia", function: CameraFunctions.PickMedia())
 }
