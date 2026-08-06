@@ -546,7 +546,9 @@ struct WebView: UIViewRepresentable {
         userContentController.addUserScript(userScript)
         userContentController.add(context.coordinator.logger, name: "console")
 
-        webView.isInspectable = true
+        if #available(iOS 16.4, *) {
+            webView.isInspectable = true
+        }
         #endif
     }
 

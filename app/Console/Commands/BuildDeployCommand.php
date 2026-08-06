@@ -10,6 +10,7 @@ class BuildDeployCommand extends Command
 {
     protected $signature = 'app:build
         {platform : The platform to build for (ios/android)}
+        {--rebuild : Remove any existing iOS archive before building}
         {--export-method=app-store : iOS export method (app-store|ad-hoc|enterprise|development)}
         {--team-id= : Apple Developer Team ID}
         {--provisioning-profile-path= : Path to provisioning profile (.mobileprovision)}
@@ -41,6 +42,10 @@ class BuildDeployCommand extends Command
         $args = [
             'platform' => $platform,
         ];
+
+        if ($this->option('rebuild')) {
+            $args['--rebuild'] = true;
+        }
 
         if ($platform === 'android') {
             $args['--keystore'] = env('ANDROID_KEYSTORE_PATH', base_path('keystore/ommc2027-upload-key.jks'));

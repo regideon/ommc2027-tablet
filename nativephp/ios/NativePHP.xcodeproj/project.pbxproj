@@ -13,7 +13,6 @@
 		9503806A2D92356B004D24B3 /* libphp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 950380612D92356B004D24B3 /* libphp.a */; };
 		9503806B2D92356B004D24B3 /* libxml2.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 950380652D92356B004D24B3 /* libxml2.a */; };
 		9503806C2D92356B004D24B3 /* libzip.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 950380672D92356B004D24B3 /* libzip.a */; };
-
 		9503806E2D92356B004D24B3 /* libsqlite3.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 950380632D92356B004D24B3 /* libsqlite3.a */; };
 		9503806F2D92356B004D24B3 /* libz.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 950380662D92356B004D24B3 /* libz.a */; };
 		950380702D92356B004D24B3 /* libiconv.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 950380602D92356B004D24B3 /* libiconv.a */; };
@@ -21,7 +20,6 @@
 		950380722D92356B004D24B3 /* libssl.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 950380642D92356B004D24B3 /* libssl.a */; };
 		9503807E2D923577004D24B3 /* libz.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 9503807C2D923577004D24B3 /* libz.a */; };
 		9503807F2D923577004D24B3 /* libphp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 950380772D923577004D24B3 /* libphp.a */; };
-
 		950380812D923577004D24B3 /* libsqlite3.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 950380792D923577004D24B3 /* libsqlite3.a */; };
 		950380822D923577004D24B3 /* libcharset.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 950380732D923577004D24B3 /* libcharset.a */; };
 		950380832D923577004D24B3 /* libxml2.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 9503807B2D923577004D24B3 /* libxml2.a */; };
@@ -78,7 +76,6 @@
 		95037E372D923555004D24B3 /* iconv.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = iconv.h; sourceTree = "<group>"; };
 		95037E382D923555004D24B3 /* libcharset.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = libcharset.h; sourceTree = "<group>"; };
 		95037E392D923555004D24B3 /* localcharset.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = localcharset.h; sourceTree = "<group>"; };
-
 		95037E3F2D923555004D24B3 /* c14n.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = c14n.h; sourceTree = "<group>"; };
 		95037E402D923555004D24B3 /* catalog.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = catalog.h; sourceTree = "<group>"; };
 		95037E412D923555004D24B3 /* chvalid.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = chvalid.h; sourceTree = "<group>"; };
@@ -586,7 +583,6 @@
 		9503805F2D92356B004D24B3 /* libcurl.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libcurl.a; sourceTree = "<group>"; };
 		950380602D92356B004D24B3 /* libiconv.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libiconv.a; sourceTree = "<group>"; };
 		950380612D92356B004D24B3 /* libphp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libphp.a; sourceTree = "<group>"; };
-
 		950380632D92356B004D24B3 /* libsqlite3.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libsqlite3.a; sourceTree = "<group>"; };
 		950380642D92356B004D24B3 /* libssl.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libssl.a; sourceTree = "<group>"; };
 		950380652D92356B004D24B3 /* libxml2.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libxml2.a; sourceTree = "<group>"; };
@@ -597,7 +593,6 @@
 		950380752D923577004D24B3 /* libcurl.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libcurl.a; sourceTree = "<group>"; };
 		950380762D923577004D24B3 /* libiconv.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libiconv.a; sourceTree = "<group>"; };
 		950380772D923577004D24B3 /* libphp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libphp.a; sourceTree = "<group>"; };
-
 		950380792D923577004D24B3 /* libsqlite3.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libsqlite3.a; sourceTree = "<group>"; };
 		9503807A2D923577004D24B3 /* libssl.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libssl.a; sourceTree = "<group>"; };
 		9503807B2D923577004D24B3 /* libxml2.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libxml2.a; sourceTree = "<group>"; };
@@ -648,15 +643,11 @@
 		};
 		95BD5DD42D178E9E00C72704 /* NativePHPTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = NativePHPTests;
 			sourceTree = "<group>";
 		};
 		95BD5DDE2D178E9E00C72704 /* NativePHPUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = NativePHPUITests;
 			sourceTree = "<group>";
 		};
@@ -669,7 +660,6 @@
 			files = (
 				9503807E2D923577004D24B3 /* libz.a in Frameworks */,
 				9503807F2D923577004D24B3 /* libphp.a in Frameworks */,
-
 				950380812D923577004D24B3 /* libsqlite3.a in Frameworks */,
 				950380822D923577004D24B3 /* libcharset.a in Frameworks */,
 				950380832D923577004D24B3 /* libxml2.a in Frameworks */,
@@ -694,7 +684,6 @@
 				9503806A2D92356B004D24B3 /* libphp.a in Frameworks */,
 				9503806B2D92356B004D24B3 /* libxml2.a in Frameworks */,
 				9503806C2D92356B004D24B3 /* libzip.a in Frameworks */,
-
 				9503806E2D92356B004D24B3 /* libsqlite3.a in Frameworks */,
 				956423092E31758C00F25A31 /* libonig.a in Frameworks */,
 				9564230D2E3B8A0100F25A31 /* libsodium.a in Frameworks */,
@@ -734,7 +723,6 @@
 				9503805F2D92356B004D24B3 /* libcurl.a */,
 				950380602D92356B004D24B3 /* libiconv.a */,
 				950380612D92356B004D24B3 /* libphp.a */,
-
 				950380632D92356B004D24B3 /* libsqlite3.a */,
 				950380642D92356B004D24B3 /* libssl.a */,
 				950380652D92356B004D24B3 /* libxml2.a */,
@@ -754,7 +742,6 @@
 				950380752D923577004D24B3 /* libcurl.a */,
 				950380762D923577004D24B3 /* libiconv.a */,
 				950380772D923577004D24B3 /* libphp.a */,
-
 				950380792D923577004D24B3 /* libsqlite3.a */,
 				9503807A2D923577004D24B3 /* libssl.a */,
 				9503807B2D923577004D24B3 /* libxml2.a */,
@@ -1640,7 +1627,6 @@
 			children = (
 				95037E362D923555004D24B3 /* curl */,
 				95037E3A2D923555004D24B3 /* iconv */,
-
 				95037E6E2D923555004D24B3 /* libxml2 */,
 				95037EFC2D923555004D24B3 /* openssl */,
 				950380532D923555004D24B3 /* php */,
@@ -1688,7 +1674,6 @@
 				7BB04FB8776320C2BE91597C /* Pods-NativePHP-simulator.debug.xcconfig */,
 				F6296017A23CA4D47797637A /* Pods-NativePHP-simulator.release.xcconfig */,
 			);
-			name = Pods;
 			path = Pods;
 			sourceTree = "<group>";
 		};
@@ -2005,7 +1990,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 30;
 				DEVELOPMENT_ASSET_PATHS = "\"NativePHP/Preview Content\"";
 				DEVELOPMENT_TEAM = NB8379YL38;
 				ENABLE_PREVIEWS = YES;
@@ -2021,7 +2006,7 @@
 					"$(PROJECT_DIR)/NativePHP",
 				);
 				INFOPLIST_FILE = "NativePHP-simulator-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "OMMC Henri";
+				INFOPLIST_KEY_CFBundleDisplayName = "OMMC Henri V2";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = NO;
@@ -2057,7 +2042,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 30;
 				DEVELOPMENT_ASSET_PATHS = "\"NativePHP/Preview Content\"";
 				DEVELOPMENT_TEAM = NB8379YL38;
 				ENABLE_PREVIEWS = YES;
@@ -2073,7 +2058,7 @@
 					"$(PROJECT_DIR)/NativePHP",
 				);
 				INFOPLIST_FILE = "NativePHP-simulator-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "OMMC Henri";
+				INFOPLIST_KEY_CFBundleDisplayName = "OMMC Henri V2";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = NO;
@@ -2235,9 +2220,9 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = NativePHP/NativePHP.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 30;
 				DEVELOPMENT_ASSET_PATHS = "\"NativePHP/Preview Content\"";
-				DEVELOPMENT_TEAM = NB8379YL38;
+				DEVELOPMENT_TEAM = L954EHR6V9;
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_RECURSIVE_SEARCH_PATH_SUBDIRECTORIES = "*.nib *.lproj *.framework *.gch *.xcode* *.xcassets (*) .DS_Store CVS .svn .git .hg *.pbproj *.pbxproj node_modules";
 				EXCLUDED_SOURCE_FILE_NAMES = (
@@ -2250,7 +2235,7 @@
 					"$(PROJECT_DIR)/NativePHP",
 				);
 				INFOPLIST_FILE = NativePHP/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "OMMC Henri";
+				INFOPLIST_KEY_CFBundleDisplayName = "OMMC Henri V2";
 				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -2288,9 +2273,9 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = NativePHP/NativePHP.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 30;
 				DEVELOPMENT_ASSET_PATHS = "\"NativePHP/Preview Content\"";
-				DEVELOPMENT_TEAM = NB8379YL38;
+				DEVELOPMENT_TEAM = L954EHR6V9;
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_RECURSIVE_SEARCH_PATH_SUBDIRECTORIES = "*.nib *.lproj *.framework *.gch *.xcode* *.xcassets (*) .DS_Store CVS .svn .git .hg *.pbproj *.pbxproj node_modules";
 				EXCLUDED_SOURCE_FILE_NAMES = (
@@ -2303,7 +2288,7 @@
 					"$(PROJECT_DIR)/NativePHP",
 				);
 				INFOPLIST_FILE = NativePHP/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "OMMC Henri";
+				INFOPLIST_KEY_CFBundleDisplayName = "OMMC Henri V2";
 				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -2338,7 +2323,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 30;
 				DEVELOPMENT_TEAM = NB8379YL38;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
@@ -2359,7 +2344,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 30;
 				DEVELOPMENT_TEAM = NB8379YL38;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
@@ -2379,7 +2364,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 30;
 				DEVELOPMENT_TEAM = NB8379YL38;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0.0;
@@ -2398,7 +2383,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 30;
 				DEVELOPMENT_TEAM = NB8379YL38;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0.0;

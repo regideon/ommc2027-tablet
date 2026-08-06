@@ -229,6 +229,15 @@
         selectPhotoCategory(cat) { this.photoCategory = cat; this.photoStep = 2; },
         selectPhotoType(type)    { this.photoType = type; this.photoStep = 3; },
         cancelPhoto()            { this.photoStep = 0; this.photoCategory = null; this.photoType = null; },
+        hasPhotoForType(type) {
+            try {
+                return ($wire.callPhotos || []).some(
+                    photo => photo && photo.type === type.name
+                );
+            } catch (error) {
+                return false;
+            }
+        },
         calls: {{ $callsJson }},
 
         materialGroups: {{ $materialGroupsJson }},
@@ -1799,9 +1808,9 @@
                             <template x-for="group in photosGrouped" :key="group.name">
                                 <div class="mb-5">
                                     <p class="text-[10px] font-black text-[#737685] uppercase tracking-widest mb-2"
-                                       x-text="group.name"></p>
+                                       x-text="typeof group !== 'undefined' ? group?.name : ''"></p>
                                     <div class="grid grid-cols-3 gap-2">
-                                        <template x-for="photo in group.photos" :key="photo.id">
+                                        <template x-for="photo in (typeof group !== 'undefined' ? group?.photos : [])" :key="photo.id">
                                             <div @click="previewPhoto = photo"
                                                  class="aspect-square rounded-xl overflow-hidden bg-gray-100 relative cursor-pointer active:scale-[0.97] transition-transform">
                                                 <img :src="photo.url" class="w-full h-full object-cover" loading="lazy" />
@@ -1870,14 +1879,16 @@
                             </div>
                             <div class="space-y-2">
                                 <template x-for="type in (photoCategory?.types || [])" :key="type.id">
-                                    <button @click="selectPhotoType(type)"
-                                        class="w-full flex items-center gap-4 px-5 py-4 bg-white border rounded-2xl hover:border-[#890f00] hover:bg-red-50 active:scale-[0.98] transition-all text-left"
-                                        :class="($wire.callPhotos || []).some(p => p?.type === type.name) ? 'border-green-400' : 'border-gray-200'">
+                                    <button type="button"
+                                        @click="selectPhotoType(type)"
+                                        @keydown.enter="selectPhotoType(type)"
+                                        class="w-full flex items-center gap-4 px-5 py-4 bg-white border border-gray-200 rounded-2xl text-left transition-all cursor-pointer touch-manipulation select-none active:scale-[0.98] active:border-[#890f00] active:bg-red-50"
+                                        :class="hasPhotoForType(type) ? 'border-green-400' : 'border-gray-200'">
                                         <span class="material-symbols-outlined text-[#890f00]">photo_camera</span>
                                         <p class="font-bold text-sm text-[#191c1e]" x-text="type.name"></p>
-                                        <span x-show="($wire.callPhotos || []).some(p => p?.type === type.name)"
+                                        <span x-show="hasPhotoForType(type)"
                                               class="material-symbols-outlined mat-fill text-green-600 ml-auto">check_circle</span>
-                                        <span x-show="!($wire.callPhotos || []).some(p => p?.type === type.name)"
+                                        <span x-show="!hasPhotoForType(type)"
                                               class="material-symbols-outlined text-gray-300 ml-auto">chevron_right</span>
                                     </button>
                                 </template>
@@ -1926,7 +1937,7 @@
                                 ">
                             <div class="grid grid-cols-2 gap-3">
                                 <button @click="
-                                        if (document.body.classList.contains('nativephp-android')) {
+                                        if (document.body.classList.contains('nativephp-android') || document.body.classList.contains('nativephp-ios')) {
                                             $wire.takePhoto(selected, photoType.id); cancelPhoto();
                                         } else {
                                             document.getElementById('browser-camera-input').click();
@@ -1937,7 +1948,7 @@
                                     <p class="font-black text-sm">Take Photo</p>
                                 </button>
                                 <button @click="
-                                        if (document.body.classList.contains('nativephp-android')) {
+                                        if (document.body.classList.contains('nativephp-android') || document.body.classList.contains('nativephp-ios')) {
                                             $wire.pickFromGallery(selected, photoType.id); cancelPhoto();
                                         } else {
                                             document.getElementById('browser-gallery-input').click();
