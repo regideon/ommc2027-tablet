@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Services\TrustedLoginService;
 use BackedEnum;
 use Filament\Facades\Filament;
 use Filament\Pages\Page;
@@ -21,6 +22,7 @@ class SettingsPage extends Page
 
     public function logout(): void
     {
+        app(TrustedLoginService::class)->clear();
         Filament::auth()->logout();
         session()->invalidate();
         session()->regenerateToken();

@@ -31,6 +31,7 @@ class BuildDeployCommand extends Command
         'NativePHPApp.swift',
         'AppState.swift',
         'SplashView.swift',
+        'ContentView.swift',
     ];
 
     protected string $downloadDir;
@@ -198,6 +199,9 @@ class BuildDeployCommand extends Command
                 'copyImageToCache',
                 'preferredAssetRepresentationMode = .compatible',
             ],
+            base_path('nativephp/ios/NativePHP/ContentView.swift') => [
+                'WKWebsiteDataStore.default()',
+            ],
         ];
 
         $ok = true;
@@ -214,6 +218,14 @@ class BuildDeployCommand extends Command
 
             if (str_contains($contents, 'mobile-lite/bootstrap/ios/native.php')) {
                 $this->error("Unsafe mobile-lite bootstrap path still present in {$path}");
+                $ok = false;
+            }
+
+            if (
+                str_ends_with($path, 'ContentView.swift')
+                && str_contains($contents, 'WKWebsiteDataStore.nonPersistent()')
+            ) {
+                $this->error("Non-persistent WebView data store still present in {$path}");
                 $ok = false;
             }
 

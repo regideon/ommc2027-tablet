@@ -4,6 +4,7 @@ namespace App\Filament\Pages\Auth;
 
 use App\Models\User;
 use App\Services\SyncService;
+use App\Services\TrustedLoginService;
 use Filament\Auth\Http\Responses\Contracts\LoginResponse;
 use Filament\Facades\Filament;
 use Filament\Notifications\Notification;
@@ -43,6 +44,8 @@ class Login extends \Filament\Auth\Pages\Login
                 Filament::auth()->login($user, $remember);
             }
 
+            app(TrustedLoginService::class)->mark($user);
+
             $this->requestDevicePermissions();
 
             return app(LoginResponse::class);
@@ -74,6 +77,8 @@ class Login extends \Filament\Auth\Pages\Login
 
         $user = User::where('email', $email)->firstOrFail();
         Filament::auth()->login($user, $remember);
+
+        app(TrustedLoginService::class)->mark($user);
 
         $this->requestDevicePermissions();
 
