@@ -707,7 +707,9 @@ class SalescallPage extends Page
         }
 
         if ($outcome === 'completed' && ! $this->canSubmitSalescall($salescallId)) {
-            Notification::make()->title('Save brands and upload at least one photo per category before submitting.')->danger()->send();
+            // Message reflects only the active requirement below (brands) — photos
+            // are temporarily optional, see canSubmitSalescall().
+            Notification::make()->title('Save brands before submitting.')->danger()->send();
 
             return;
         }
@@ -763,10 +765,12 @@ class SalescallPage extends Page
 
     private function canSubmitSalescall(int $salescallId): bool
     {
-        return SalescallBrand::where('salescall_id', $salescallId)->exists()
-            && $this->allPhotoTypesCovered(
-                SalescallImage::where('salescall_id', $salescallId)->pluck('salescall_image_type_id')
-            );
+        // Photo requirement temporarily disabled (optional for now) — uncomment
+        // to re-enable "photo in every subcategory" as a submit requirement:
+        // && $this->allPhotoTypesCovered(
+        //     SalescallImage::where('salescall_id', $salescallId)->pluck('salescall_image_type_id')
+        // );
+        return SalescallBrand::where('salescall_id', $salescallId)->exists();
     }
 
     public function syncNow(): void

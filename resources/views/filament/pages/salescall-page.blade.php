@@ -421,7 +421,10 @@
         showPartialReason: false,
         partialReason: '',
         get canSubmitSalescall() {
-            return this.hasSavedBrands && this.photosComplete;
+            // Photo requirement temporarily disabled (optional for now) — uncomment
+            // to re-enable photo-in-every-subcategory as a submit requirement:
+            // return this.hasSavedBrands && this.photosComplete;
+            return this.hasSavedBrands;
         },
         finishVisit(outcome, reason = null) {
             if (this.finishing) return;
@@ -2297,10 +2300,13 @@
                                             <span class="material-symbols-outlined text-sm mat-fill" x-text="hasSavedBrands ? 'check_circle' : 'radio_button_unchecked'"></span>
                                             <span>Brands<span x-show="!hasSavedBrands"> (missing)</span></span>
                                         </span>
+                                        {{-- Photo requirement temporarily disabled (optional for now) — uncomment
+                                             to re-enable "photo in every subcategory" as a submit requirement:
                                         <span class="flex items-center gap-1.5 shrink-0" :class="photosComplete ? 'text-green-600' : 'text-red-500'">
                                             <span class="material-symbols-outlined text-sm mat-fill" x-text="photosComplete ? 'check_circle' : 'radio_button_unchecked'"></span>
                                             <span>Photo in every subcategory<span x-show="!photosComplete"> (missing)</span></span>
                                         </span>
+                                        --}}
                                     </p>
                                 </div>
                                 <div class="grid grid-cols-2 gap-2">
