@@ -1219,8 +1219,9 @@
                         @keydown.enter="callSearchQuery = callSearch"
                         @keydown.escape="callSearch = ''; callSearchQuery = ''"
                         class="bg-transparent border-none focus:ring-0 text-sm w-full text-[#191c1e]"
-                        placeholder="Search by name or ID, press Enter..."
-                        type="text"/>
+                        placeholder="Search customer"
+                        type="search"
+                        enterkeyhint="search"/>
                     <button x-show="callSearchQuery" @click="callSearch = ''; callSearchQuery = ''"
                         class="text-gray-400 hover:text-gray-600 text-sm leading-none">&times;</button>
                 </div>
@@ -1255,8 +1256,9 @@
                         @keydown.enter="callSearchQuery = callSearch"
                         @keydown.escape="callSearch = ''; callSearchQuery = ''"
                         class="bg-transparent border-none focus:ring-0 text-sm w-full text-[#191c1e]"
-                        placeholder="Search by name or ID..."
-                        type="text"/>
+                        placeholder="Search customer"
+                        type="search"
+                        enterkeyhint="search"/>
                     <button x-show="callSearchQuery" @click="callSearch = ''; callSearchQuery = ''"
                         class="text-gray-400 hover:text-gray-600 text-sm leading-none">&times;</button>
                 </div>
