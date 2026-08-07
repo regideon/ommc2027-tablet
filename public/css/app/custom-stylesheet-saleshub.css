@@ -195,9 +195,6 @@ a.fi-color.fi-color-primary.fi-text-color-500.dark\:fi-text-color-100.fi-link.fi
         visibility: visible !important;
     }
     body {
-        padding-bottom: 4rem !important; 
-    }
-    .fi-sidebar {
-        display: none !important;
+        padding-bottom: 4rem !important;
     }
 }
