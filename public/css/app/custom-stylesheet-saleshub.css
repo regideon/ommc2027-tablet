@@ -27,6 +27,12 @@ header.fi-sidebar-header {
 .fi-topbar-item:hover .fi-topbar-item-btn {
   background-color: rgba(250, 250, 250, 0.5);
 }
+.fi-page-header-main-ctn {
+    padding-top: 6px;
+}
+flex.flex-1.overflow-hidden.px-4 {
+    padding: 6px 0;
+}
 
 aside.fi-sidebar.fi-main-sidebar.fi-sidebar-open {
   /* width: 240px; */

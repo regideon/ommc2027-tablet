@@ -36,7 +36,7 @@ class SaleshubPanelProvider extends PanelProvider
             ->unsavedChangesAlerts()
             ->profile(isSimple: false)
             ->assets([
-                Css::make('custom-stylesheet', public_path('css/app/custom-stylesheet-saleshub.css')),
+                Css::make('custom-stylesheet-saleshub', public_path('css/app/custom-stylesheet-saleshub.css')),
                 Css::make('custom-stylesheet-fontawesome-all.min', public_path('css/app/custom-stylesheet-fontawesome-all.min.css')),
             ])
 

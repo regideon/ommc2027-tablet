@@ -1189,8 +1189,9 @@
                 <h1 class="text-lg font-bold text-on-surface">Sales Calls</h1>
             </div>
             <div x-show="showDetail" class="flex-1 min-w-0">
-                <p class="text-xs font-black text-[#890f00] uppercase tracking-wider truncate"
-                   x-text="'Seq #' + (selectedCall?.seq ?? '')"></p>
+                <p class="text-xs font-black text-[#890f00] uppercase tracking-wider truncate">
+                    <span x-text="'SALESCALL #' + (selectedCall?.id ?? '')"></span>
+                </p>
                 <h1 class="text-base font-bold text-[#191c1e] leading-tight truncate" x-text="selectedCall?.name"></h1>
             </div>
             <button
@@ -1499,6 +1500,7 @@
                                     <span x-show="call.type === 'Unplanned'" class="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-purple-100 text-purple-700">Unplanned</span>
                                 </h4>
                                 <p x-show="call.unique_id" class="text-[10px] text-[#890f00] font-mono truncate" x-text="call.unique_id"></p>
+                                <p class="text-[10px] text-gray-400 font-mono truncate" x-text="'#' + call.id"></p>
                                 <p class="text-[11px] text-[#737685] mt-0.5 truncate"
                                    x-text="filter === 'today'
                                        ? call.location + ' • ' + call.time
@@ -1551,7 +1553,7 @@
                     </div>
                     <div class="min-w-0 flex-1">
                         <span class="text-[10px] font-black text-[#890f00] tracking-widest uppercase">
-                            Sequence #<span x-text="selectedCall?.seq"></span>
+                            SALESCALL #<span x-text="selectedCall?.id"></span>
                         </span>
                         <h2 class="text-xl lg:text-2xl font-extrabold text-[#191c1e] leading-tight truncate flex items-center gap-2">
                             <span x-text="selectedCall?.name"></span>
@@ -1630,7 +1632,7 @@
                             </div>
                             <div class="min-w-0">
                                 <span class="text-[10px] font-black text-[#890f00] tracking-widest uppercase">
-                                    Sequence #<span x-text="selectedCall?.seq"></span>
+                                    SALESCALL #<span x-text="selectedCall?.id"></span>
                                 </span>
                                 <h2 class="text-lg lg:text-2xl font-extrabold text-[#191c1e] leading-tight truncate" x-text="selectedCall?.name"></h2>
                                 <p x-show="selectedCall?.unique_id" class="text-xs text-[#890f00] font-mono truncate" x-text="selectedCall?.unique_id"></p>
