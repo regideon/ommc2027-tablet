@@ -4,8 +4,8 @@ import androidx.fragment.app.FragmentActivity
 import android.content.Context
 
 // AUTO-GENERATED FILE - DO NOT EDIT
-// This file is overwritten during the build process with plugin registrations
+// No NativePHP plugins installed
 
 fun registerPluginBridgeFunctions(activity: FragmentActivity, context: Context) {
-    // No plugins installed - this file will be replaced during build
+    // No plugins to register
 }

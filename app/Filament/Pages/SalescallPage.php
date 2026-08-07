@@ -27,6 +27,7 @@ use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Attributes\On;
@@ -79,6 +80,15 @@ class SalescallPage extends Page
 
     public ?int $pendingPhotoTypeId = null;
 
+    /**
+     * Pending native captures keyed by the capture ID delivered back on
+     * PhotoTaken / MediaSelected / PhotoCancelled / PermissionDenied events.
+     * Each entry is ['salescall_id' => int, 'type_id' => int].
+     *
+     * @var array<string, array{salescall_id: int, type_id: int}>
+     */
+    public array $pendingPhoto = [];
+
     public function mount(): void
     {
         $this->preselectedId = (int) request()->get('call') ?: null;
@@ -96,7 +106,7 @@ class SalescallPage extends Page
 
         $this->callPhotos = $images->map(fn ($img) => [
             'id' => $img->id,
-            'url' => '/salescall-image/'.$img->id,
+            'url' => $this->previewUrlFor($img),
             'type' => $img->type?->name ?? '—',
             'category' => $img->type?->category?->name ?? '—',
         ])->all();
@@ -214,7 +224,14 @@ class SalescallPage extends Page
         $this->pendingPhotoTypeId = $typeId;
 
         if (function_exists('nativephp_call')) {
-            Camera::getPhoto()->start();
+            $capture = Camera::getPhoto();
+
+            $this->pendingPhoto[$capture->getId()] = [
+                'salescall_id' => $salescallId,
+                'type_id' => $typeId,
+            ];
+
+            $capture->start();
         }
     }
 
@@ -224,7 +241,14 @@ class SalescallPage extends Page
         $this->pendingPhotoTypeId = $typeId;
 
         if (function_exists('nativephp_call')) {
-            Camera::pickImages('image')->single()->start();
+            $picker = Camera::pickImages('image')->single();
+
+            $this->pendingPhoto[$picker->getId()] = [
+                'salescall_id' => $salescallId,
+                'type_id' => $typeId,
+            ];
+
+            $picker->start();
         }
     }
 
@@ -242,14 +266,11 @@ class SalescallPage extends Page
     #[On('native:'.PhotoTaken::class)]
     public function onPhotoTaken(string $path, string $mimeType = 'image/jpeg', ?string $id = null): void
     {
-        if (! $this->pendingPhotoSalescallId || ! $this->pendingPhotoTypeId) {
+        [$salescallId, $typeId] = $this->resolvePendingPhotoContext($id);
+
+        if (! $salescallId || ! $typeId) {
             return;
         }
-
-        $salescallId = $this->pendingPhotoSalescallId;
-        $typeId = $this->pendingPhotoTypeId;
-        $this->pendingPhotoSalescallId = null;
-        $this->pendingPhotoTypeId = null;
 
         $this->saveImageFromPath($path, $salescallId, $typeId);
     }
@@ -257,10 +278,7 @@ class SalescallPage extends Page
     #[On('native:'.MediaSelected::class)]
     public function onMediaSelected(bool $success, array $files = [], int $count = 0, ?string $error = null, bool $cancelled = false, ?string $id = null): void
     {
-        $salescallId = $this->pendingPhotoSalescallId;
-        $typeId = $this->pendingPhotoTypeId;
-        $this->pendingPhotoSalescallId = null;
-        $this->pendingPhotoTypeId = null;
+        [$salescallId, $typeId] = $this->resolvePendingPhotoContext($id);
 
         if ($cancelled) {
             return;
@@ -292,6 +310,13 @@ class SalescallPage extends Page
     #[On('native:'.PhotoCancelled::class)]
     public function onPhotoCancelled(bool $cancelled = true, ?string $id = null): void
     {
+        if ($id !== null) {
+            unset($this->pendingPhoto[$id]);
+
+            return;
+        }
+
+        $this->pendingPhoto = [];
         $this->pendingPhotoSalescallId = null;
         $this->pendingPhotoTypeId = null;
     }
@@ -299,13 +324,47 @@ class SalescallPage extends Page
     #[On('native:'.PermissionDenied::class)]
     public function onCameraPermissionDenied(string $action = 'photo', ?string $id = null): void
     {
-        $this->pendingPhotoSalescallId = null;
-        $this->pendingPhotoTypeId = null;
+        if ($id !== null) {
+            unset($this->pendingPhoto[$id]);
+        } else {
+            $this->pendingPhoto = [];
+            $this->pendingPhotoSalescallId = null;
+            $this->pendingPhotoTypeId = null;
+        }
 
         Notification::make()
             ->title('Camera permission is required to take photos.')
             ->danger()
             ->send();
+    }
+
+    /**
+     * Resolve which salescall + photo type an incoming native event belongs to.
+     * ID-keyed pending context is preferred whenever the event carries a capture
+     * ID; the legacy single-slot pending props are only used when no ID is
+     * available (older builds, Jump mode, direct test calls).
+     *
+     * @return array{0: ?int, 1: ?int} [salescallId, typeId]
+     */
+    private function resolvePendingPhotoContext(?string $id): array
+    {
+        if ($id !== null && isset($this->pendingPhoto[$id])) {
+            $context = $this->pendingPhoto[$id];
+            unset($this->pendingPhoto[$id]);
+
+            return [$context['salescall_id'], $context['type_id']];
+        }
+
+        if ($id !== null) {
+            return [null, null];
+        }
+
+        $salescallId = $this->pendingPhotoSalescallId;
+        $typeId = $this->pendingPhotoTypeId;
+        $this->pendingPhotoSalescallId = null;
+        $this->pendingPhotoTypeId = null;
+
+        return [$salescallId, $typeId];
     }
 
     private function saveImageFromPath(string $sourcePath, int $salescallId, int $typeId): void
@@ -340,7 +399,7 @@ class SalescallPage extends Page
 
         [$latitude, $longitude] = $this->extractPhotoGps($fullPath);
 
-        SalescallImage::create([
+        $image = SalescallImage::create([
             'salescall_id' => $salescallId,
             'salescall_image_type_id' => $typeId,
             'local_path' => $fullPath,
@@ -349,6 +408,8 @@ class SalescallPage extends Page
             'longitude' => $longitude,
             'sync_status' => 'pending',
         ]);
+
+        $this->mirrorPhotoForPreview($image);
 
         $this->loadPhotos($salescallId);
     }
@@ -363,7 +424,7 @@ class SalescallPage extends Page
         $fullPath = Storage::disk('local')->path($filename);
         [$latitude, $longitude] = $this->extractPhotoGps($fullPath);
 
-        SalescallImage::create([
+        $image = SalescallImage::create([
             'salescall_id' => $salescallId,
             'salescall_image_type_id' => $typeId,
             'local_path' => $fullPath,
@@ -372,6 +433,8 @@ class SalescallPage extends Page
             'longitude' => $longitude,
             'sync_status' => 'pending',
         ]);
+
+        $this->mirrorPhotoForPreview($image);
 
         $this->loadPhotos($salescallId);
     }
@@ -385,11 +448,79 @@ class SalescallPage extends Page
             @unlink($image->local_path);
         }
 
+        $this->deletePreviewMirror($image);
+
         $image->delete();
 
         $this->loadPhotos($salescallId);
 
         Notification::make()->title('Photo deleted.')->success()->send();
+    }
+
+    /**
+     * Deterministic, collision-safe preview mirror relative to the web root.
+     * Keyed on the persisted photo's local_uuid (unique per record) plus the
+     * extension of its canonical storage file — never on a random filename, so
+     * two captures with the same source basename still get distinct previews
+     * and re-mirroring always lands on the same path.
+     */
+    private function previewMirrorRelativePath(SalescallImage $image): string
+    {
+        $ext = strtolower(pathinfo($image->local_path, PATHINFO_EXTENSION)) ?: 'jpg';
+        $uuid = $image->local_uuid ?: (string) $image->id;
+
+        return 'salescall_images/'.$uuid.'.'.$ext;
+    }
+
+    /**
+     * Copy a persisted photo's canonical file into the web root so the native
+     * binary-safe `/_assets/...` handlers can stream it. Returns the relative
+     * web path on success, null when the source is missing or the copy fails.
+     */
+    private function mirrorPhotoForPreview(SalescallImage $image): ?string
+    {
+        $relative = $this->previewMirrorRelativePath($image);
+
+        if (! $image->local_path || ! is_file($image->local_path)) {
+            return null;
+        }
+
+        try {
+            File::ensureDirectoryExists(public_path('salescall_images'));
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if (@copy($image->local_path, public_path($relative)) === false) {
+            return null;
+        }
+
+        return $relative;
+    }
+
+    private function deletePreviewMirror(SalescallImage $image): void
+    {
+        $relative = $this->previewMirrorRelativePath($image);
+
+        if (is_file(public_path($relative))) {
+            @unlink(public_path($relative));
+        }
+    }
+
+    /**
+     * Build the preview URL for a photo, self-healing a missing mirror from the
+     * canonical storage file when possible. Falls back to the Laravel route
+     * (web + any platform without a binary-safe asset handler).
+     */
+    private function previewUrlFor(SalescallImage $image): string
+    {
+        $relative = $this->previewMirrorRelativePath($image);
+
+        if (! is_file(public_path($relative)) && $this->mirrorPhotoForPreview($image) === null) {
+            return '/salescall-image/'.$image->id;
+        }
+
+        return '/_assets/'.$relative;
     }
 
     /**
