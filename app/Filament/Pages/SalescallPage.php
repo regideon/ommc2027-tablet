@@ -228,6 +228,17 @@ class SalescallPage extends Page
         }
     }
 
+    /**
+     * TEMP: diagnostic sink for the photo-flow instrumentation in salescall-page.blade.php.
+     * Only invoked when window.__photoServerLog is enabled; writes a Laravel log line.
+     *
+     * @param  array<string, mixed>  $state
+     */
+    public function logPhotoFlow(array $state): void
+    {
+        Log::info('[photoflow]', $state);
+    }
+
     #[On('native:'.PhotoTaken::class)]
     public function onPhotoTaken(string $path, string $mimeType = 'image/jpeg', ?string $id = null): void
     {

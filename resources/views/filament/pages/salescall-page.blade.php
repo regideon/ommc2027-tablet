@@ -225,10 +225,116 @@
             if (covered.size === 0) return 'none';
             return covered.size >= types.length ? 'complete' : 'partial';
         },
-        startPhotoFlow()         { this.photoStep = 1; },
-        selectPhotoCategory(cat) { this.photoCategory = cat; this.photoStep = 2; },
-        selectPhotoType(type)    { this.photoType = type; this.photoStep = 3; },
-        cancelPhoto()            { this.photoStep = 0; this.photoCategory = null; this.photoType = null; },
+        // ---- TEMP: photo-flow diagnostics (remove once Step 3 root cause is confirmed) ----
+        __photoState() {
+            return {
+                photoStep: this.photoStep,
+                photoCategory: this.photoCategory?.name ?? null,
+                photoType: this.photoType?.name ?? null,
+                selected: this.selected ?? null,
+                tab: this.tab,
+                categories: (this.imageCategories || []).length,
+                callPhotos: ($wire.callPhotos || []).length,
+            };
+        },
+        __photoDomFacts() {
+            const el = document.querySelector('[x-show="photoStep === 3"]');
+            if (!el) return { step3Exists: false };
+            const cs = getComputedStyle(el);
+            return {
+                step3Exists: true,
+                step3Display: cs.display,
+                step3Opacity: cs.opacity,
+                step3Height: cs.height,
+                step3HtmlLength: el.innerHTML.length,
+            };
+        },
+        __logPhoto(event, extra = {}) {
+            const snap = { event, t: new Date().toISOString(), ...this.__photoState(), ...extra };
+            console.log('[PHOTOFLOW]', JSON.stringify(snap));
+            (window.__photoLog || (window.__photoLog = [])).push(snap);
+            if (window.__photoLog.length > 500) window.__photoLog.shift();
+        },
+        async __probeAfterRequest(event) {
+            if (!window.__photoServerLog) return;
+            const now = Date.now();
+            if (window.__photoProbeLast && now - window.__photoProbeLast < 3000) return;
+            window.__photoProbeLast = now;
+            try {
+                await $wire.logPhotoFlow({ event, clientTime: now, log: (window.__photoLog || []).slice(-25) });
+                this.__logPhoto('after-request', { probe: event, ...this.__photoDomFacts() });
+            } catch (error) {
+                this.__logPhoto('after-request-error', { probe: event, error: String(error) });
+            }
+        },
+        __photoDiag() {
+            const q = s => document.querySelector(s);
+            const cs = el => (el ? { display: getComputedStyle(el).display, opacity: getComputedStyle(el).opacity } : null);
+            let data = null;
+            try { data = window.Alpine ? window.Alpine.$data(q('[x-data]')) : null; } catch (e) { data = { _error: String(e) }; }
+            let state = null;
+            if (data && typeof data === 'object') {
+                try {
+                    state = {
+                        photoStep: data.photoStep,
+                        photoCategory: data.photoCategory?.name ?? null,
+                        photoType: data.photoType?.name ?? null,
+                        selected: data.selected ?? null,
+                        tab: data.tab,
+                        categories: (data.imageCategories || []).length,
+                        callPhotos: (data.$wire ? (data.$wire.callPhotos || []).length : null),
+                    };
+                } catch (e) { state = { _error: String(e) }; }
+            }
+            return {
+                state,
+                dom: {
+                    step3: cs(q('[x-show="photoStep === 3"]')),
+                    step2: cs(q('[x-show="photoStep === 2"]')),
+                    step1: cs(q('[x-show="photoStep === 1"]')),
+                    photosTab: cs(q('[x-show="tab === \'photos\'"]')),
+                },
+                versions: {
+                    alpine: window.Alpine?.version ?? null,
+                    livewire: window.Livewire?.version ?? null,
+                },
+                ua: navigator.userAgent,
+                innerWidth: window.innerWidth,
+                serverLogEnabled: !!window.__photoServerLog,
+                howToEnableServerLog: 'run: window.__photoServerLog = true',
+                logs: (window.__photoLog || []).slice(-20),
+            };
+        },
+        startPhotoFlow() {
+            this.__logPhoto('startPhotoFlow', { phase: 'before' });
+            this.photoStep = 1;
+            this.__logPhoto('startPhotoFlow', { phase: 'after' });
+            this.__probeAfterRequest('startPhotoFlow');
+        },
+        selectPhotoCategory(cat) {
+            this.__logPhoto('selectPhotoCategory', { phase: 'before', cat: cat?.name ?? null });
+            this.photoCategory = cat;
+            this.photoStep = 2;
+            this.__logPhoto('selectPhotoCategory', { phase: 'after' });
+            this.__probeAfterRequest('selectPhotoCategory');
+        },
+        selectPhotoType(type) {
+            this.__logPhoto('selectPhotoType', { phase: 'before', type: type?.name ?? null });
+            this.photoType = type;
+            this.photoStep = 3;
+            this.__logPhoto('selectPhotoType', { phase: 'after' });
+            this.$nextTick(() => this.__logPhoto('selectPhotoType', { phase: 'nextTick', ...this.__photoDomFacts() }));
+            setTimeout(() => this.__logPhoto('selectPhotoType', { phase: 'after-1s', ...this.__photoDomFacts() }), 1000);
+            this.__probeAfterRequest('selectPhotoType');
+        },
+        cancelPhoto() {
+            this.__logPhoto('cancelPhoto', { phase: 'before' });
+            this.photoStep = 0;
+            this.photoCategory = null;
+            this.photoType = null;
+            this.__logPhoto('cancelPhoto', { phase: 'after' });
+        },
+        // ---- END TEMP: photo-flow diagnostics ----
         hasPhotoForType(type) {
             try {
                 return ($wire.callPhotos || []).some(
@@ -646,6 +752,16 @@
         checkedIn = selectedCall ? (selectedCall.status !== 'scheduled' && selectedCall.status !== 'cancelled') : false;
         
         if (selected) { $wire.loadPhotos(selected); $wire.loadBrands(selected); $wire.loadCategories(selected); }
+
+        // ---- TEMP: photo-flow diagnostics (remove once Step 3 root cause is confirmed) ----
+        window.__photoLog = window.__photoLog || [];
+        window.__photoServerLog = window.__photoServerLog ?? false;
+        window.__photoProbeLast = window.__photoProbeLast ?? 0;
+        window.__photoDiag = () => this.__photoDiag();
+        $watch('photoStep', (v) => this.__logPhoto('watch-photoStep', { value: v, ...this.__photoDomFacts() }));
+        $watch('photoCategory', (v) => this.__logPhoto('watch-photoCategory', { value: v?.name ?? null }));
+        $watch('photoType', (v) => this.__logPhoto('watch-photoType', { value: v?.name ?? null }));
+        // ---- END TEMP: photo-flow diagnostics ----
 
         $watch('currentBrands', (b) => {
             if (!b || !Object.keys(b).length) return;
