@@ -17,6 +17,7 @@
         "livewire/livewire": "^4.2",
         "nativephp/mobile": "^3.2",
         "ommc2027/camera": "^1.0",
+        "ommc2027/geolocation": "^1.0",
         "relaticle/flowforge": "^4.0",
         "spatie/laravel-activitylog": "^4.10",
         "spatie/laravel-permission": "^7.3",
@@ -96,6 +97,13 @@
         {
             "type": "path",
             "url": "packages/ommc2027/camera",
+            "options": {
+                "symlink": true
+            }
+        },
+        {
+            "type": "path",
+            "url": "packages/ommc2027/geolocation",
             "options": {
                 "symlink": true
             }

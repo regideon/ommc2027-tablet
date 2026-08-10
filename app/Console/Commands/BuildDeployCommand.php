@@ -99,7 +99,11 @@ class BuildDeployCommand extends Command
 
         $this->line(Artisan::output());
 
-        if ($exitCode !== self::SUCCESS) {
+        // native:package can return 0 after an early signing failure; require the
+        // platform artifact before treating the HENRI build as successful.
+        $artifactPath = $this->findArtifact($platform);
+
+        if ($exitCode !== self::SUCCESS || $artifactPath === null) {
             $this->error('Build failed.');
 
             return self::FAILURE;
@@ -114,6 +118,14 @@ class BuildDeployCommand extends Command
                 return self::FAILURE;
             }
 
+            // native:install leaves empty plugin registration; native:package → native:build
+            // must have recompiled app-owned Camera/Geolocation into the generated tree.
+            if (! $this->verifyGeneratedIosArtifacts()) {
+                $this->error('Generated iOS plugin/runtime artifacts were missing after native:package. Do not ship; rebuild with app:build after a clean native:install ios.');
+
+                return self::FAILURE;
+            }
+
             // Restore durable sources/vendor template for the next install/build.
             $this->applyIosRuntimePatches();
 
@@ -124,14 +136,6 @@ class BuildDeployCommand extends Command
 
         $this->line('');
         $this->info('Build complete. Deploying artifact...');
-
-        $artifactPath = $this->findArtifact($platform);
-
-        if (! $artifactPath) {
-            $this->error('Could not locate build artifact.');
-
-            return self::FAILURE;
-        }
 
         $filename = $platform === 'ios' ? 'NativePHP.ipa' : 'NativePHP.apk';
         $destination = $this->downloadDir.'/'.$filename;
@@ -199,11 +203,103 @@ class BuildDeployCommand extends Command
                 'copyImageToCache',
                 'preferredAssetRepresentationMode = .compatible',
             ],
+            base_path('packages/ommc2027/geolocation/resources/ios/GeolocationFunctions.swift') => [
+                'Geolocation.GetCurrentPosition',
+                'requestLocation(',
+                'requestWhenInUseAuthorization()',
+                'manager.authorizationStatus',
+            ],
             base_path('nativephp/ios/NativePHP/ContentView.swift') => [
                 'WKWebsiteDataStore.default()',
             ],
         ];
 
+        $ok = $this->assertFileContainsNeedles($checks);
+
+        if ($ok) {
+            $this->info('Verified iOS runtime/camera/geolocation durable sources are present.');
+        }
+
+        return $ok;
+    }
+
+    /**
+     * Fail the build if native:package did not materialize the app-owned plugins,
+     * permissions, cookie-store override, and deployment target into nativephp/ios.
+     *
+     * native:install copies an empty plugin registration from the vendor template;
+     * only IOSPluginCompiler during native:build restores Camera/Geolocation.
+     */
+    private function verifyGeneratedIosArtifacts(): bool
+    {
+        $checks = [
+            base_path('nativephp/ios/NativePHP/Bridge/Plugins/Camera/CameraFunctions.swift') => [
+                'copyImageToCache',
+                'preferredAssetRepresentationMode = .compatible',
+                'Camera.GetPhoto',
+                'Camera.PickMedia',
+            ],
+            base_path('nativephp/ios/NativePHP/Bridge/Plugins/Geolocation/GeolocationFunctions.swift') => [
+                'Geolocation.GetCurrentPosition',
+                'requestLocation(',
+                'requestWhenInUseAuthorization()',
+                'manager.authorizationStatus',
+            ],
+            base_path('nativephp/ios/NativePHP/Bridge/Plugins/PluginBridgeFunctionRegistration.swift') => [
+                'Camera.GetPhoto',
+                'Camera.RecordVideo',
+                'Camera.PickMedia',
+                'Geolocation.GetCurrentPosition',
+                'Geolocation.CheckPermissions',
+                'Geolocation.RequestPermissions',
+            ],
+            base_path('nativephp/ios/NativePHP/ContentView.swift') => [
+                'WKWebsiteDataStore.default()',
+            ],
+            base_path('nativephp/ios/NativePHP/Info.plist') => [
+                'NSCameraUsageDescription',
+                'NSMicrophoneUsageDescription',
+                'NSLocationWhenInUseUsageDescription',
+            ],
+            base_path('nativephp/ios/NativePHP-simulator-Info.plist') => [
+                'NSCameraUsageDescription',
+                'NSMicrophoneUsageDescription',
+                'NSLocationWhenInUseUsageDescription',
+            ],
+            base_path('nativephp/ios/NativePHP.xcodeproj/project.pbxproj') => [
+                'IPHONEOS_DEPLOYMENT_TARGET = 15.6;',
+            ],
+        ];
+
+        $ok = $this->assertFileContainsNeedles($checks);
+
+        $contentView = base_path('nativephp/ios/NativePHP/ContentView.swift');
+        if (is_file($contentView) && str_contains((string) file_get_contents($contentView), 'WKWebsiteDataStore.nonPersistent()')) {
+            $this->error('Non-persistent WebView data store still present in generated ContentView.swift');
+            $ok = false;
+        }
+
+        $infoPlist = base_path('nativephp/ios/NativePHP/Info.plist');
+        if (is_file($infoPlist)) {
+            $plist = (string) file_get_contents($infoPlist);
+            if (str_contains($plist, 'NSLocationAlways')) {
+                $this->error('Unexpected always-location permission found in generated Info.plist');
+                $ok = false;
+            }
+        }
+
+        if ($ok) {
+            $this->info('Verified generated Camera/Geolocation bridges, permissions, cookie store, and iOS 15.6.');
+        }
+
+        return $ok;
+    }
+
+    /**
+     * @param  array<string, list<string>>  $checks
+     */
+    private function assertFileContainsNeedles(array $checks): bool
+    {
         $ok = true;
 
         foreach ($checks as $path => $needles) {
@@ -235,10 +331,6 @@ class BuildDeployCommand extends Command
                     $ok = false;
                 }
             }
-        }
-
-        if ($ok) {
-            $this->info('Verified iOS runtime/camera safeguards are present in sources Xcode will compile.');
         }
 
         return $ok;

@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use Illuminate\Support\ServiceProvider;
 use Ommc2027\Camera\Providers\CameraServiceProvider;
+use Ommc2027\Geolocation\Providers\GeolocationServiceProvider;
 
 class NativeServiceProvider extends ServiceProvider
 {
@@ -36,7 +37,7 @@ class NativeServiceProvider extends ServiceProvider
     {
         return [
             CameraServiceProvider::class,
-
+            GeolocationServiceProvider::class,
         ];
     }
 }

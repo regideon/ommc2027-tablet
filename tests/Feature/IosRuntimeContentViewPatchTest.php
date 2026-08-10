@@ -18,4 +18,5 @@ test('build deploy command ships ContentView as a durable ios runtime patch', fu
     expect($contents)->toContain("'ContentView.swift'");
     expect($contents)->toContain('WKWebsiteDataStore.default()');
     expect($contents)->toContain('WKWebsiteDataStore.nonPersistent()');
+    expect($contents)->toContain('verifyGeneratedIosArtifacts');
 });

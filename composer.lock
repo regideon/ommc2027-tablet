@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "6a8c6d4df56a3576f478f9ce19f157ae",
+    "content-hash": "5c3d62759c89333af4d587c534332339",
     "packages": [
         {
             "name": "anourvalar/eloquent-serialize",
@@ -4870,6 +4870,43 @@
                 "proprietary"
             ],
             "description": "App-owned camera plugin for NativePHP Mobile (iOS 15.6 compatible)",
+            "transport-options": {
+                "symlink": true,
+                "relative": true
+            }
+        },
+        {
+            "name": "ommc2027/geolocation",
+            "version": "1.0.0",
+            "dist": {
+                "type": "path",
+                "url": "packages/ommc2027/geolocation",
+                "reference": "2fcc0e591b7233eabb6dd3c04fef1f2b6626aae4"
+            },
+            "require": {
+                "nativephp/mobile": "^3.2",
+                "php": "^8.2"
+            },
+            "type": "nativephp-plugin",
+            "extra": {
+                "nativephp": {
+                    "manifest": "nativephp.json"
+                },
+                "laravel": {
+                    "providers": [
+                        "Ommc2027\\Geolocation\\Providers\\GeolocationServiceProvider"
+                    ]
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Ommc2027\\Geolocation\\": "src/"
+                }
+            },
+            "license": [
+                "proprietary"
+            ],
+            "description": "App-owned geolocation plugin for NativePHP Mobile (iOS 15.6 compatible)",
             "transport-options": {
                 "symlink": true,
                 "relative": true

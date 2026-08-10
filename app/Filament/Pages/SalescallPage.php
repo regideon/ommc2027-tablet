@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Listeners\HandleLocationReceived;
 use App\Models\Brand;
 use App\Models\Category;
 use App\Models\Customer;
@@ -35,6 +36,7 @@ use Native\Mobile\Events\Camera\PermissionDenied;
 use Native\Mobile\Events\Camera\PhotoCancelled;
 use Native\Mobile\Events\Camera\PhotoTaken;
 use Native\Mobile\Events\Gallery\MediaSelected;
+use Native\Mobile\Events\Geolocation\LocationReceived;
 use Native\Mobile\Facades\Camera;
 use Native\Mobile\Facades\Geolocation;
 
@@ -891,6 +893,35 @@ class SalescallPage extends Page
         } catch (\Throwable $e) {
             Log::warning('GPS capture request failed: '.$e->getMessage());
         }
+    }
+
+    /**
+     * Native geolocation results arrive via Livewire (`native:` + event class),
+     * matching the working camera/gallery pattern. The vendor
+     * `_native/api/events` JSON path uses Request::get(), which does not read
+     * JSON bodies, so Event::listen alone never persists coordinates.
+     */
+    #[On('native:'.LocationReceived::class)]
+    public function onLocationReceived(
+        bool $success,
+        ?float $latitude = null,
+        ?float $longitude = null,
+        ?float $accuracy = null,
+        ?int $timestamp = null,
+        ?string $provider = null,
+        ?string $error = null,
+        ?string $id = null,
+    ): void {
+        app(HandleLocationReceived::class)->handle(new LocationReceived(
+            $success,
+            $latitude,
+            $longitude,
+            $accuracy,
+            $timestamp,
+            $provider,
+            $error,
+            $id,
+        ));
     }
 
     public function finishLocation(int $salescallId, float $lat, float $lng, bool $isOnline = false): void

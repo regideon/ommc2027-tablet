@@ -1,0 +1,42 @@
+{
+    "namespace": "Geolocation",
+    "bridge_functions": [
+        {
+            "name": "Geolocation.GetCurrentPosition",
+            "ios": "GeolocationFunctions.GetCurrentPosition",
+            "description": "Get the current device location"
+        },
+        {
+            "name": "Geolocation.CheckPermissions",
+            "ios": "GeolocationFunctions.CheckPermissions",
+            "description": "Check the current location permission status"
+        },
+        {
+            "name": "Geolocation.RequestPermissions",
+            "ios": "GeolocationFunctions.RequestPermissions",
+            "description": "Request location permission from the user"
+        }
+    ],
+    "android": {
+        "min_version": 26,
+        "permissions": [
+            "android.permission.ACCESS_COARSE_LOCATION",
+            "android.permission.ACCESS_FINE_LOCATION"
+        ]
+    },
+    "ios": {
+        "min_version": "15.6",
+        "info_plist": {
+            "NSLocationWhenInUseUsageDescription": "Location access is required to record your location during sales calls and related field activities."
+        },
+        "dependencies": {
+            "swift_packages": [],
+            "pods": []
+        }
+    },
+    "events": [
+        "Native\\Mobile\\Events\\Geolocation\\LocationReceived",
+        "Native\\Mobile\\Events\\Geolocation\\PermissionRequestResult",
+        "Native\\Mobile\\Events\\Geolocation\\PermissionStatusReceived"
+    ]
+}

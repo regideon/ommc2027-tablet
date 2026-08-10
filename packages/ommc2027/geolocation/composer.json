@@ -1,0 +1,28 @@
+{
+    "name": "ommc2027/geolocation",
+    "description": "App-owned geolocation plugin for NativePHP Mobile (iOS 15.6 compatible)",
+    "type": "nativephp-plugin",
+    "license": "proprietary",
+    "version": "1.0.0",
+    "require": {
+        "php": "^8.2",
+        "nativephp/mobile": "^3.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "Ommc2027\\Geolocation\\": "src/"
+        }
+    },
+    "extra": {
+        "nativephp": {
+            "manifest": "nativephp.json"
+        },
+        "laravel": {
+            "providers": [
+                "Ommc2027\\Geolocation\\Providers\\GeolocationServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
