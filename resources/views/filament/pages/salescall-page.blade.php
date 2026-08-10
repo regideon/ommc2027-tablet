@@ -1,6 +1,7 @@
 <x-filament-panels::page>
 
 <div
+    id="salescall-page-root"
     x-data="{
         showMap: false,
         leafletMap: null,
@@ -189,10 +190,9 @@
             }
         },
 
-        imageCategories: {{ $imageCategoriesJson }},
-        photoStep: 0,
-        photoCategory: null,
-        photoType: null,
+        // Photo capture wizard state (photoStep / category / type) lives in a nested
+        // Alpine island under wire:ignore so Livewire morphs cannot reset it. See
+        // #salescall-photo-wizard. Preview/delete + list stay on this root component.
         previewPhoto: null,
         photoToDelete: null,
         deletingPhoto: false,
@@ -214,41 +214,8 @@
             });
             return Object.values(groups);
         },
-        categoryCoverage(cat) {
-            const types = cat.types || [];
-            if (!types.length) return 'none';
-            const covered = new Set(
-                ($wire.callPhotos || [])
-                    .filter(p => p.category === cat.name)
-                    .map(p => p.type)
-            );
-            if (covered.size === 0) return 'none';
-            return covered.size >= types.length ? 'complete' : 'partial';
-        },
-        startPhotoFlow() {
-            this.photoStep = 1;
-        },
-        selectPhotoCategory(cat) {
-            this.photoCategory = cat;
-            this.photoStep = 2;
-        },
-        selectPhotoType(type) {
-            this.photoType = type;
-            this.photoStep = 3;
-        },
-        cancelPhoto() {
-            this.photoStep = 0;
-            this.photoCategory = null;
-            this.photoType = null;
-        },
-        hasPhotoForType(type) {
-            try {
-                return ($wire.callPhotos || []).some(
-                    photo => photo && photo.type === type.name
-                );
-            } catch (error) {
-                return false;
-            }
+        resetPhotoWizard() {
+            window.dispatchEvent(new CustomEvent('salescall-photo-wizard-reset'));
         },
         calls: {{ $callsJson }},
 
@@ -401,9 +368,7 @@
             $wire.loadCategories(id);
             const call = this.calls.find(c => c.id === id);
             if (call?.customer_id) { $wire.loadCustomerNotes(call.customer_id); }
-            this.photoStep = 0;
-            this.photoCategory = null;
-            this.photoType = null;
+            this.resetPhotoWizard();
 
             // Always reset these regardless of tab — $watch('tab') only fires on changes,
             // so if tab was already 'overview' these would silently persist to the new call.
@@ -665,6 +630,11 @@
     }"
     
     x-init="
+        // Shared wizard step for list visibility outside the wire:ignore island.
+        if (!Alpine.store('salescallPhotoWizard')) {
+            Alpine.store('salescallPhotoWizard', { photoStep: 0, photoCategory: null, photoType: null });
+        }
+
         checkedIn = selectedCall ? (selectedCall.status !== 'scheduled' && selectedCall.status !== 'cancelled') : false;
         
         if (selected) { $wire.loadPhotos(selected); $wire.loadBrands(selected); $wire.loadCategories(selected); }
@@ -1880,8 +1850,8 @@
                     {{-- PHOTOS TAB --}}
                     <div x-show="tab === 'photos'" class="space-y-4">
 
-                        {{-- Step 0: Photo List + Add Button --}}
-                        <div x-show="photoStep === 0">
+                        {{-- Photo list stays outside wire:ignore so Livewire/$wire.callPhotos updates still refresh thumbnails. --}}
+                        <div x-show="($store.salescallPhotoWizard?.photoStep ?? 0) === 0">
 
                             {{-- Empty state --}}
                             <div x-show="($wire.callPhotos || []).length === 0"
@@ -1915,144 +1885,228 @@
                                     </div>
                                 </div>
                             </template>
-
-                            <button @click="startPhotoFlow()"
-                                class="w-full flex items-center justify-center gap-2 h-12 border-2 border-dashed border-gray-300 rounded-2xl text-[#737685] font-bold text-sm hover:border-[#890f00] hover:text-[#890f00] transition-colors">
-                                <span class="material-symbols-outlined text-xl">add_a_photo</span>
-                                Add Photo
-                            </button>
                         </div>
 
-                        {{-- Step 1: Choose Category --}}
-                        <div x-show="photoStep === 1" x-transition>
-                            <div class="flex items-center gap-3 mb-5">
-                                <button @click="cancelPhoto()"
-                                    class="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
-                                    <span class="material-symbols-outlined text-gray-500 text-xl">arrow_back</span>
-                                </button>
-                                <p class="font-black text-[#191c1e]">Choose Category</p>
-                            </div>
-                            <div class="grid grid-cols-2 gap-3">
-                                <template x-for="cat in imageCategories" :key="cat.id">
-                                    <button @click="selectPhotoCategory(cat)"
-                                        class="relative flex flex-col items-center justify-center gap-3 h-32 bg-white border-2 rounded-2xl hover:border-[#890f00] hover:bg-red-50 active:scale-[0.97] transition-all"
-                                        :class="{
-                                            'border-green-400': categoryCoverage(cat) === 'complete',
-                                            'border-orange-400': categoryCoverage(cat) === 'partial',
-                                            'border-gray-200': categoryCoverage(cat) === 'none',
-                                        }">
-                                        <span x-show="categoryCoverage(cat) === 'complete'"
-                                              class="material-symbols-outlined mat-fill absolute top-2 right-2 text-green-600 text-lg">check_circle</span>
-                                        <span x-show="categoryCoverage(cat) === 'partial'"
-                                              class="material-symbols-outlined mat-fill absolute top-2 right-2 text-orange-500 text-lg">check_circle</span>
-                                        <span class="material-symbols-outlined text-4xl text-[#890f00]"
-                                              x-text="cat.slug === 'exterior' ? 'storefront' : 'battery_charging_full'"></span>
-                                        <p class="font-black text-sm text-[#191c1e]" x-text="cat.name"></p>
+                        {{-- Capture wizard island: nested Alpine + wire:ignore so Livewire morph cannot reset photoStep. --}}
+                        <div wire:ignore id="salescall-photo-wizard">
+                            <div
+                                x-data="{
+                                    photoStep: 0,
+                                    photoCategory: null,
+                                    photoType: null,
+                                    imageCategories: {{ $imageCategoriesJson }},
+                                    syncWizardStore() {
+                                        let store = Alpine.store('salescallPhotoWizard');
+                                        if (!store) {
+                                            Alpine.store('salescallPhotoWizard', {
+                                                photoStep: 0,
+                                                photoCategory: null,
+                                                photoType: null,
+                                            });
+                                            store = Alpine.store('salescallPhotoWizard');
+                                        }
+                                        store.photoStep = this.photoStep;
+                                        store.photoCategory = this.photoCategory;
+                                        store.photoType = this.photoType;
+                                    },
+                                    init() {
+                                        this.syncWizardStore();
+                                        this.$watch('photoStep', () => this.syncWizardStore());
+                                        this.$watch('photoCategory', () => this.syncWizardStore());
+                                        this.$watch('photoType', () => this.syncWizardStore());
+                                    },
+                                    parentSelected() {
+                                        const root = document.getElementById('salescall-page-root');
+                                        if (!root) return null;
+                                        try {
+                                            return Alpine.$data(root).selected ?? null;
+                                        } catch (error) {
+                                            return null;
+                                        }
+                                    },
+                                    categoryCoverage(cat) {
+                                        const types = cat.types || [];
+                                        if (!types.length) return 'none';
+                                        const covered = new Set(
+                                            ($wire.callPhotos || [])
+                                                .filter(p => p.category === cat.name)
+                                                .map(p => p.type)
+                                        );
+                                        if (covered.size === 0) return 'none';
+                                        return covered.size >= types.length ? 'complete' : 'partial';
+                                    },
+                                    startPhotoFlow() {
+                                        this.photoStep = 1;
+                                    },
+                                    selectPhotoCategory(cat) {
+                                        this.photoCategory = cat;
+                                        this.photoStep = 2;
+                                    },
+                                    selectPhotoType(type) {
+                                        this.photoType = type;
+                                        this.photoStep = 3;
+                                    },
+                                    cancelPhoto() {
+                                        this.photoStep = 0;
+                                        this.photoCategory = null;
+                                        this.photoType = null;
+                                    },
+                                    hasPhotoForType(type) {
+                                        try {
+                                            return ($wire.callPhotos || []).some(
+                                                photo => photo && photo.type === type.name
+                                            );
+                                        } catch (error) {
+                                            return false;
+                                        }
+                                    },
+                                }"
+                                @salescall-photo-wizard-reset.window="cancelPhoto()"
+                            >
+                                {{-- Step 0: Add Photo only (list is outside this island) --}}
+                                <div x-show="photoStep === 0">
+                                    <button type="button" @click="startPhotoFlow()"
+                                        class="w-full flex items-center justify-center gap-2 h-12 border-2 border-dashed border-gray-300 rounded-2xl text-[#737685] font-bold text-sm hover:border-[#890f00] hover:text-[#890f00] transition-colors">
+                                        <span class="material-symbols-outlined text-xl">add_a_photo</span>
+                                        Add Photo
                                     </button>
-                                </template>
-                            </div>
-                        </div>
+                                </div>
 
-                        {{-- Step 2: Choose Type --}}
-                        <div x-show="photoStep === 2" x-transition>
-                            <div class="flex items-center gap-3 mb-5">
-                                <button @click="photoStep = 1; photoType = null;"
-                                    class="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
-                                    <span class="material-symbols-outlined text-gray-500 text-xl">arrow_back</span>
-                                </button>
-                                <div>
-                                    <p class="text-[10px] font-black text-[#890f00] uppercase tracking-widest"
-                                       x-text="photoCategory?.name"></p>
-                                    <p class="font-black text-[#191c1e]">Choose Type</p>
+                                {{-- Step 1: Choose Category --}}
+                                <div x-show="photoStep === 1" x-transition>
+                                    <div class="flex items-center gap-3 mb-5">
+                                        <button type="button" @click="cancelPhoto()"
+                                            class="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
+                                            <span class="material-symbols-outlined text-gray-500 text-xl">arrow_back</span>
+                                        </button>
+                                        <p class="font-black text-[#191c1e]">Choose Category</p>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <template x-for="cat in imageCategories" :key="cat.id">
+                                            <button type="button" @click="selectPhotoCategory(cat)"
+                                                class="relative flex flex-col items-center justify-center gap-3 h-32 bg-white border-2 rounded-2xl hover:border-[#890f00] hover:bg-red-50 active:scale-[0.97] transition-all"
+                                                :class="{
+                                                    'border-green-400': categoryCoverage(cat) === 'complete',
+                                                    'border-orange-400': categoryCoverage(cat) === 'partial',
+                                                    'border-gray-200': categoryCoverage(cat) === 'none',
+                                                }">
+                                                <span x-show="categoryCoverage(cat) === 'complete'"
+                                                      class="material-symbols-outlined mat-fill absolute top-2 right-2 text-green-600 text-lg">check_circle</span>
+                                                <span x-show="categoryCoverage(cat) === 'partial'"
+                                                      class="material-symbols-outlined mat-fill absolute top-2 right-2 text-orange-500 text-lg">check_circle</span>
+                                                <span class="material-symbols-outlined text-4xl text-[#890f00]"
+                                                      x-text="cat.slug === 'exterior' ? 'storefront' : 'battery_charging_full'"></span>
+                                                <p class="font-black text-sm text-[#191c1e]" x-text="cat.name"></p>
+                                            </button>
+                                        </template>
+                                    </div>
+                                </div>
+
+                                {{-- Step 2: Choose Type --}}
+                                <div x-show="photoStep === 2" x-transition>
+                                    <div class="flex items-center gap-3 mb-5">
+                                        <button type="button" @click="photoStep = 1; photoType = null;"
+                                            class="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
+                                            <span class="material-symbols-outlined text-gray-500 text-xl">arrow_back</span>
+                                        </button>
+                                        <div>
+                                            <p class="text-[10px] font-black text-[#890f00] uppercase tracking-widest"
+                                               x-text="photoCategory?.name"></p>
+                                            <p class="font-black text-[#191c1e]">Choose Type</p>
+                                        </div>
+                                    </div>
+                                    <div class="space-y-2">
+                                        <template x-for="type in (photoCategory?.types || [])" :key="type.id">
+                                            <button type="button"
+                                                @click="selectPhotoType(type)"
+                                                @keydown.enter="selectPhotoType(type)"
+                                                class="w-full flex items-center gap-4 px-5 py-4 bg-white border border-gray-200 rounded-2xl text-left transition-all cursor-pointer touch-manipulation select-none active:scale-[0.98] active:border-[#890f00] active:bg-red-50"
+                                                :class="hasPhotoForType(type) ? 'border-green-400' : 'border-gray-200'">
+                                                <span class="material-symbols-outlined text-[#890f00]">photo_camera</span>
+                                                <p class="font-bold text-sm text-[#191c1e]" x-text="type.name"></p>
+                                                <span x-show="hasPhotoForType(type)"
+                                                      class="material-symbols-outlined mat-fill text-green-600 ml-auto">check_circle</span>
+                                                <span x-show="!hasPhotoForType(type)"
+                                                      class="material-symbols-outlined text-gray-300 ml-auto">chevron_right</span>
+                                            </button>
+                                        </template>
+                                    </div>
+                                </div>
+
+                                {{-- Step 3: Capture or Gallery --}}
+                                <div x-show="photoStep === 3" x-transition data-photo-step3>
+                                    <div class="flex items-center gap-3 mb-5">
+                                        <button type="button" @click="photoStep = 2; photoType = null;"
+                                            class="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
+                                            <span class="material-symbols-outlined text-gray-500 text-xl">arrow_back</span>
+                                        </button>
+                                        <div>
+                                            <p class="text-[10px] font-black text-[#890f00] uppercase tracking-widest"
+                                               x-text="(photoCategory?.name ?? '') + ' · ' + (photoType?.name ?? '')"></p>
+                                            <p class="font-black text-[#191c1e]">Capture Photo</p>
+                                        </div>
+                                    </div>
+                                    {{-- Hidden file inputs for browser fallback (ignored on Android WebView) --}}
+                                    <input type="file" id="browser-camera-input" accept="image/*" capture="camera" class="hidden"
+                                        @change="
+                                            const file = $event.target.files[0];
+                                            if (!file) return;
+                                            const scId = parentSelected();
+                                            const typeId = photoType ? photoType.id : null;
+                                            cancelPhoto();
+                                            if (!scId || !typeId) return;
+                                            const reader = new FileReader();
+                                            reader.onload = e => { $wire.saveImage(scId, typeId, e.target.result); };
+                                            reader.readAsDataURL(file);
+                                            $event.target.value = '';
+                                        ">
+                                    <input type="file" id="browser-gallery-input" accept="image/*" class="hidden"
+                                        @change="
+                                            const file = $event.target.files[0];
+                                            if (!file) return;
+                                            const scId = parentSelected();
+                                            const typeId = photoType ? photoType.id : null;
+                                            cancelPhoto();
+                                            if (!scId || !typeId) return;
+                                            const reader = new FileReader();
+                                            reader.onload = e => { $wire.saveImage(scId, typeId, e.target.result); };
+                                            reader.readAsDataURL(file);
+                                            $event.target.value = '';
+                                        ">
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <button type="button" @click="
+                                                const scId = parentSelected();
+                                                if (!scId || !photoType) return;
+                                                if (document.body.classList.contains('nativephp-android') || document.body.classList.contains('nativephp-ios')) {
+                                                    $wire.takePhoto(scId, photoType.id); cancelPhoto();
+                                                } else {
+                                                    document.getElementById('browser-camera-input').click();
+                                                }
+                                            "
+                                            class="flex flex-col items-center justify-center gap-3 h-36 bg-[#890f00] text-white rounded-2xl cursor-pointer hover:opacity-95 active:scale-[0.97] transition-all">
+                                            <span class="material-symbols-outlined text-4xl">photo_camera</span>
+                                            <p class="font-black text-sm">Take Photo</p>
+                                        </button>
+                                        <button type="button" @click="
+                                                const scId = parentSelected();
+                                                if (!scId || !photoType) return;
+                                                if (document.body.classList.contains('nativephp-android') || document.body.classList.contains('nativephp-ios')) {
+                                                    $wire.pickFromGallery(scId, photoType.id); cancelPhoto();
+                                                } else {
+                                                    document.getElementById('browser-gallery-input').click();
+                                                }
+                                            "
+                                            class="flex flex-col items-center justify-center gap-3 h-36 bg-white border-2 border-gray-200 rounded-2xl cursor-pointer hover:border-[#890f00] hover:bg-red-50 active:scale-[0.97] transition-all">
+                                            <span class="material-symbols-outlined text-4xl text-[#890f00]">photo_library</span>
+                                            <p class="font-black text-sm text-[#191c1e]">Gallery</p>
+                                        </button>
+                                    </div>
+                                    <button type="button" @click="cancelPhoto()"
+                                        class="w-full mt-4 h-11 bg-gray-100 text-[#737685] rounded-2xl font-bold text-sm hover:bg-gray-200 transition-colors">
+                                        Cancel
+                                    </button>
                                 </div>
                             </div>
-                            <div class="space-y-2">
-                                <template x-for="type in (photoCategory?.types || [])" :key="type.id">
-                                    <button type="button"
-                                        @click="selectPhotoType(type)"
-                                        @keydown.enter="selectPhotoType(type)"
-                                        class="w-full flex items-center gap-4 px-5 py-4 bg-white border border-gray-200 rounded-2xl text-left transition-all cursor-pointer touch-manipulation select-none active:scale-[0.98] active:border-[#890f00] active:bg-red-50"
-                                        :class="hasPhotoForType(type) ? 'border-green-400' : 'border-gray-200'">
-                                        <span class="material-symbols-outlined text-[#890f00]">photo_camera</span>
-                                        <p class="font-bold text-sm text-[#191c1e]" x-text="type.name"></p>
-                                        <span x-show="hasPhotoForType(type)"
-                                              class="material-symbols-outlined mat-fill text-green-600 ml-auto">check_circle</span>
-                                        <span x-show="!hasPhotoForType(type)"
-                                              class="material-symbols-outlined text-gray-300 ml-auto">chevron_right</span>
-                                    </button>
-                                </template>
-                            </div>
-                        </div>
-
-                        {{-- Step 3: Capture or Gallery --}}
-                        <div x-show="photoStep === 3" x-transition>
-                            <div class="flex items-center gap-3 mb-5">
-                                <button @click="photoStep = 2; photoType = null;"
-                                    class="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
-                                    <span class="material-symbols-outlined text-gray-500 text-xl">arrow_back</span>
-                                </button>
-                                <div>
-                                    <p class="text-[10px] font-black text-[#890f00] uppercase tracking-widest"
-                                       x-text="(photoCategory?.name ?? '') + ' · ' + (photoType?.name ?? '')"></p>
-                                    <p class="font-black text-[#191c1e]">Capture Photo</p>
-                                </div>
-                            </div>
-                            {{-- Hidden file inputs for browser fallback (ignored on Android WebView) --}}
-                            <input type="file" id="browser-camera-input" accept="image/*" capture="camera" class="hidden"
-                                @change="
-                                    const file = $event.target.files[0];
-                                    if (!file) return;
-                                    const scId = selected;
-                                    const typeId = photoType ? photoType.id : null;
-                                    cancelPhoto();
-                                    if (!scId || !typeId) return;
-                                    const reader = new FileReader();
-                                    reader.onload = e => { $wire.saveImage(scId, typeId, e.target.result); };
-                                    reader.readAsDataURL(file);
-                                    $event.target.value = '';
-                                ">
-                            <input type="file" id="browser-gallery-input" accept="image/*" class="hidden"
-                                @change="
-                                    const file = $event.target.files[0];
-                                    if (!file) return;
-                                    const scId = selected;
-                                    const typeId = photoType ? photoType.id : null;
-                                    cancelPhoto();
-                                    if (!scId || !typeId) return;
-                                    const reader = new FileReader();
-                                    reader.onload = e => { $wire.saveImage(scId, typeId, e.target.result); };
-                                    reader.readAsDataURL(file);
-                                    $event.target.value = '';
-                                ">
-                            <div class="grid grid-cols-2 gap-3">
-                                <button @click="
-                                        if (document.body.classList.contains('nativephp-android') || document.body.classList.contains('nativephp-ios')) {
-                                            $wire.takePhoto(selected, photoType.id); cancelPhoto();
-                                        } else {
-                                            document.getElementById('browser-camera-input').click();
-                                        }
-                                    "
-                                    class="flex flex-col items-center justify-center gap-3 h-36 bg-[#890f00] text-white rounded-2xl cursor-pointer hover:opacity-95 active:scale-[0.97] transition-all">
-                                    <span class="material-symbols-outlined text-4xl">photo_camera</span>
-                                    <p class="font-black text-sm">Take Photo</p>
-                                </button>
-                                <button @click="
-                                        if (document.body.classList.contains('nativephp-android') || document.body.classList.contains('nativephp-ios')) {
-                                            $wire.pickFromGallery(selected, photoType.id); cancelPhoto();
-                                        } else {
-                                            document.getElementById('browser-gallery-input').click();
-                                        }
-                                    "
-                                    class="flex flex-col items-center justify-center gap-3 h-36 bg-white border-2 border-gray-200 rounded-2xl cursor-pointer hover:border-[#890f00] hover:bg-red-50 active:scale-[0.97] transition-all">
-                                    <span class="material-symbols-outlined text-4xl text-[#890f00]">photo_library</span>
-                                    <p class="font-black text-sm text-[#191c1e]">Gallery</p>
-                                </button>
-                            </div>
-                            <button @click="cancelPhoto()"
-                                class="w-full mt-4 h-11 bg-gray-100 text-[#737685] rounded-2xl font-bold text-sm hover:bg-gray-200 transition-colors">
-                                Cancel
-                            </button>
-
                         </div>
                     </div>
 

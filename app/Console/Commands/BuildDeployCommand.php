@@ -359,7 +359,18 @@ class BuildDeployCommand extends Command
             return false;
         }
 
-        $this->info('iOS app.zip contains required bootstrap/runtime files.');
+        $photoFlowMissing = $validator->missingSalescallPhotoFlowMarkers($zipPath);
+
+        if ($photoFlowMissing !== []) {
+            $this->error('iOS app.zip is missing Sales Call photo-flow markers:');
+            foreach ($photoFlowMissing as $needle) {
+                $this->line('  - '.$needle);
+            }
+
+            return false;
+        }
+
+        $this->info('iOS app.zip contains required bootstrap/runtime files and Sales Call photo-flow markers.');
 
         return true;
     }
