@@ -11,14 +11,14 @@ if (googleServicesJson.exists()) {
 
 android {
     namespace = "com.nativephp.mobile"
-    compileSdk = 36
+    compileSdk = REPLACE_COMPILE_SDK
 
     defaultConfig {
-        applicationId = "com.kaisa.ommc2027tablet"
-        minSdk = 33
-        targetSdk = 36
-        versionCode = 38
-        versionName = "1.0.0"
+        applicationId = "REPLACE_APP_ID"
+        minSdk = REPLACE_MIN_SDK
+        targetSdk = REPLACE_TARGET_SDK
+        versionCode = REPLACEMECODE
+        versionName = "REPLACEME"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -66,8 +66,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
-            isShrinkResources = false
+            isMinifyEnabled = REPLACE_MINIFY_ENABLED
+            isShrinkResources = REPLACE_SHRINK_RESOURCES
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -80,13 +80,13 @@ android {
             }
             
             ndk {
-                debugSymbolLevel = "FULL"
+                debugSymbolLevel = "REPLACE_DEBUG_SYMBOLS"
             }
         }
         debug {
             isJniDebuggable = true
             ndk {
-                debugSymbolLevel = "FULL"
+                debugSymbolLevel = "REPLACE_DEBUG_SYMBOLS"
             }
         }
     }

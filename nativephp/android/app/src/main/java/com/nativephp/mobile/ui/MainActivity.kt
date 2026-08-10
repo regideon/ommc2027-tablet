@@ -68,7 +68,7 @@ class MainActivity : FragmentActivity(), WebViewProvider {
     private var showSplash by mutableStateOf(true)
 
     // Status bar style configuration - replaced during build
-    private val statusBarStyle = "auto"
+    private val statusBarStyle = "REPLACE_STATUS_BAR_STYLE"
 
     companion object {
         // Static instance holder for accessing MainActivity from other activities

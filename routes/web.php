@@ -1,7 +1,7 @@
 <?php
 
 use App\Models\SalescallImage;
-use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\Support\Facades\Route;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
@@ -16,16 +16,14 @@ Route::prefix('download')
     ->withoutMiddleware([
         StartSession::class,
         ShareErrorsFromSession::class,
-        ValidateCsrfToken::class,
+        PreventRequestForgery::class,
     ])
     ->group(function () {
         Route::get('/', function () {
-            $logoPath = public_path('nativephp-icon-web.png');
-
             return view('download', [
                 'data' => [
-                    'title' => 'Laravel',
-                    'logo' => asset('nativephp-icon-web.png').'?v='.filemtime($logoPath),
+                    'title' => config('app.name', 'Laravel'),
+                    'logo' => route('download.icon'),
                     'download_link' => route('download.manifest'),
                     'apk_link' => route('download.apk'),
                 ],
@@ -35,6 +33,7 @@ Route::prefix('download')
         Route::get('/manifest.plist', function () {
             $ipaUrl = route('download.ipa');
             $iconUrl = route('download.icon');
+            $title = config('app.name', 'Laravel');
 
             $manifest = <<<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -74,7 +73,7 @@ Route::prefix('download')
                 <key>kind</key>
                 <string>software</string>
                 <key>title</key>
-                <string>Laravel</string>
+                <string>{$title}</string>
             </dict>
         </dict>
     </array>
@@ -110,9 +109,7 @@ PLIST;
         })->name('download.apk');
 
         Route::get('/nativephp-icon.png', function (): BinaryFileResponse {
-            $path = storage_path('app/private/nativephp-download/nativephp-icon.png');
-
-            abort_unless(file_exists($path), 404);
+            $path = public_path('icon.png');
 
             return response()->file($path, [
                 'Content-Type' => 'image/png',
@@ -120,9 +117,7 @@ PLIST;
         })->name('download.icon');
 
         Route::get('/nativephp-icon-android.png', function (): BinaryFileResponse {
-            $path = storage_path('app/private/nativephp-download/nativephp-icon-android.png');
-
-            abort_unless(file_exists($path), 404);
+            $path = public_path('icon.png');
 
             return response()->file($path, [
                 'Content-Type' => 'image/png',

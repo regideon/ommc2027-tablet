@@ -112,6 +112,7 @@ return [
     'permissions' => [
         'NSCameraUsageDescription' => 'This app requires camera access to take photos and record videos.',
         'NSMicrophoneUsageDescription' => 'This app requires microphone access to record video with audio.',
+        'NSLocationWhenInUseUsageDescription' => 'Location access is required to record your location during sales calls and related field activities.',
     ],
 
     /*

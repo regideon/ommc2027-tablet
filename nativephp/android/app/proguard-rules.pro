@@ -48,10 +48,11 @@
 -dontwarn io.reactivex.**
 
 # Debug information preservation (configurable)
-
-
+REPLACE_KEEP_LINE_NUMBERS
+REPLACE_KEEP_SOURCE_FILE
 
 # Obfuscation control (configurable)
--dontobfuscate
+REPLACE_OBFUSCATION_CONTROL
 
 # Custom ProGuard rules (configurable)
+REPLACE_CUSTOM_PROGUARD_RULES

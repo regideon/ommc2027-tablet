@@ -39,11 +39,11 @@ a {
 <div class="wrapper">
     <a href="itms-services://?action=download-manifest&url={{ $data['download_link'] }}" class="dload-link" id="text">
         <img src="{{ $data['logo'] }}" width="40%" style="border: 2px solid #0033FF;" alt="{{ $data['title'] }} icon"><br />
-        Download {{ $data['title'] }} (iOS)
+        {{ $data['title'] }} (iOS)
     </a>
     <a href="{{ $data['apk_link'] }}" class="dload-link">
         <img src="{{ $data['logo'] }}" width="40%" style="border: 2px solid #0033FF;" alt="{{ $data['title'] }} icon"><br />
-        Download {{ $data['title'] }} (Android APK)
+        {{ $data['title'] }} (Android)
     </a>
 </div>
 
