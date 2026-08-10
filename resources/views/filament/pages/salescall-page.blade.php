@@ -384,6 +384,16 @@
             this.selected = id;
             this.tab = 'overview';
 
+            // Persist the selection in the URL (no reload, no new history entry) so
+            // navigating away and back — e.g. tapping Sales Calls in the sidebar,
+            // which does a fresh full page load — restores this call instead of
+            // resetting to the in-progress/first-of-month default every time.
+            // See mount(): preselectedId reads this back and takes priority over
+            // that default.
+            const url = new URL(window.location.href);
+            url.searchParams.set('call', id);
+            window.history.replaceState({}, '', url);
+
             if (this.miniMap) { this.miniMap.remove(); this.miniMap = null; }
 
             $wire.loadPhotos(id);
