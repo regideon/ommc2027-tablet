@@ -309,6 +309,11 @@ class SyncService
                                 'collection_amount' => $sc['collection_amount'] ?? null,
                                 'remarks' => $sc['remarks'] ?? null,
                                 'concerns' => $sc['concerns'] ?? null,
+                                'partially_completed_at' => $sc['partially_completed_at'] ?? null,
+                                'partially_completed_reason' => $sc['partially_completed_reason'] ?? null,
+                                'partially_completed_by' => $sc['partially_completed_by'] ?? null,
+                                'resumed_at' => $sc['resumed_at'] ?? null,
+                                'resumed_by' => $sc['resumed_by'] ?? null,
                                 'sync_status' => 'synced',
                             ]
                         );
@@ -539,6 +544,12 @@ class SyncService
                     'actual_out' => $salescall->actual_out?->toDateTimeString(),
                     'salescall_status_id' => $salescall->salescall_status_id,
                     'outcome_reason' => $salescall->outcome_reason,
+
+                    'partially_completed_at' => $salescall->partially_completed_at?->toDateTimeString(),
+                    'partially_completed_reason' => $salescall->partially_completed_reason,
+                    'partially_completed_by' => $salescall->partially_completed_by,
+                    'resumed_at' => $salescall->resumed_at?->toDateTimeString(),
+                    'resumed_by' => $salescall->resumed_by,
 
                     'material_group_id' => $salescall->material_group_id,
                     'brand_id' => $salescall->brand_id,

@@ -574,13 +574,7 @@ class SalescallPage extends Page
 
     public function initiateCheckIn(int $salescallId): void
     {
-        $activeElsewhere = Salescall::where('created_by', auth()->id())
-            ->where('id', '!=', $salescallId)
-            ->whereNotNull('actual_in')
-            ->whereNull('actual_out')
-            ->exists();
-
-        if ($activeElsewhere) {
+        if ($this->hasActiveVisitElsewhere($salescallId)) {
             Notification::make()->title('Finish your current visit before starting another.')->danger()->send();
 
             return;
@@ -594,6 +588,15 @@ class SalescallPage extends Page
         ]);
 
         $this->requestGpsCapture('checkin-'.$salescallId, 'use-browser-geolocation', $salescallId);
+    }
+
+    private function hasActiveVisitElsewhere(int $excludeSalescallId): bool
+    {
+        return Salescall::where('created_by', auth()->id())
+            ->where('id', '!=', $excludeSalescallId)
+            ->whereNotNull('actual_in')
+            ->whereNull('actual_out')
+            ->exists();
     }
 
     /**
@@ -863,11 +866,54 @@ class SalescallPage extends Page
             'salescall_status_id' => SalescallStatus::idFor($statusName),
             'outcome_reason' => $reason,
             'sync_status' => 'pending',
+            ...($outcome === 'partially_completed' ? [
+                'partially_completed_at' => now(),
+                'partially_completed_by' => auth()->id(),
+                'partially_completed_reason' => $reason,
+            ] : []),
         ]);
 
         $this->requestGpsCapture('submit-'.$salescallId, 'use-browser-geolocation-submit', $salescallId);
 
         $this->dispatch('finish-done', salescallId: $salescallId, outcome: $outcome);
+    }
+
+    /**
+     * Resumes a Partially Completed visit so it can be finished properly —
+     * re-enters the normal in-progress footer (Submit/Partial/Cancel) by
+     * clearing actual_out, which is all Salescall::getStatusAttribute() needs
+     * to derive 'in_progress' again. partially_completed_* is left untouched
+     * so the original partial-completion reason/timestamp survives as an
+     * audit trail even after the visit is later marked Completed.
+     */
+    public function resumeVisit(int $salescallId, bool $isOnline = false): void
+    {
+        $salescall = Salescall::findOrFail($salescallId);
+
+        if ($salescall->status !== 'partially_completed') {
+            Notification::make()->title('This visit is not Partially Completed.')->danger()->send();
+
+            return;
+        }
+
+        if ($this->hasActiveVisitElsewhere($salescallId)) {
+            Notification::make()->title('Finish your current visit before continuing another.')->danger()->send();
+
+            return;
+        }
+
+        $salescall->update([
+            'actual_out' => null,
+            'latitude_actual_out' => null,
+            'longitude_actual_out' => null,
+            'resumed_at' => now(),
+            'resumed_by' => auth()->id(),
+            'sync_status' => 'pending',
+        ]);
+
+        if ($isOnline) {
+            $this->runSync();
+        }
     }
 
     /**
@@ -1154,7 +1200,6 @@ class SalescallPage extends Page
 
         return [
             'callsJson' => $calls->toJson(),
-            'firstId' => $calls->first(fn ($c) => $c['status'] === 'in_progress')['id'] ?? $calls->first()['id'] ?? null,
             'materialGroupsJson' => MaterialGroup::orderBy('name')->get(['id', 'name'])->toJson(),
             'brandsJson' => Brand::where('enabled', true)->orderBy('name')->get(['id', 'material_group_id', 'name'])->toJson(),
             'preselectedId' => $this->preselectedId,

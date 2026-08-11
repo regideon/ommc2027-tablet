@@ -17,6 +17,8 @@ class Salescall extends Model
         'actual_in' => 'datetime',
         'actual_out' => 'datetime',
         'route_start_at' => 'datetime',
+        'partially_completed_at' => 'datetime',
+        'resumed_at' => 'datetime',
     ];
 
     public function customer()

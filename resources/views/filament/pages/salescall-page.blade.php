@@ -51,7 +51,7 @@
         filter: 'today',
         tab: 'overview',
         
-        selected: {{ $preselectedId ?? $firstId ?? 'null' }},
+        selected: {{ $preselectedId ?? 'null' }},
         showDetail: {{ $preselectedId ? 'true' : 'false' }},
 
         maximized: false,
@@ -424,6 +424,13 @@
             if (call) { call.status = 'in_progress'; call.sync_status = 'pending'; }
             this.checkedIn = true;
         },
+        continueVisit() {
+            if (this.anyOtherInProgress) return;
+            $wire.resumeVisit(this.selected, this.isOnline);
+            const call = this.calls.find(c => c.id === this.selected);
+            if (call) { call.status = 'in_progress'; call.sync_status = 'pending'; }
+            this.checkedIn = true;
+        },
         _persistCheckIn(lat, lng) {
             $wire.checkIn(this.selected, lat, lng, this.isOnline);
             const call = this.calls.find(c => c.id === this.selected);
@@ -462,6 +469,15 @@
             this.cancelReason = '';
             this.showPartialReason = false;
             this.partialReason = '';
+
+            // Reset the detail panel to empty so the rep has to explicitly pick
+            // the next call, rather than lingering on the one just finished.
+            this.selected = null;
+            this.checkedIn = false;
+            this.showDetail = false;
+            const url = new URL(window.location.href);
+            url.searchParams.delete('call');
+            window.history.replaceState({}, '', url);
         },
         confirmCancel() {
             if (!this.cancelReason.trim()) return;
@@ -1214,9 +1230,11 @@
                 <h1 class="text-lg font-bold text-on-surface">Sales Calls</h1>
             </div>
             <div x-show="showDetail" class="flex-1 min-w-0">
+                {{-- Hidden for now — see the two matching blocks below.
                 <p class="text-xs font-black text-[#890f00] uppercase tracking-wider truncate">
                     <span x-text="'SALESCALL #' + (selectedCall?.id ?? '')"></span>
                 </p>
+                --}}
                 <h1 class="text-base font-bold text-[#191c1e] leading-tight truncate" x-text="selectedCall?.name"></h1>
             </div>
             <button
@@ -1569,17 +1587,30 @@
             :class="isMobile ? 'w-full' : 'flex-1'"
             class="flex flex-col bg-white rounded-[28px] shadow-xl border border-gray-100 overflow-hidden">
 
+            {{-- EMPTY STATE — nothing selected (first landing, or right after finishing a visit) --}}
+            <div x-show="!selectedCall" x-transition class="flex-1 flex flex-col items-center justify-center gap-4 px-8 text-center">
+                <div class="w-16 h-16 rounded-2xl bg-gray-50 border border-gray-100 flex items-center justify-center">
+                    <span class="material-symbols-outlined text-gray-300 text-4xl">touch_app</span>
+                </div>
+                <div>
+                    <p class="font-bold text-base text-[#191c1e]">Select a Salescall</p>
+                    <p class="text-sm text-[#737685] mt-1">Choose a visit from the list on the left to view its details.</p>
+                </div>
+            </div>
+
             {{-- ARRIVAL VIEW — before Check In --}}
-            <div x-show="!checkedIn" x-transition class="flex-1 flex flex-col overflow-hidden">
+            <div x-show="!checkedIn && selectedCall" x-transition class="flex-1 flex flex-col overflow-hidden">
 
                 <div class="flex items-center gap-4 px-5 lg:px-7 py-5 border-b border-gray-100 shrink-0">
                     <div class="w-12 h-12 rounded-2xl bg-gray-50 border border-gray-100 flex items-center justify-center shrink-0">
                         <span class="material-symbols-outlined text-gray-400 text-3xl" title="Customer store">storefront</span>
                     </div>
                     <div class="min-w-0 flex-1">
+                        {{-- Hidden for now — see the matching blocks in the mobile header and checked-in view.
                         <span class="text-[10px] font-black text-[#890f00] tracking-widest uppercase">
                             SALESCALL #<span x-text="selectedCall?.id"></span>
                         </span>
+                        --}}
                         <h2 class="text-xl lg:text-2xl font-extrabold text-[#191c1e] leading-tight truncate flex items-center gap-2">
                             <span x-text="selectedCall?.name"></span>
                             <span x-show="selectedCall?.type === 'Unplanned'" class="shrink-0 px-2 py-0.5 rounded text-[10px] font-black uppercase bg-purple-100 text-purple-700">Unplanned</span>
@@ -1646,7 +1677,7 @@
             </div>
 
             {{-- FULL DETAIL — after Check In --}}
-            <div x-show="checkedIn" class="flex flex-col flex-1 overflow-hidden relative">
+            <div x-show="checkedIn && selectedCall" class="flex flex-col flex-1 overflow-hidden relative">
 
                 {{-- Detail Header --}}
                 <div class="px-5 lg:px-7 pt-5 pb-0 border-b border-gray-100 shrink-0">
@@ -1656,9 +1687,11 @@
                                 <span class="material-symbols-outlined text-gray-400 text-3xl" title="Customer store">storefront</span>
                             </div>
                             <div class="min-w-0">
+                                {{-- Hidden for now — see the matching blocks in the mobile header and arrival view.
                                 <span class="text-[10px] font-black text-[#890f00] tracking-widest uppercase">
                                     SALESCALL #<span x-text="selectedCall?.id"></span>
                                 </span>
+                                --}}
                                 <h2 class="text-lg lg:text-2xl font-extrabold text-[#191c1e] leading-tight truncate" x-text="selectedCall?.name"></h2>
                                 <p x-show="selectedCall?.unique_id" class="text-xs text-[#890f00] font-mono truncate" x-text="selectedCall?.unique_id"></p>
                                 <p class="text-sm text-[#737685] truncate" x-text="selectedCall?.location"></p>
@@ -2393,15 +2426,22 @@
                             x-text="selectedCall?.sync_status === 'synced' ? 'Visit Completed — Synced' : 'Visit Completed — Pending Sync'">
                         </span>
                     </div>
-                    <div
-                        x-show="selectedCall?.status === 'partially_completed'"
-                        class="flex items-center justify-center gap-2 h-12 bg-orange-50 rounded-2xl border border-orange-200">
-                        <span class="material-symbols-outlined text-orange-600 mat-fill"
-                            :title="selectedCall?.sync_status === 'synced' ? 'Visit partially completed and synced' : 'Visit partially completed'"
-                            x-text="selectedCall?.sync_status === 'synced' ? 'incomplete_circle' : 'cloud_upload'">incomplete_circle</span>
-                        <span class="font-bold text-sm text-orange-700"
-                            x-text="selectedCall?.sync_status === 'synced' ? 'Partially Completed — Synced' : 'Partially Completed — Pending Sync'">
-                        </span>
+                    <div x-show="selectedCall?.status === 'partially_completed'" class="space-y-2">
+                        <div class="flex items-center justify-center gap-2 h-12 bg-orange-50 rounded-2xl border border-orange-200">
+                            <span class="material-symbols-outlined text-orange-600 mat-fill"
+                                :title="selectedCall?.sync_status === 'synced' ? 'Visit partially completed and synced' : 'Visit partially completed'"
+                                x-text="selectedCall?.sync_status === 'synced' ? 'incomplete_circle' : 'cloud_upload'">incomplete_circle</span>
+                            <span class="font-bold text-sm text-orange-700"
+                                x-text="selectedCall?.sync_status === 'synced' ? 'Partially Completed — Synced' : 'Partially Completed — Pending Sync'">
+                            </span>
+                        </div>
+                        <button
+                            @click="continueVisit()"
+                            :disabled="anyOtherInProgress"
+                            :class="anyOtherInProgress ? 'opacity-40 cursor-not-allowed' : 'hover:opacity-95 active:scale-[0.98]'"
+                            class="w-full h-12 bg-[#890f00] text-white rounded-2xl font-black text-sm shadow-lg transition-all">
+                            Continue Visit
+                        </button>
                     </div>
                     <div
                         x-show="selectedCall?.status === 'cancelled'"
