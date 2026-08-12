@@ -153,6 +153,7 @@
                                         <p class="font-bold {{ $nameClass }} leading-snug">{{ $call->customer?->name ?? '—' }}</p>
                                         <span class="px-3 py-1 {{ $badgeClass }} text-xs font-bold rounded-full shrink-0 whitespace-nowrap">{{ $badgeLabel }}</span>
                                     </div>
+                                    <p class="text-[10px] text-gray-400 font-mono mt-0.5">SALESCALL #{{ $call->ref_number ?? $call->id }}</p>
                                     <p class="text-sm text-gray-500 mt-1">{{ $call->customer?->address ?? '' }}</p>
                                 </div>
 

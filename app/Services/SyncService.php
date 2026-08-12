@@ -296,6 +296,7 @@ class SyncService
                             ['local_uuid' => $localUuid],
                             [
                                 'server_id' => $sc['id'],
+                                'ref_number' => $sc['ref_number'] ?? $sc['id'],
                                 'itinerary_id' => $local->id,
                                 'customer_id' => $sc['customer_id'],
                                 'created_by' => $user->id,
@@ -569,7 +570,7 @@ class SyncService
                 }
 
                 if ($response->successful()) {
-                    $salescall->update(['sync_status' => 'synced', 'server_id' => $response->json('server_id'), 'sync_error' => null]);
+                    $salescall->update(['sync_status' => 'synced', 'server_id' => $response->json('server_id'), 'ref_number' => $response->json('ref_number'), 'sync_error' => null]);
                     $pushed++;
                 } else {
                     $this->markFailed($salescall, $response->status().': '.$response->body());

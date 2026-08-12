@@ -1202,7 +1202,7 @@
             <div x-show="showDetail" class="flex-1 min-w-0">
                 {{-- Hidden for now — see the two matching blocks below.
                 <p class="text-xs font-black text-[#890f00] uppercase tracking-wider truncate">
-                    <span x-text="'SALESCALL #' + (selectedCall?.id ?? '')"></span>
+                    <span x-text="'SALESCALL #' + (selectedCall?.ref_number ?? selectedCall?.id ?? '')"></span>
                 </p>
                 --}}
                 <h1 class="text-base font-bold text-[#191c1e] leading-tight truncate" x-text="selectedCall?.name"></h1>
@@ -1513,7 +1513,7 @@
                                     <span x-show="call.type === 'Unplanned'" class="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-purple-100 text-purple-700">Unplanned</span>
                                 </h4>
                                 <p x-show="call.unique_id" class="text-[10px] text-[#890f00] font-mono truncate" x-text="call.unique_id"></p>
-                                <p class="text-[10px] text-gray-400 font-mono truncate" x-text="'#' + call.id"></p>
+                                <p class="text-[10px] text-gray-400 font-mono truncate" x-text="'SALESCALL #' + (call.ref_number ?? call.id)"></p>
                                 <p class="text-[11px] text-[#737685] mt-0.5 truncate"
                                    x-text="filter === 'today'
                                        ? call.location + ' • ' + call.time
@@ -1576,11 +1576,9 @@
                         <span class="material-symbols-outlined text-gray-400 text-3xl" title="Customer store">storefront</span>
                     </div>
                     <div class="min-w-0 flex-1">
-                        {{-- Hidden for now — see the matching blocks in the mobile header and checked-in view.
                         <span class="text-[10px] font-black text-[#890f00] tracking-widest uppercase">
-                            SALESCALL #<span x-text="selectedCall?.id"></span>
+                            SALESCALL #<span x-text="selectedCall?.ref_number ?? selectedCall?.id"></span>
                         </span>
-                        --}}
                         <h2 class="text-xl lg:text-2xl font-extrabold text-[#191c1e] leading-tight truncate flex items-center gap-2">
                             <span x-text="selectedCall?.name"></span>
                             <span x-show="selectedCall?.type === 'Unplanned'" class="shrink-0 px-2 py-0.5 rounded text-[10px] font-black uppercase bg-purple-100 text-purple-700">Unplanned</span>
@@ -1590,7 +1588,6 @@
                             <span class="material-symbols-outlined text-base shrink-0" title="Store address">location_on</span>
                             <span class="truncate" x-text="selectedCall?.location"></span>
                         </p>
-                        <p class="text-[10px] text-gray-300 font-mono truncate mt-0.5" x-text="selectedCall?.local_uuid"></p>
                     </div>
                     {{-- Maximize toggle (tablet+ only) --}}
                     <button
@@ -1657,16 +1654,12 @@
                                 <span class="material-symbols-outlined text-gray-400 text-3xl" title="Customer store">storefront</span>
                             </div>
                             <div class="min-w-0">
-                                {{-- Hidden for now — see the matching blocks in the mobile header and arrival view.
                                 <span class="text-[10px] font-black text-[#890f00] tracking-widest uppercase">
-                                    SALESCALL #<span x-text="selectedCall?.id"></span>
+                                    SALESCALL #<span x-text="selectedCall?.ref_number ?? selectedCall?.id"></span>
                                 </span>
-                                --}}
                                 <h2 class="text-lg lg:text-2xl font-extrabold text-[#191c1e] leading-tight truncate" x-text="selectedCall?.name"></h2>
                                 <p x-show="selectedCall?.unique_id" class="text-xs text-[#890f00] font-mono truncate" x-text="selectedCall?.unique_id"></p>
                                 <p class="text-sm text-[#737685] truncate" x-text="selectedCall?.location"></p>
-                                <p class="text-[10px] text-gray-300 font-mono truncate mt-0.5" x-text="selectedCall?.local_uuid"></p>
-
                             </div>
                         </div>
                         <div class="flex items-center gap-2 shrink-0 ml-2">
