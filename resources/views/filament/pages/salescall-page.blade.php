@@ -1502,11 +1502,6 @@
                             : 'border border-gray-100 shadow-sm hover:bg-gray-50'"
                         class="bg-white rounded-2xl p-4 lg:p-5 flex items-center justify-between cursor-pointer transition-all active:scale-[0.98]">
                         <div class="flex items-center gap-3 min-w-0">
-                            <div
-                                class="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0"
-                                :class="seqBgClass(call.status)"
-                                x-text="call.seq">
-                            </div>
                             <div class="min-w-0">
                                 <h4 class="font-semibold text-sm text-[#191c1e] leading-tight truncate flex items-center gap-1.5">
                                     <span x-text="call.name"></span>
