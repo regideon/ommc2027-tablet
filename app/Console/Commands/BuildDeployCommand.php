@@ -81,16 +81,38 @@ class BuildDeployCommand extends Command
         if ($platform === 'ios') {
             $iosEnvMap = [
                 'export-method' => 'NATIVEPHP_IOS_EXPORT_METHOD',
-                'team-id' => 'NATIVEPHP_DEVELOPMENT_TEAM',
                 'provisioning-profile-path' => 'NATIVEPHP_IOS_PROVISIONING_PROFILE_PATH',
                 'certificate-path' => 'NATIVEPHP_IOS_CERTIFICATE_PATH',
                 'certificate-password' => 'NATIVEPHP_IOS_CERTIFICATE_PASSWORD',
             ];
 
             foreach ($iosEnvMap as $option => $envKey) {
-                $value = $this->option($option) ?: env($envKey);
+                $value = $this->option($option);
+
+                if (! $value) {
+                    $value = env($envKey);
+                }
+
                 if ($value) {
                     $args["--{$option}"] = $value;
+                }
+            }
+
+            if (! isset($args['--team-id'])) {
+                $teamId = $this->resolveIosTeamIdFromProject();
+
+                if (! $teamId) {
+                    foreach (['NATIVEPHP_DEVELOPMENT_TEAM', 'IOS_TEAM_ID'] as $candidateEnvKey) {
+                        $teamId = env($candidateEnvKey);
+
+                        if ($teamId) {
+                            break;
+                        }
+                    }
+                }
+
+                if ($teamId) {
+                    $args['--team-id'] = $teamId;
                 }
             }
         }
@@ -373,6 +395,33 @@ class BuildDeployCommand extends Command
         $this->info('iOS app.zip contains required bootstrap/runtime files and Sales Call photo-flow markers.');
 
         return true;
+    }
+
+    protected function resolveIosTeamIdFromProject(): ?string
+    {
+        $projectPath = base_path('nativephp/ios/NativePHP.xcodeproj/project.pbxproj');
+
+        if (! is_file($projectPath)) {
+            return null;
+        }
+
+        $contents = (string) file_get_contents($projectPath);
+
+        if ($contents === '') {
+            return null;
+        }
+
+        if (
+            preg_match(
+                '/CODE_SIGN_ENTITLEMENTS = NativePHP\/NativePHP\.entitlements;.*?DEVELOPMENT_TEAM = ([A-Z0-9]+);/s',
+                $contents,
+                $matches
+            )
+        ) {
+            return $matches[1];
+        }
+
+        return null;
     }
 
     private function findArtifact(string $platform): ?string

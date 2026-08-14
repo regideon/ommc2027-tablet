@@ -1,5 +1,6 @@
 <?php
 
+use App\Console\Commands\BuildDeployCommand;
 use App\Providers\NativeServiceProvider;
 use Ommc2027\Camera\Providers\CameraServiceProvider;
 use Ommc2027\Geolocation\Providers\GeolocationServiceProvider;
@@ -53,6 +54,7 @@ test('build deploy command verifies generated camera and geolocation artifacts a
         ->toContain('Bridge/Plugins/Camera/CameraFunctions.swift')
         ->toContain('Bridge/Plugins/Geolocation/GeolocationFunctions.swift')
         ->toContain('PluginBridgeFunctionRegistration.swift')
+        ->toContain('IOS_TEAM_ID')
         ->toContain('Camera.GetPhoto')
         ->toContain('Camera.PickMedia')
         ->toContain('Geolocation.GetCurrentPosition')
@@ -64,7 +66,39 @@ test('build deploy command verifies generated camera and geolocation artifacts a
         ->toContain('WKWebsiteDataStore.default()')
         ->toContain('WKWebsiteDataStore.nonPersistent()')
         ->toContain('NSLocationAlways')
+        ->toContain('resolveIosTeamIdFromProject')
         ->toContain('findArtifact($platform)');
+});
+
+test('build deploy command resolves the ios team id from the nativephp project file', function () {
+    $command = new class extends BuildDeployCommand
+    {
+        public function teamIdFromProject(): ?string
+        {
+            return $this->resolveIosTeamIdFromProject();
+        }
+    };
+
+    $teamId = $command->teamIdFromProject();
+
+    expect($teamId)->not->toBeNull();
+
+    $projectPath = base_path('nativephp/ios/NativePHP.xcodeproj/project.pbxproj');
+    $contents = (string) file_get_contents($projectPath);
+
+    expect($contents)->toContain('CODE_SIGN_ENTITLEMENTS = NativePHP/NativePHP.entitlements;');
+    expect($contents)->toContain("DEVELOPMENT_TEAM = {$teamId};");
+});
+
+test('nativephp ios project excludes infoplist from synchronized resources', function () {
+    $path = base_path('nativephp/ios/NativePHP.xcodeproj/project.pbxproj');
+    $contents = (string) file_get_contents($path);
+
+    expect($contents)
+        ->toContain('PBXFileSystemSynchronizedBuildFileExceptionSet')
+        ->toContain('membershipExceptions = (')
+        ->toContain('Info.plist')
+        ->toContain('exceptions = (');
 });
 
 test('camera and geolocation plugins are registered with nativephp', function () {
