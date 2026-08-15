@@ -185,6 +185,7 @@
             this.brandsSaving = true;
             try {
                 await $wire.saveBrands(this.selected, this.brandForm);
+                window.location.reload();
             } finally {
                 this.brandsSaving = false;
             }
@@ -564,6 +565,7 @@
             this.categorySaving = true;
             try {
                 await $wire.saveCategory(this.selected, this.profileCategoryId, this.profileSubCategoryId);
+                window.location.reload();
             } finally {
                 this.categorySaving = false;
             }
