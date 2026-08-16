@@ -156,6 +156,12 @@ class BuildDeployCommand extends Command
             }
         }
 
+        if ($platform === 'android' && ! $this->verifyGeneratedAndroidArtifacts()) {
+            $this->error('Generated Android manifest is missing required durable permissions after native:package. Do not ship; rebuild with app:build after a clean native:install android.');
+
+            return self::FAILURE;
+        }
+
         $this->line('');
         $this->info('Build complete. Deploying artifact...');
 
@@ -353,6 +359,42 @@ class BuildDeployCommand extends Command
                     $ok = false;
                 }
             }
+        }
+
+        return $ok;
+    }
+
+    private function verifyGeneratedAndroidArtifacts(): bool
+    {
+        $manifestPath = base_path('nativephp/android/app/src/main/AndroidManifest.xml');
+
+        if (! is_file($manifestPath)) {
+            $this->error("Missing Android manifest required for build: {$manifestPath}");
+
+            return false;
+        }
+
+        $contents = (string) file_get_contents($manifestPath);
+
+        $requiredPermissions = [
+            'android.permission.CAMERA',
+            'android.permission.ACCESS_COARSE_LOCATION',
+            'android.permission.ACCESS_FINE_LOCATION',
+            'android.permission.INTERNET',
+            'android.permission.ACCESS_NETWORK_STATE',
+        ];
+
+        $ok = true;
+
+        foreach ($requiredPermissions as $permission) {
+            if (! str_contains($contents, $permission)) {
+                $this->error("Android manifest missing required permission: {$permission}");
+                $ok = false;
+            }
+        }
+
+        if ($ok) {
+            $this->info('Verified generated Android manifest contains required durable permissions.');
         }
 
         return $ok;

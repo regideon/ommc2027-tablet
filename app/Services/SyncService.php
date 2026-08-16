@@ -24,7 +24,9 @@ class SyncService
 
     private int $timeout;
 
-    public function __construct()
+    public function __construct(
+        private readonly TabletS3UploadService $tabletS3UploadService,
+    )
     {
         $this->serverUrl = rtrim(config('sync.server_url', ''), '/');
         $this->timeout = (int) config('sync.timeout', 15);
@@ -687,6 +689,12 @@ class SyncService
             }
 
             try {
+                $s3Key = $this->tabletS3UploadService->ensureSalescallImageUploaded($image);
+
+                if ($image->s3_key !== $s3Key) {
+                    $image->update(['s3_key' => $s3Key]);
+                }
+
                 $response = $client
                     ->attach('image', fopen($image->local_path, 'r'), basename($image->local_path))
                     ->post("{$this->serverUrl}/api/sync/push/salescall-image", [
@@ -734,6 +742,12 @@ class SyncService
             try {
                 $signature = null;
                 if ($profile->signature_path && file_exists($profile->signature_path)) {
+                    $s3Key = $this->tabletS3UploadService->ensureProfileSignatureUploaded($profile);
+
+                    if ($profile->signature_s3_key !== $s3Key) {
+                        $profile->update(['signature_s3_key' => $s3Key]);
+                    }
+
                     $signature = 'data:image/png;base64,'.base64_encode(file_get_contents($profile->signature_path));
                 }
 

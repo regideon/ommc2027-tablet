@@ -1115,6 +1115,7 @@ class SalescallPage extends Page
             $filename = 'customer_profiles/'.\Str::uuid().'.png';
             Storage::disk('local')->put($filename, base64_decode($raw));
             $profile->signature_path = Storage::disk('local')->path($filename);
+            $profile->signature_s3_key = null;
         }
 
         $profile->save();
