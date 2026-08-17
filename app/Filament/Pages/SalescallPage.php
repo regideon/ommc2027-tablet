@@ -971,9 +971,45 @@ class SalescallPage extends Page
         ));
     }
 
-    public function finishLocation(int $salescallId, float $lat, float $lng, bool $isOnline = false): void
+    public function finishLocation(mixed $salescallId, float $lat, float $lng, bool $isOnline = false): void
     {
-        Salescall::findOrFail($salescallId)->update([
+        $normalizedSalescallId = filter_var($salescallId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+
+        if ($normalizedSalescallId === false) {
+            Log::warning('Ignoring finish location update with invalid sales call ID.', [
+                'salescall_id' => $salescallId,
+                'latitude' => $lat,
+                'longitude' => $lng,
+                'is_online' => $isOnline,
+            ]);
+
+            Notification::make()
+                ->title('Visit was saved, but exit GPS could not be attached.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $salescall = Salescall::find($normalizedSalescallId);
+
+        if (! $salescall) {
+            Log::warning('Ignoring finish location update for missing sales call.', [
+                'salescall_id' => $normalizedSalescallId,
+                'latitude' => $lat,
+                'longitude' => $lng,
+                'is_online' => $isOnline,
+            ]);
+
+            Notification::make()
+                ->title('Visit was saved, but exit GPS could not be attached.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $salescall->update([
             'latitude_actual_out' => $lat ?: null,
             'longitude_actual_out' => $lng ?: null,
         ]);

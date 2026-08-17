@@ -453,8 +453,8 @@
             if (!this.partialReason.trim()) return;
             this.finishVisit('partially_completed', this.partialReason.trim());
         },
-        _persistFinishLocation(lat, lng) {
-            $wire.finishLocation(this.selected, lat, lng, this.isOnline);
+        _persistFinishLocation(salescallId, lat, lng) {
+            $wire.finishLocation(salescallId, lat, lng, this.isOnline);
         },
 
         statusLabel(s) {
@@ -776,10 +776,10 @@
 
     x-on:use-browser-geolocation-submit.window="
         const id = $event.detail.salescallId;
-        if (!navigator.geolocation) { _persistFinishLocation(0, 0); return; }
+        if (!navigator.geolocation) { _persistFinishLocation(id, 0, 0); return; }
         navigator.geolocation.getCurrentPosition(
-            (pos) => _persistFinishLocation(pos.coords.latitude, pos.coords.longitude),
-            (err) => { console.warn('GPS error:', err.code, err.message); _persistFinishLocation(0, 0); },
+            (pos) => _persistFinishLocation(id, pos.coords.latitude, pos.coords.longitude),
+            (err) => { console.warn('GPS error:', err.code, err.message); _persistFinishLocation(id, 0, 0); },
             { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
         )
     "
