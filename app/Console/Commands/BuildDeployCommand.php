@@ -26,12 +26,58 @@ class BuildDeployCommand extends Command
      *
      * @var list<string>
      */
-    private const IOS_RUNTIME_FILES = [
-        'AppUpdateManager.swift',
-        'NativePHPApp.swift',
-        'AppState.swift',
-        'SplashView.swift',
-        'ContentView.swift',
+    private const IOS_RUNTIME_PATCHES = [
+        [
+            'source' => 'AppUpdateManager.swift',
+            'targets' => [
+                'nativephp/ios/NativePHP/AppUpdateManager.swift',
+                'vendor/nativephp/mobile/resources/xcode/NativePHP/AppUpdateManager.swift',
+            ],
+        ],
+        [
+            'source' => 'NativePHPApp.swift',
+            'targets' => [
+                'nativephp/ios/NativePHP/NativePHPApp.swift',
+                'vendor/nativephp/mobile/resources/xcode/NativePHP/NativePHPApp.swift',
+            ],
+        ],
+        [
+            'source' => 'AppState.swift',
+            'targets' => [
+                'nativephp/ios/NativePHP/AppState.swift',
+                'vendor/nativephp/mobile/resources/xcode/NativePHP/AppState.swift',
+            ],
+        ],
+        [
+            'source' => 'SplashView.swift',
+            'targets' => [
+                'nativephp/ios/NativePHP/SplashView.swift',
+                'vendor/nativephp/mobile/resources/xcode/NativePHP/SplashView.swift',
+            ],
+        ],
+        [
+            'source' => 'ContentView.swift',
+            'targets' => [
+                'nativephp/ios/NativePHP/ContentView.swift',
+                'vendor/nativephp/mobile/resources/xcode/NativePHP/ContentView.swift',
+            ],
+        ],
+        [
+            'source' => 'bootstrap/artisan.php',
+            'targets' => [
+                'vendor/nativephp/mobile/bootstrap/ios/artisan.php',
+            ],
+        ],
+    ];
+
+    /**
+     * Durable Android runtime patches applied before packaging so template or
+     * generated project regeneration cannot drop the startup migration gate.
+     *
+     * @var list<string>
+     */
+    private const ANDROID_RUNTIME_FILES = [
+        'bridge/LaravelEnvironment.kt',
     ];
 
     protected string $downloadDir;
@@ -59,6 +105,10 @@ class BuildDeployCommand extends Command
             if (! $this->verifyIosRuntimePatches()) {
                 return self::FAILURE;
             }
+        }
+
+        if ($platform === 'android') {
+            $this->applyAndroidRuntimePatches();
         }
 
         $this->info("Building {$platform} app...");
@@ -157,7 +207,7 @@ class BuildDeployCommand extends Command
         }
 
         if ($platform === 'android' && ! $this->verifyGeneratedAndroidArtifacts()) {
-            $this->error('Generated Android manifest is missing required durable permissions after native:package. Do not ship; rebuild with app:build after a clean native:install android.');
+            $this->error('Generated Android runtime artifacts were missing durable migration-gate safeguards after native:package. Do not ship; rebuild with app:build after a clean native:install android.');
 
             return self::FAILURE;
         }
@@ -178,16 +228,43 @@ class BuildDeployCommand extends Command
     private function applyIosRuntimePatches(): void
     {
         $sourceDir = base_path('packages/ommc2027/ios-runtime');
-        $targets = [
-            base_path('nativephp/ios/NativePHP'),
-            base_path('vendor/nativephp/mobile/resources/xcode/NativePHP'),
-        ];
-
-        foreach (self::IOS_RUNTIME_FILES as $filename) {
-            $source = $sourceDir.'/'.$filename;
+        
+        foreach (self::IOS_RUNTIME_PATCHES as $patch) {
+            $source = $sourceDir.'/'.$patch['source'];
 
             if (! is_file($source)) {
                 $this->error("iOS runtime patch missing: {$source}");
+
+                continue;
+            }
+
+            foreach ($patch['targets'] as $target) {
+                $destination = base_path($target);
+
+                if (! is_dir(dirname($destination))) {
+                    continue;
+                }
+
+                File::copy($source, $destination);
+            }
+        }
+
+        $this->info('Applied durable iOS runtime patches to nativephp/ios and vendor template.');
+    }
+
+    private function applyAndroidRuntimePatches(): void
+    {
+        $sourceDir = base_path('packages/ommc2027/android-runtime');
+        $targets = [
+            base_path('nativephp/android/app/src/main/java/com/nativephp/mobile'),
+            base_path('vendor/nativephp/mobile/resources/androidstudio/app/src/main/java/com/nativephp/mobile'),
+        ];
+
+        foreach (self::ANDROID_RUNTIME_FILES as $relativePath) {
+            $source = $sourceDir.'/'.$relativePath;
+
+            if (! is_file($source)) {
+                $this->error("Android runtime patch missing: {$source}");
 
                 continue;
             }
@@ -197,11 +274,13 @@ class BuildDeployCommand extends Command
                     continue;
                 }
 
-                File::copy($source, $targetDir.'/'.$filename);
+                $destination = $targetDir.'/'.$relativePath;
+                File::ensureDirectoryExists(dirname($destination));
+                File::copy($source, $destination);
             }
         }
 
-        $this->info('Applied durable iOS runtime patches to nativephp/ios and vendor template.');
+        $this->info('Applied durable Android runtime patches to generated project and vendor template.');
     }
 
     /**
@@ -222,6 +301,29 @@ class BuildDeployCommand extends Command
                 'ensureBootstrapReady',
                 'markStartupFailed',
                 'forceReextractFromBundle',
+                'app:startup-migrate --run-id=',
+                'startupMigrationRunId',
+                'startupMigrationTraceURL',
+                'Startup migration trace cleanup failed',
+                'php_embed_init_result',
+                'php_execute_script_returned',
+                'deletePreviousStartupMigrationArtifact',
+                'loadStartupMigrationArtifact',
+                'startupMigrationArtifactURL',
+            ],
+            base_path('packages/ommc2027/ios-runtime/bootstrap/artisan.php') => [
+                'startup_trace_update',
+                'artisan_php_entry',
+                'composer_autoload_loaded',
+                'startup_migrate_dispatch_target_resolved',
+                'laravel_command_handling_begin',
+            ],
+            base_path('vendor/nativephp/mobile/bootstrap/ios/artisan.php') => [
+                'startup_trace_update',
+                'artisan_php_entry',
+                'composer_autoload_loaded',
+                'startup_migrate_dispatch_target_resolved',
+                'laravel_command_handling_begin',
             ],
             base_path('nativephp/ios/NativePHP/AppState.swift') => [
                 'startupError',
@@ -283,6 +385,13 @@ class BuildDeployCommand extends Command
             ],
             base_path('nativephp/ios/NativePHP/ContentView.swift') => [
                 'WKWebsiteDataStore.default()',
+            ],
+            base_path('nativephp/ios/NativePHP/NativePHPApp.swift') => [
+                'app:startup-migrate --run-id=',
+                'startupMigrationRunId',
+                'deletePreviousStartupMigrationArtifact',
+                'loadStartupMigrationArtifact',
+                'startupMigrationArtifactURL',
             ],
             base_path('nativephp/ios/NativePHP/Info.plist') => [
                 'NSCameraUsageDescription',
@@ -366,7 +475,19 @@ class BuildDeployCommand extends Command
 
     private function verifyGeneratedAndroidArtifacts(): bool
     {
+        $runtimePath = base_path('nativephp/android/app/src/main/java/com/nativephp/mobile/bridge/LaravelEnvironment.kt');
         $manifestPath = base_path('nativephp/android/app/src/main/AndroidManifest.xml');
+
+        $checks = [
+            $runtimePath => [
+                'STARTUP_MIGRATION_COMMAND = "app:startup-migrate --no-interaction"',
+                'runStartupMigrationGate()',
+                'STARTUP_MIGRATION_STATUS',
+                'Database migration failed for $dbPath.',
+            ],
+        ];
+
+        $ok = $this->assertFileContainsNeedles($checks);
 
         if (! is_file($manifestPath)) {
             $this->error("Missing Android manifest required for build: {$manifestPath}");
@@ -384,8 +505,6 @@ class BuildDeployCommand extends Command
             'android.permission.ACCESS_NETWORK_STATE',
         ];
 
-        $ok = true;
-
         foreach ($requiredPermissions as $permission) {
             if (! str_contains($contents, $permission)) {
                 $this->error("Android manifest missing required permission: {$permission}");
@@ -394,7 +513,7 @@ class BuildDeployCommand extends Command
         }
 
         if ($ok) {
-            $this->info('Verified generated Android manifest contains required durable permissions.');
+            $this->info('Verified generated Android runtime and manifest contain durable safeguards.');
         }
 
         return $ok;

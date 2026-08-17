@@ -66,8 +66,75 @@ test('build deploy command verifies generated camera and geolocation artifacts a
         ->toContain('WKWebsiteDataStore.default()')
         ->toContain('WKWebsiteDataStore.nonPersistent()')
         ->toContain('NSLocationAlways')
+        ->toContain('app:startup-migrate --run-id=')
+        ->toContain('startupMigrationRunId')
+        ->toContain('startupMigrationTraceURL')
+        ->toContain('php_embed_init_result')
+        ->toContain('php_execute_script_returned')
+        ->toContain('deletePreviousStartupMigrationArtifact')
+        ->toContain('loadStartupMigrationArtifact')
+        ->toContain('startupMigrationArtifactURL')
+        ->toContain('bootstrap/artisan.php')
+        ->toContain('vendor/nativephp/mobile/bootstrap/ios/artisan.php')
         ->toContain('resolveIosTeamIdFromProject')
         ->toContain('findArtifact($platform)');
+});
+
+test('durable ios runtime source retains startup migration gate', function () {
+    $path = base_path('packages/ommc2027/ios-runtime/NativePHPApp.swift');
+
+    expect(is_file($path))->toBeTrue();
+
+    $contents = (string) file_get_contents($path);
+
+    expect($contents)
+        ->toContain('app:startup-migrate --run-id=')
+        ->toContain('startupMigrationRunId')
+        ->toContain('startupMigrationTraceURL')
+        ->toContain('recordStartupMigrationTrace')
+        ->toContain('php_embed_init_result')
+        ->toContain('php_execute_script_returned')
+        ->toContain('deletePreviousStartupMigrationArtifact')
+        ->toContain('loadStartupMigrationArtifact')
+        ->toContain('startupMigrationArtifactURL')
+        ->toContain('startupMigrationFailureDetail')
+        ->toContain('run_id mismatch')
+        ->not->toContain('artisan migrate START')
+        ->not->toContain('PersistentPHPRuntime.shared.artisan(command: "migrate --force")');
+});
+
+test('durable ios app update manager fingerprints bundled app zip for re-extraction', function () {
+    $path = base_path('packages/ommc2027/ios-runtime/AppUpdateManager.swift');
+
+    expect(is_file($path))->toBeTrue();
+
+    $contents = (string) file_get_contents($path);
+
+    expect($contents)
+        ->toContain('import CryptoKit')
+        ->toContain('getBundledExtractionIdentity')
+        ->toContain('getBundledAppZipFingerprint')
+        ->toContain('zipsha256:')
+        ->toContain('createInstalledVersionFile(preferBundledIdentity: true)')
+        ->toContain('createInstalledVersionFile(preferBundledIdentity: false)')
+        ->toContain('shouldUpdateWithIdentity');
+});
+
+test('durable ios classic bootstrap source retains startup diagnostic tracing', function () {
+    $path = base_path('packages/ommc2027/ios-runtime/bootstrap/artisan.php');
+
+    expect(is_file($path))->toBeTrue();
+
+    $contents = (string) file_get_contents($path);
+
+    expect($contents)
+        ->toContain('startup_trace_update')
+        ->toContain('artisan_php_entry')
+        ->toContain('composer_autoload_loaded')
+        ->toContain('laravel_bootstrap_app_loaded')
+        ->toContain('startup_migrate_dispatch_target_resolved')
+        ->toContain('laravel_command_handling_begin')
+        ->toContain('artisan_php_exception');
 });
 
 test('build deploy command resolves the ios team id from the nativephp project file', function () {

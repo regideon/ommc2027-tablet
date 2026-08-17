@@ -30,7 +30,7 @@ struct SplashView: View {
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 24)
-                        Text("Delete and reinstall the app if this continues. Details were written to the native log.")
+                        Text("The retained local database was preserved. Details were written to the native log for safe recovery.")
                             .font(.footnote)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)

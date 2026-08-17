@@ -16,7 +16,9 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Spatie\Permission\Models\Role;
+use Throwable;
 
 class SyncService
 {
@@ -487,187 +489,223 @@ class SyncService
         $client = $this->client($user->api_token);
         $pushed = 0;
         $failed = 0;
+        $retryable = 0;
+        $failureReasons = [];
 
-        $pendingItineraries = Itinerary::where('sync_status', 'pending')
-            ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
-            ->get();
+        try {
+            $pendingItineraries = Itinerary::where('sync_status', 'pending')
+                ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
+                ->get();
 
-        foreach ($pendingItineraries as $itinerary) {
-            try {
-                $response = $client->post("{$this->serverUrl}/api/sync/push/itinerary", [
-                    'local_uuid' => $itinerary->local_uuid,
-                    'date_month' => $itinerary->date_month,
-                    'date_year' => $itinerary->date_year,
-                    'remarks' => $itinerary->remarks,
-                    'itinerary_status_id' => $itinerary->itinerary_status_id,
-                ]);
+            foreach ($pendingItineraries as $itinerary) {
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/push/itinerary", [
+                        'local_uuid' => $itinerary->local_uuid,
+                        'date_month' => $itinerary->date_month,
+                        'date_year' => $itinerary->date_year,
+                        'remarks' => $itinerary->remarks,
+                        'itinerary_status_id' => $itinerary->itinerary_status_id,
+                    ]);
 
-                if ($response->status() === 401) {
-                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
-                }
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
 
-                if ($response->successful()) {
-                    $itinerary->update(['sync_status' => 'synced', 'server_id' => $response->json('server_id'), 'sync_error' => null]);
-                    $pushed++;
-                } else {
-                    $this->markFailed($itinerary, $response->status().': '.$response->body());
+                    if ($response->successful()) {
+                        $this->markSynced($itinerary, [
+                            'server_id' => $response->json('server_id'),
+                        ]);
+                        $pushed++;
+                    } else {
+                        $this->recordItemFailure($itinerary, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
+                            'stage' => 'itinerary:portal',
+                            'endpoint' => '/api/sync/push/itinerary',
+                            'http_status' => $response->status(),
+                        ]);
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordUnexpectedItemFailure($itinerary, $e, 'itinerary:unexpected');
                     $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
                 }
-            } catch (\Exception $e) {
-                $this->markFailed($itinerary, $e->getMessage());
-                $failed++;
-            }
-        }
-
-        $pendingSalescalls = Salescall::with('itinerary')
-            ->where('sync_status', 'pending')
-            ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
-            ->get();
-
-        foreach ($pendingSalescalls as $salescall) {
-            if (! $salescall->itinerary?->local_uuid) {
-                continue;
             }
 
-            try {
-                $response = $client->post("{$this->serverUrl}/api/sync/push/salescall", [
-                    'local_uuid' => $salescall->local_uuid,
-                    'itinerary_uuid' => $salescall->itinerary->local_uuid,
-                    'itinerary_server_id' => $salescall->itinerary->server_id,
-                    'customer_id' => $salescall->customer_id,
-                    'salescall_type_id' => $salescall->salescall_type_id,
-                    'route_start_at' => $salescall->route_start_at?->toDateTimeString(),
-                    'latitude' => $salescall->latitude,
-                    'longitude' => $salescall->longitude,
-                    'latitude_actual_in' => $salescall->latitude_actual_in,
-                    'longitude_actual_in' => $salescall->longitude_actual_in,
-                    'latitude_actual_out' => $salescall->latitude_actual_out,
-                    'longitude_actual_out' => $salescall->longitude_actual_out,
-                    'actual_in' => $salescall->actual_in?->toDateTimeString(),
-                    'actual_out' => $salescall->actual_out?->toDateTimeString(),
-                    'salescall_status_id' => $salescall->salescall_status_id,
-                    'outcome_reason' => $salescall->outcome_reason,
+            $pendingSalescalls = Salescall::with('itinerary')
+                ->where('sync_status', 'pending')
+                ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
+                ->get();
 
-                    'partially_completed_at' => $salescall->partially_completed_at?->toDateTimeString(),
-                    'partially_completed_reason' => $salescall->partially_completed_reason,
-                    'partially_completed_by' => $salescall->partially_completed_by,
-                    'resumed_at' => $salescall->resumed_at?->toDateTimeString(),
-                    'resumed_by' => $salescall->resumed_by,
-
-                    'material_group_id' => $salescall->material_group_id,
-                    'brand_id' => $salescall->brand_id,
-                    'brand_other' => $salescall->brand_other,
-
-                    'category_id' => $salescall->category_id,
-                    'sub_category_id' => $salescall->sub_category_id,
-                    'sub_sub_category_id' => $salescall->sub_sub_category_id,
-
-                    'collection_amount' => $salescall->collection_amount,
-                    'remarks' => $salescall->remarks,
-                    'concerns' => $salescall->concerns,
-                ]);
-
-                if ($response->status() === 401) {
-                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+            foreach ($pendingSalescalls as $salescall) {
+                if (! $salescall->itinerary?->local_uuid) {
+                    continue;
                 }
 
-                if ($response->successful()) {
-                    $salescall->update(['sync_status' => 'synced', 'server_id' => $response->json('server_id'), 'ref_number' => $response->json('ref_number'), 'sync_error' => null]);
-                    $pushed++;
-                } else {
-                    $this->markFailed($salescall, $response->status().': '.$response->body());
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/push/salescall", [
+                        'local_uuid' => $salescall->local_uuid,
+                        'itinerary_uuid' => $salescall->itinerary->local_uuid,
+                        'itinerary_server_id' => $salescall->itinerary->server_id,
+                        'customer_id' => $salescall->customer_id,
+                        'salescall_type_id' => $salescall->salescall_type_id,
+                        'route_start_at' => $salescall->route_start_at?->toDateTimeString(),
+                        'latitude' => $salescall->latitude,
+                        'longitude' => $salescall->longitude,
+                        'latitude_actual_in' => $salescall->latitude_actual_in,
+                        'longitude_actual_in' => $salescall->longitude_actual_in,
+                        'latitude_actual_out' => $salescall->latitude_actual_out,
+                        'longitude_actual_out' => $salescall->longitude_actual_out,
+                        'actual_in' => $salescall->actual_in?->toDateTimeString(),
+                        'actual_out' => $salescall->actual_out?->toDateTimeString(),
+                        'salescall_status_id' => $salescall->salescall_status_id,
+                        'outcome_reason' => $salescall->outcome_reason,
+                        'partially_completed_at' => $salescall->partially_completed_at?->toDateTimeString(),
+                        'partially_completed_reason' => $salescall->partially_completed_reason,
+                        'partially_completed_by' => $salescall->partially_completed_by,
+                        'resumed_at' => $salescall->resumed_at?->toDateTimeString(),
+                        'resumed_by' => $salescall->resumed_by,
+                        'material_group_id' => $salescall->material_group_id,
+                        'brand_id' => $salescall->brand_id,
+                        'brand_other' => $salescall->brand_other,
+                        'category_id' => $salescall->category_id,
+                        'sub_category_id' => $salescall->sub_category_id,
+                        'sub_sub_category_id' => $salescall->sub_sub_category_id,
+                        'collection_amount' => $salescall->collection_amount,
+                        'remarks' => $salescall->remarks,
+                        'concerns' => $salescall->concerns,
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    if ($response->successful()) {
+                        $this->markSynced($salescall, [
+                            'server_id' => $response->json('server_id'),
+                            'ref_number' => $response->json('ref_number'),
+                        ]);
+                        $pushed++;
+                    } else {
+                        $this->recordItemFailure($salescall, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
+                            'stage' => 'salescall:portal',
+                            'endpoint' => '/api/sync/push/salescall',
+                            'http_status' => $response->status(),
+                        ]);
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordUnexpectedItemFailure($salescall, $e, 'salescall:unexpected');
                     $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
                 }
-            } catch (\Exception $e) {
-                $this->markFailed($salescall, $e->getMessage());
-                $failed++;
             }
-        }
 
         $pendingBrandSalescallIds = SalescallBrand::where('sync_status', 'pending')
             ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
             ->distinct()
             ->pluck('salescall_id');
 
-        foreach ($pendingBrandSalescallIds as $salescallId) {
-            $salescall = Salescall::find($salescallId);
+            foreach ($pendingBrandSalescallIds as $salescallId) {
+                $salescall = Salescall::find($salescallId);
 
-            if (! $salescall?->server_id) {
-                continue; // wait for salescall to sync first
-            }
-
-            $rows = SalescallBrand::where('salescall_id', $salescallId)->get();
-
-            try {
-                $response = $client->post("{$this->serverUrl}/api/sync/push/salescall-brands", [
-                    'salescall_server_id' => $salescall->server_id,
-                    'brands' => $rows->map(fn ($r) => [
-                        'material_group_id' => $r->material_group_id,
-                        'brand_id' => $r->brand_id,
-                        'quantity' => $r->quantity,
-                        'brand_other' => $r->brand_other,
-                    ])->values()->all(),
-                ]);
-
-                if ($response->status() === 401) {
-                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+                if (! $salescall?->server_id) {
+                    continue; // wait for salescall to sync first
                 }
 
-                if ($response->successful()) {
-                    SalescallBrand::where('salescall_id', $salescallId)->update(['sync_status' => 'synced', 'sync_error' => null]);
-                    $pushed++;
-                } else {
-                    SalescallBrand::where('salescall_id', $salescallId)->update([
-                        'sync_status' => 'failed',
-                        'sync_attempts' => DB::raw('sync_attempts + 1'),
-                        'sync_error' => $response->status().': '.$response->body(),
+                $rows = SalescallBrand::where('salescall_id', $salescallId)->get();
+
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/push/salescall-brands", [
+                        'salescall_server_id' => $salescall->server_id,
+                        'brands' => $rows->map(fn ($r) => [
+                            'material_group_id' => $r->material_group_id,
+                            'brand_id' => $r->brand_id,
+                            'quantity' => $r->quantity,
+                            'brand_other' => $r->brand_other,
+                        ])->values()->all(),
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    if ($response->successful()) {
+                        $rows->each(fn (SalescallBrand $row) => $this->markSynced($row));
+                        $pushed++;
+                    } else {
+                        $this->recordCollectionFailure(
+                            $rows,
+                            'portal_rejected',
+                            $response->status().': '.$this->trimRemoteError($response->body()),
+                            [
+                                'stage' => 'salescall-brands:portal',
+                                'endpoint' => '/api/sync/push/salescall-brands',
+                                'http_status' => $response->status(),
+                                'salescall_id' => $salescallId,
+                            ]
+                        );
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordCollectionUnexpectedFailure($rows, $e, 'salescall-brands:unexpected', [
+                        'salescall_id' => $salescallId,
                     ]);
                     $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
                 }
-            } catch (\Exception $e) {
-                SalescallBrand::where('salescall_id', $salescallId)->update([
-                    'sync_status' => 'failed',
-                    'sync_attempts' => DB::raw('sync_attempts + 1'),
-                    'sync_error' => $e->getMessage(),
-                ]);
-                $failed++;
             }
-        }
 
         $pendingCategories = SalescallCategory::where('sync_status', 'pending')
             ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
             ->get();
 
-        foreach ($pendingCategories as $categoryRecord) {
-            $salescall = Salescall::find($categoryRecord->salescall_id);
+            foreach ($pendingCategories as $categoryRecord) {
+                $salescall = Salescall::find($categoryRecord->salescall_id);
 
-            if (! $salescall?->server_id) {
-                continue; // wait for salescall to sync first
-            }
-
-            try {
-                $response = $client->post("{$this->serverUrl}/api/sync/push/salescall-category", [
-                    'salescall_server_id' => $salescall->server_id,
-                    'category_id' => $categoryRecord->category_id,
-                    'sub_category_id' => $categoryRecord->sub_category_id,
-                ]);
-
-                if ($response->status() === 401) {
-                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+                if (! $salescall?->server_id) {
+                    continue; // wait for salescall to sync first
                 }
 
-                if ($response->successful()) {
-                    $categoryRecord->update(['sync_status' => 'synced', 'sync_error' => null]);
-                    $pushed++;
-                } else {
-                    $this->markFailed($categoryRecord, $response->status().': '.$response->body());
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/push/salescall-category", [
+                        'salescall_server_id' => $salescall->server_id,
+                        'category_id' => $categoryRecord->category_id,
+                        'sub_category_id' => $categoryRecord->sub_category_id,
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    if ($response->successful()) {
+                        $this->markSynced($categoryRecord);
+                        $pushed++;
+                    } else {
+                        $this->recordItemFailure($categoryRecord, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
+                            'stage' => 'salescall-category:portal',
+                            'endpoint' => '/api/sync/push/salescall-category',
+                            'http_status' => $response->status(),
+                        ]);
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordUnexpectedItemFailure($categoryRecord, $e, 'salescall-category:unexpected');
                     $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
                 }
-            } catch (\Exception $e) {
-                $this->markFailed($categoryRecord, $e->getMessage());
-                $failed++;
             }
-        }
 
         $pendingImages = SalescallImage::with('salescall')
             ->where(function ($q) {
@@ -676,56 +714,25 @@ class SyncService
             })
             ->get();
 
-        foreach ($pendingImages as $image) {
-            if (! $image->salescall?->server_id) {
-                continue; // wait for salescall to sync first
-            }
-
-            if (! file_exists($image->local_path)) {
-                $this->markFailed($image, 'Local file not found: '.$image->local_path);
-                $failed++;
-
-                continue;
-            }
-
-            try {
-                $s3Key = $this->tabletS3UploadService->ensureSalescallImageUploaded($image);
-
-                if ($image->s3_key !== $s3Key) {
-                    $image->update(['s3_key' => $s3Key]);
+            foreach ($pendingImages as $image) {
+                if (! $image->salescall?->server_id) {
+                    continue; // wait for salescall to sync first
                 }
 
-                $response = $client
-                    ->attach('image', fopen($image->local_path, 'r'), basename($image->local_path))
-                    ->post("{$this->serverUrl}/api/sync/push/salescall-image", [
-                        'local_uuid' => $image->local_uuid,
-                        'salescall_server_id' => $image->salescall->server_id,
-                        'salescall_image_type_id' => $image->salescall_image_type_id,
-                        'notes' => $image->notes,
-                        'latitude' => $image->latitude,
-                        'longitude' => $image->longitude,
-                    ]);
+                $result = $this->pushSalescallImageItem($client, $image);
 
-                if ($response->status() === 401) {
-                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+                if ($result instanceof SyncResult) {
+                    return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
                 }
 
-                if ($response->successful()) {
-                    $image->update([
-                        'sync_status' => 'synced',
-                        'server_id' => $response->json('server_id'),
-                        'sync_error' => null,
-                    ]);
+                if ($result['success']) {
                     $pushed++;
                 } else {
-                    $this->markFailed($image, $response->status().': '.$response->body());
                     $failed++;
+                    $retryable++;
+                    $failureReasons[$result['reason']] = true;
                 }
-            } catch (\Exception $e) {
-                $this->markFailed($image, $e->getMessage());
-                $failed++;
             }
-        }
 
         $pendingProfiles = CustomerProfile::with('salescall')
             ->where(function ($q) {
@@ -734,112 +741,84 @@ class SyncService
             })
             ->get();
 
-        foreach ($pendingProfiles as $profile) {
-            if (! $profile->salescall?->server_id) {
-                continue; // salescall must sync first
-            }
-
-            try {
-                $signature = null;
-                if ($profile->signature_path && file_exists($profile->signature_path)) {
-                    $s3Key = $this->tabletS3UploadService->ensureProfileSignatureUploaded($profile);
-
-                    if ($profile->signature_s3_key !== $s3Key) {
-                        $profile->update(['signature_s3_key' => $s3Key]);
-                    }
-
-                    $signature = 'data:image/png;base64,'.base64_encode(file_get_contents($profile->signature_path));
+            foreach ($pendingProfiles as $profile) {
+                if (! $profile->salescall?->server_id) {
+                    continue; // salescall must sync first
                 }
 
-                $response = $client->post("{$this->serverUrl}/api/sync/push/customer-profile", [
-                    'local_uuid' => $profile->local_uuid,
-                    'salescall_server_id' => $profile->salescall->server_id,
-                    'sub_category_id' => $profile->sub_category_id,
-                    'registered_name' => $profile->registered_name,
-                    'owner_name' => $profile->owner_name,
-                    'address' => $profile->address,
-                    'tin' => $profile->tin,
-                    'landline' => $profile->landline,
-                    'mobile' => $profile->mobile,
-                    'classification' => $profile->classification,
-                    'incentive_type' => $profile->incentive_type,
-                    'birthday' => $profile->birthday?->format('Y-m-d'),
-                    'gender' => $profile->gender,
-                    'marital_status' => $profile->marital_status,
-                    'brand_products' => $profile->brand_products,
-                    'signature' => $signature,
-                ]);
+                $result = $this->pushCustomerProfileItem($client, $profile);
 
-                if ($response->status() === 401) {
-                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+                if ($result instanceof SyncResult) {
+                    return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
                 }
 
-                if ($response->successful()) {
-                    $profile->update([
-                        'sync_status' => 'synced',
-                        'server_id' => $response->json('server_id'),
-                        'sync_error' => null,
-                    ]);
+                if ($result['success']) {
                     $pushed++;
                 } else {
-                    $this->markFailed($profile, $response->status().': '.$response->body());
                     $failed++;
+                    $retryable++;
+                    $failureReasons[$result['reason']] = true;
                 }
-            } catch (\Exception $e) {
-                $this->markFailed($profile, $e->getMessage());
-                $failed++;
             }
-        }
 
         $pendingNotes = CustomerNote::where(function ($q) {
             $q->where('sync_status', 'pending')
                 ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
         })->get();
 
-        foreach ($pendingNotes as $note) {
-            try {
-                $response = $client->post("{$this->serverUrl}/api/sync/push/customer-note", [
-                    'local_uuid' => $note->local_uuid,
-                    'customer_id' => $note->customer_id,
-                    'title' => $note->title,
-                    'body' => $note->body,
-                ]);
-
-                if ($response->status() === 401) {
-                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
-                }
-
-                if ($response->successful()) {
-                    $note->update([
-                        'sync_status' => 'synced',
-                        'server_id' => $response->json('server_id'),
-                        'sync_error' => null,
-                        'synced_at' => now(),
+            foreach ($pendingNotes as $note) {
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/push/customer-note", [
+                        'local_uuid' => $note->local_uuid,
+                        'customer_id' => $note->customer_id,
+                        'title' => $note->title,
+                        'body' => $note->body,
                     ]);
-                    $pushed++;
-                } else {
-                    $this->markFailed($note, $response->status().': '.$response->body());
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    if ($response->successful()) {
+                        $this->markSynced($note, [
+                            'server_id' => $response->json('server_id'),
+                            'synced_at' => now(),
+                        ]);
+                        $pushed++;
+                    } else {
+                        $this->recordItemFailure($note, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
+                            'stage' => 'customer-note:portal',
+                            'endpoint' => '/api/sync/push/customer-note',
+                            'http_status' => $response->status(),
+                        ]);
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordUnexpectedItemFailure($note, $e, 'customer-note:unexpected');
                     $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
                 }
-            } catch (\Exception $e) {
-                $this->markFailed($note, $e->getMessage());
-                $failed++;
             }
+        } catch (Throwable $e) {
+            Log::error('sync:push:unhandled', [
+                'exception_class' => $e::class,
+                'exception_message' => $e->getMessage(),
+            ]);
+
+            return SyncResult::fail(
+                'Sync could not be completed. Your pending data remains saved locally and can be retried.',
+                'unexpected_sync_error',
+                $pushed,
+                max($failed, 1),
+                max($retryable, 1),
+                array_values(array_unique([...array_keys($failureReasons), 'unexpected_sync_error']))
+            );
         }
 
-        if ($pushed === 0 && $failed === 0) {
-            return SyncResult::ok('Nothing to push.');
-        }
-
-        if ($failed > 0 && $pushed === 0) {
-            return SyncResult::fail("{$failed} item(s) failed to sync.", 'push_failed');
-        }
-
-        if ($failed > 0) {
-            return SyncResult::ok("Pushed {$pushed} items. {$failed} failed and will retry.");
-        }
-
-        return SyncResult::ok("Pushed {$pushed} items successfully.");
+        return $this->buildPushResult($pushed, $failed, $retryable, array_keys($failureReasons));
     }
 
     /**
@@ -859,7 +838,7 @@ class SyncService
         try {
             $this->client($user->api_token)
                 ->post("{$this->serverUrl}/api/sync/push/customer-note/delete", ['local_uuid' => $localUuid]);
-        } catch (\Exception) {
+        } catch (Throwable) {
             // best-effort — nothing local left to mark as failed
         }
     }
@@ -876,5 +855,387 @@ class SyncService
             'sync_attempts' => ($model->sync_attempts ?? 0) + 1,
             'sync_error' => $error,
         ]);
+    }
+
+    private function markSynced(Model $model, array $attributes = []): void
+    {
+        $model->update([
+            ...$attributes,
+            'sync_status' => 'synced',
+            'sync_error' => null,
+        ]);
+    }
+
+    /**
+     * @return array{success: bool, reason?: string}|SyncResult
+     */
+    private function pushSalescallImageItem(PendingRequest $client, SalescallImage $image): array|SyncResult
+    {
+        try {
+            if (! $this->isReadableLocalFile($image->local_path)) {
+                $this->recordItemFailure($image, 'local_file_missing', 'local_file_missing: '.$this->displayPath($image->local_path), [
+                    'stage' => 'salescall-image:local-file',
+                    'local_path' => $image->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            $s3Key = $this->ensureSalescallImageS3Key($image);
+
+            $stream = fopen($image->local_path, 'r');
+
+            if ($stream === false) {
+                $this->recordItemFailure($image, 'local_file_missing', 'local_file_missing: unable to open '.$this->displayPath($image->local_path), [
+                    'stage' => 'salescall-image:local-open',
+                    'local_path' => $image->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            try {
+                $response = $client
+                    ->attach('image', $stream, basename($image->local_path))
+                    ->post("{$this->serverUrl}/api/sync/push/salescall-image", [
+                        'local_uuid' => $image->local_uuid,
+                        'salescall_server_id' => $image->salescall->server_id,
+                        'salescall_image_type_id' => $image->salescall_image_type_id,
+                        'notes' => $image->notes,
+                        'latitude' => $image->latitude,
+                        'longitude' => $image->longitude,
+                    ]);
+            } finally {
+                fclose($stream);
+            }
+
+            if ($response->status() === 401) {
+                return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+            }
+
+            if (! $response->successful()) {
+                $failure = $response->failed() && $response->status() >= 500
+                    ? 'portal_upload_failed'
+                    : 'portal_rejected';
+
+                $this->recordItemFailure($image, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
+                    'stage' => 'salescall-image:portal',
+                    'endpoint' => '/api/sync/push/salescall-image',
+                    'http_status' => $response->status(),
+                    's3_key' => $s3Key,
+                ]);
+
+                return ['success' => false, 'reason' => $failure];
+            }
+
+            $this->markSynced($image, [
+                'server_id' => $response->json('server_id'),
+            ]);
+
+            return ['success' => true];
+        } catch (Throwable $e) {
+            $classification = $this->classifyBinaryThrowable($e);
+            $this->recordThrowableFailure($image, $classification, $e, [
+                'stage' => 'salescall-image:unexpected',
+                'endpoint' => '/api/sync/push/salescall-image',
+                'local_path' => $image->local_path,
+                's3_key' => $image->s3_key,
+            ]);
+
+            return ['success' => false, 'reason' => $classification];
+        }
+    }
+
+    /**
+     * @return array{success: bool, reason?: string}|SyncResult
+     */
+    private function pushCustomerProfileItem(PendingRequest $client, CustomerProfile $profile): array|SyncResult
+    {
+        try {
+            $signature = null;
+
+            if ($profile->signature_path !== null && $profile->signature_path !== '') {
+                if (! $this->isReadableLocalFile($profile->signature_path)) {
+                    $this->recordItemFailure($profile, 'local_file_missing', 'local_file_missing: '.$this->displayPath($profile->signature_path), [
+                        'stage' => 'customer-profile:local-file',
+                        'local_path' => $profile->signature_path,
+                    ]);
+
+                    return ['success' => false, 'reason' => 'local_file_missing'];
+                }
+
+                $s3Key = $this->ensureProfileSignatureS3Key($profile);
+                $signatureBytes = file_get_contents($profile->signature_path);
+
+                if ($signatureBytes === false) {
+                    $this->recordItemFailure($profile, 'local_file_missing', 'local_file_missing: unable to read '.$this->displayPath($profile->signature_path), [
+                        'stage' => 'customer-profile:local-read',
+                        'local_path' => $profile->signature_path,
+                        's3_key' => $s3Key,
+                    ]);
+
+                    return ['success' => false, 'reason' => 'local_file_missing'];
+                }
+
+                $signature = 'data:image/png;base64,'.base64_encode($signatureBytes);
+            }
+
+            $response = $client->post("{$this->serverUrl}/api/sync/push/customer-profile", [
+                'local_uuid' => $profile->local_uuid,
+                'salescall_server_id' => $profile->salescall->server_id,
+                'sub_category_id' => $profile->sub_category_id,
+                'registered_name' => $profile->registered_name,
+                'owner_name' => $profile->owner_name,
+                'address' => $profile->address,
+                'tin' => $profile->tin,
+                'landline' => $profile->landline,
+                'mobile' => $profile->mobile,
+                'classification' => $profile->classification,
+                'incentive_type' => $profile->incentive_type,
+                'birthday' => $profile->birthday?->format('Y-m-d'),
+                'gender' => $profile->gender,
+                'marital_status' => $profile->marital_status,
+                'brand_products' => $profile->brand_products,
+                'signature' => $signature,
+            ]);
+
+            if ($response->status() === 401) {
+                return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+            }
+
+            if (! $response->successful()) {
+                $failure = $response->failed() && $response->status() >= 500
+                    ? 'portal_upload_failed'
+                    : 'portal_rejected';
+
+                $this->recordItemFailure($profile, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
+                    'stage' => 'customer-profile:portal',
+                    'endpoint' => '/api/sync/push/customer-profile',
+                    'http_status' => $response->status(),
+                    's3_key' => $profile->signature_s3_key,
+                ]);
+
+                return ['success' => false, 'reason' => $failure];
+            }
+
+            $this->markSynced($profile, [
+                'server_id' => $response->json('server_id'),
+            ]);
+
+            return ['success' => true];
+        } catch (Throwable $e) {
+            $classification = $this->classifyBinaryThrowable($e);
+            $this->recordThrowableFailure($profile, $classification, $e, [
+                'stage' => 'customer-profile:unexpected',
+                'endpoint' => '/api/sync/push/customer-profile',
+                'local_path' => $profile->signature_path,
+                's3_key' => $profile->signature_s3_key,
+            ]);
+
+            return ['success' => false, 'reason' => $classification];
+        }
+    }
+
+    private function ensureSalescallImageS3Key(SalescallImage $image): string
+    {
+        try {
+            $s3Key = $this->tabletS3UploadService->ensureSalescallImageUploaded($image);
+        } catch (Throwable $e) {
+            throw $this->rethrowWithClassification($e, 's3_upload_failed');
+        }
+
+        if ($image->s3_key !== $s3Key) {
+            try {
+                $image->update(['s3_key' => $s3Key]);
+            } catch (Throwable $e) {
+                throw $this->rethrowWithClassification($e, 's3_key_persist_failed');
+            }
+        }
+
+        return $s3Key;
+    }
+
+    private function ensureProfileSignatureS3Key(CustomerProfile $profile): string
+    {
+        try {
+            $s3Key = $this->tabletS3UploadService->ensureProfileSignatureUploaded($profile);
+        } catch (Throwable $e) {
+            throw $this->rethrowWithClassification($e, 's3_upload_failed');
+        }
+
+        if ($profile->signature_s3_key !== $s3Key) {
+            try {
+                $profile->update(['signature_s3_key' => $s3Key]);
+            } catch (Throwable $e) {
+                throw $this->rethrowWithClassification($e, 's3_key_persist_failed');
+            }
+        }
+
+        return $s3Key;
+    }
+
+    private function isReadableLocalFile(?string $path): bool
+    {
+        return is_string($path) && $path !== '' && is_file($path) && is_readable($path);
+    }
+
+    private function classifyBinaryThrowable(Throwable $e): string
+    {
+        $message = $e->getMessage();
+
+        foreach ([
+            'local_file_missing',
+            's3_upload_failed',
+            's3_key_persist_failed',
+            'portal_upload_failed',
+            'portal_rejected',
+            'unexpected_sync_error',
+        ] as $classification) {
+            if (str_starts_with($message, $classification.'|')) {
+                return $classification;
+            }
+        }
+
+        return 'unexpected_sync_error';
+    }
+
+    private function rethrowWithClassification(Throwable $e, string $classification): Throwable
+    {
+        return new \RuntimeException($classification.'|'.$e->getMessage(), 0, $e);
+    }
+
+    private function recordUnexpectedItemFailure(Model $model, Throwable $e, string $stage): void
+    {
+        $this->recordThrowableFailure($model, 'unexpected_sync_error', $e, [
+            'stage' => $stage,
+        ]);
+    }
+
+    private function recordThrowableFailure(Model $model, string $classification, Throwable $e, array $context = []): void
+    {
+        $message = $this->formatSyncError($classification, $e->getMessage());
+
+        $this->recordItemFailure($model, $classification, $message, [
+            ...$context,
+            'exception_class' => $e::class,
+            'exception_message' => $e->getMessage(),
+        ]);
+    }
+
+    private function recordItemFailure(Model $model, string $classification, string $error, array $context = []): void
+    {
+        $formattedError = $this->formatSyncError($classification, $error);
+
+        try {
+            $this->markFailed($model, $formattedError);
+        } catch (Throwable $markFailedError) {
+            Log::error('sync:item:mark-failed-error', [
+                'classification' => $classification,
+                'model' => $model::class,
+                'model_id' => $model->getKey(),
+                'original_error' => $formattedError,
+                'mark_failed_exception_class' => $markFailedError::class,
+                'mark_failed_exception_message' => $markFailedError->getMessage(),
+            ]);
+        }
+
+        Log::warning('sync:item:failed', [
+            'classification' => $classification,
+            'model' => $model::class,
+            'model_id' => $model->getKey(),
+            'local_uuid' => $model->local_uuid ?? null,
+            'error' => $formattedError,
+            ...$context,
+        ]);
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, Model>  $models
+     */
+    private function recordCollectionFailure(\Illuminate\Support\Collection $models, string $classification, string $error, array $context = []): void
+    {
+        $models->each(fn (Model $model) => $this->recordItemFailure($model, $classification, $error, $context));
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, Model>  $models
+     */
+    private function recordCollectionUnexpectedFailure(\Illuminate\Support\Collection $models, Throwable $e, string $stage, array $context = []): void
+    {
+        $models->each(fn (Model $model) => $this->recordThrowableFailure($model, 'unexpected_sync_error', $e, [
+            'stage' => $stage,
+            ...$context,
+        ]));
+    }
+
+    /**
+     * @param  list<string>  $failureReasons
+     */
+    private function buildPushResult(int $pushed, int $failed, int $retryable, array $failureReasons): SyncResult
+    {
+        if ($pushed === 0 && $failed === 0) {
+            return SyncResult::ok('Nothing to push.', 0, 0, 0, []);
+        }
+
+        if ($failed > 0 && $pushed === 0) {
+            return SyncResult::fail(
+                $failed === 1
+                    ? '1 item could not be uploaded and will retry later.'
+                    : "{$failed} items could not be uploaded and will retry later.",
+                'push_failed',
+                0,
+                $failed,
+                $retryable,
+                $failureReasons,
+            );
+        }
+
+        if ($failed > 0) {
+            return SyncResult::ok(
+                "{$pushed} item".($pushed === 1 ? '' : 's')." synced. {$failed} item".($failed === 1 ? '' : 's')." could not be uploaded and will retry later.",
+                $pushed,
+                $failed,
+                $retryable,
+                $failureReasons,
+            );
+        }
+
+        return SyncResult::ok(
+            "{$pushed} item".($pushed === 1 ? '' : 's')." synced successfully.",
+            $pushed,
+            0,
+            0,
+            [],
+        );
+    }
+
+    private function trimRemoteError(string $body): string
+    {
+        $trimmed = trim($body);
+
+        if ($trimmed === '') {
+            return 'Empty response body';
+        }
+
+        return mb_substr($trimmed, 0, 300);
+    }
+
+    private function trimSyncError(string $error): string
+    {
+        return mb_substr(trim($error), 0, 300);
+    }
+
+    private function formatSyncError(string $classification, string $detail): string
+    {
+        if (str_starts_with($detail, $classification.'|')) {
+            $detail = substr($detail, strlen($classification) + 1) ?: $detail;
+        }
+
+        return $classification.': '.$this->trimSyncError($detail);
+    }
+
+    private function displayPath(?string $path): string
+    {
+        return is_string($path) && $path !== '' ? $path : '(missing path)';
     }
 }

@@ -6,6 +6,115 @@ import UIKit
 
 var output = ""
 
+private struct StartupMigrationArtifactPayload: Decodable {
+    let runId: String
+    let status: String
+    let databasePath: String
+    let connection: String
+    let appliedMigrations: [String]
+    let failedMigration: String?
+    let exceptionClass: String?
+    let exceptionMessage: String?
+    let timestamp: String
+
+    private enum CodingKeys: String, CodingKey {
+        case runId = "run_id"
+        case status
+        case databasePath = "database_path"
+        case connection
+        case appliedMigrations = "applied_migrations"
+        case failedMigration = "failed_migration"
+        case exceptionClass = "exception_class"
+        case exceptionMessage = "exception_message"
+        case timestamp
+    }
+}
+
+private struct StartupMigrationTracePayload: Codable {
+    let runId: String
+    let runtimeMode: String
+    let checkpoint: String
+    let timestamp: String
+    let appPath: String?
+    let storagePath: String?
+    let databasePath: String?
+    let command: String?
+    let commandExitStatus: Int?
+    let connection: String?
+    let artifactPath: String?
+    let phpEmbedInitResult: Int?
+    let phpExecuteScriptReturned: Bool?
+    let phpExecuteScriptHasReturnValue: Bool?
+    let phpOutputExcerpt: String?
+    let exceptionClass: String?
+    let exceptionMessage: String?
+    let history: [StartupMigrationTraceEntry]
+
+    private enum CodingKeys: String, CodingKey {
+        case runId = "run_id"
+        case runtimeMode = "runtime_mode"
+        case checkpoint
+        case timestamp
+        case appPath = "app_path"
+        case storagePath = "storage_path"
+        case databasePath = "database_path"
+        case command
+        case commandExitStatus = "command_exit_status"
+        case connection
+        case artifactPath = "artifact_path"
+        case phpEmbedInitResult = "php_embed_init_result"
+        case phpExecuteScriptReturned = "php_execute_script_returned"
+        case phpExecuteScriptHasReturnValue = "php_execute_script_has_return_value"
+        case phpOutputExcerpt = "php_output_excerpt"
+        case exceptionClass = "exception_class"
+        case exceptionMessage = "exception_message"
+        case history
+    }
+}
+
+private struct StartupMigrationTraceEntry: Codable {
+    let checkpoint: String
+    let timestamp: String
+    let appPath: String?
+    let storagePath: String?
+    let databasePath: String?
+    let command: String?
+    let commandExitStatus: Int?
+    let connection: String?
+    let artifactPath: String?
+    let phpEmbedInitResult: Int?
+    let phpExecuteScriptReturned: Bool?
+    let phpExecuteScriptHasReturnValue: Bool?
+    let phpOutputExcerpt: String?
+    let exceptionClass: String?
+    let exceptionMessage: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case checkpoint
+        case timestamp
+        case appPath = "app_path"
+        case storagePath = "storage_path"
+        case databasePath = "database_path"
+        case command
+        case commandExitStatus = "command_exit_status"
+        case connection
+        case artifactPath = "artifact_path"
+        case phpEmbedInitResult = "php_embed_init_result"
+        case phpExecuteScriptReturned = "php_execute_script_returned"
+        case phpExecuteScriptHasReturnValue = "php_execute_script_has_return_value"
+        case phpOutputExcerpt = "php_output_excerpt"
+        case exceptionClass = "exception_class"
+        case exceptionMessage = "exception_message"
+    }
+}
+
+struct ClassicStartupInvocationResult {
+    let output: String
+    let phpEmbedInitResult: Int32
+    let phpExecuteScriptReturned: Bool
+    let phpExecuteScriptHasReturnValue: Bool
+}
+
 @_cdecl("pipe_php_output")
 public func pipe_php_output(_ cString: UnsafePointer<CChar>?) {
     guard let cString = cString else { return }
@@ -65,37 +174,154 @@ struct NativePHPApp: App {
         // 3. Boot persistent PHP runtime (one-time Laravel boot) — unless classic mode
         let runtimeMode = Self.getRuntimeMode()
         NSLog("[NativePHP] Runtime mode: \(runtimeMode)")
+        let startupMigrationRunId = UUID().uuidString
+        let artifactURL = startupMigrationArtifactURL()
+        let traceURL = startupMigrationTraceURL()
 
         let booted: Bool
         if runtimeMode == "classic" {
             NSLog("[NativePHP] Classic mode configured — skipping persistent runtime boot")
             booted = false
-            createStorageLink()
         } else {
             NSLog("[NativePHP] PersistentPHPRuntime.boot() START")
             booted = PersistentPHPRuntime.shared.boot()
             NSLog("[NativePHP] PersistentPHPRuntime.boot() DONE, booted=\(booted)")
 
             if booted {
-                // Only run artisan commands when app was extracted or updated
                 if didExtract {
-                    NSLog("[NativePHP] artisan migrate START (post-extraction)")
-                    _ = PersistentPHPRuntime.shared.artisan(command: "migrate --force")
-                    NSLog("[NativePHP] artisan migrate DONE")
-
                     NSLog("[NativePHP] artisan storage:link START")
                     _ = PersistentPHPRuntime.shared.artisan(command: "storage:link")
                     NSLog("[NativePHP] artisan storage:link DONE")
-                } else {
-                    NSLog("[NativePHP] Skipping artisan commands — no extraction needed")
                 }
 
                 // Execute plugin post-boot callbacks
                 NativePHPPluginRegistry.shared.executeOnAppReady()
             } else {
                 NSLog("[NativePHP] persistent boot failed, falling back to classic mode")
-                createStorageLink()
             }
+        }
+
+        do {
+            try deletePreviousStartupMigrationArtifact(at: artifactURL)
+        } catch {
+            let detail = "Startup migration artifact cleanup failed at \(artifactURL.path): \(error.localizedDescription)"
+            NSLog("[NativePHP] \(detail)")
+            DispatchQueue.main.async {
+                AppState.shared.markStartupFailed(detail)
+            }
+            return
+        }
+
+        if !booted {
+            do {
+                try deletePreviousStartupMigrationTrace(at: traceURL)
+            } catch {
+                let detail = "Startup migration trace cleanup failed at \(traceURL.path): \(error.localizedDescription)"
+                NSLog("[NativePHP] \(detail)")
+                DispatchQueue.main.async {
+                    AppState.shared.markStartupFailed(detail)
+                }
+                return
+            }
+
+            recordStartupMigrationTrace(
+                at: traceURL,
+                runId: startupMigrationRunId,
+                runtimeMode: runtimeMode,
+                checkpoint: "swift_before_classic_artisan",
+                appPath: AppUpdateManager.shared.getAppPath(),
+                storagePath: startupMigrationStorageRootURL().path,
+                databasePath: startupDatabaseURL().path,
+                command: "app:startup-migrate",
+                phpOutputExcerpt: nil,
+                exceptionClass: nil,
+                exceptionMessage: nil,
+                phpEmbedInitResult: nil,
+                phpExecuteScriptReturned: nil,
+                phpExecuteScriptHasReturnValue: nil,
+                commandExitStatus: nil,
+                artifactPath: artifactURL.path,
+                connection: "sqlite"
+            )
+        }
+
+        let migrationOutput: String
+        if booted {
+            migrationOutput = PersistentPHPRuntime.shared.artisan(command: "app:startup-migrate --run-id=\(startupMigrationRunId) --no-interaction")
+        } else {
+            let invocation = artisan(
+                additionalArgs: ["app:startup-migrate", "--run-id=\(startupMigrationRunId)", "--no-interaction"],
+                startupMigrationRunId: startupMigrationRunId,
+                startupMigrationTraceURL: traceURL
+            )
+
+            migrationOutput = invocation.output
+
+            recordStartupMigrationTrace(
+                at: traceURL,
+                runId: startupMigrationRunId,
+                runtimeMode: runtimeMode,
+                checkpoint: "swift_after_classic_artisan",
+                appPath: AppUpdateManager.shared.getAppPath(),
+                storagePath: startupMigrationStorageRootURL().path,
+                databasePath: startupDatabaseURL().path,
+                command: "app:startup-migrate",
+                phpOutputExcerpt: invocation.output,
+                exceptionClass: nil,
+                exceptionMessage: nil,
+                phpEmbedInitResult: Int(invocation.phpEmbedInitResult),
+                phpExecuteScriptReturned: invocation.phpExecuteScriptReturned,
+                phpExecuteScriptHasReturnValue: invocation.phpExecuteScriptHasReturnValue,
+                commandExitStatus: nil,
+                artifactPath: artifactURL.path,
+                connection: "sqlite"
+            )
+        }
+
+        let executionMode = booted ? "persistent" : "classic"
+        NSLog("[NativePHP] Startup migration gate execution mode: \(executionMode)")
+
+        guard let migrationArtifact = loadStartupMigrationArtifact(at: artifactURL) else {
+            let detail = "Startup migration artifact missing after \(executionMode) invocation. Path: \(artifactURL.path). Output: \(migrationOutput)"
+            NSLog("[NativePHP] \(detail)")
+            DispatchQueue.main.async {
+                AppState.shared.markStartupFailed(detail)
+            }
+            return
+        }
+
+        guard migrationArtifact.runId == startupMigrationRunId else {
+            let detail = "Startup migration artifact run_id mismatch. Expected \(startupMigrationRunId), got \(migrationArtifact.runId). Path: \(artifactURL.path)"
+            NSLog("[NativePHP] \(detail)")
+            DispatchQueue.main.async {
+                AppState.shared.markStartupFailed(detail)
+            }
+            return
+        }
+
+        NSLog("[NativePHP] Startup migration artifact status: \(migrationArtifact.status)")
+        NSLog("[NativePHP] Startup migration artifact DB path: \(migrationArtifact.databasePath)")
+
+        guard migrationArtifact.status == "current" || migrationArtifact.status == "migrated" || migrationArtifact.status == "failed" else {
+            let detail = "Startup migration artifact had invalid status \(migrationArtifact.status). Path: \(artifactURL.path)"
+            NSLog("[NativePHP] \(detail)")
+            DispatchQueue.main.async {
+                AppState.shared.markStartupFailed(detail)
+            }
+            return
+        }
+
+        guard migrationArtifact.status != "failed" else {
+            let detail = startupMigrationFailureDetail(from: migrationArtifact, artifactURL: artifactURL, output: migrationOutput)
+            NSLog("[NativePHP] Startup migration failed: \(detail)")
+            DispatchQueue.main.async {
+                AppState.shared.markStartupFailed(detail)
+            }
+            return
+        }
+
+        if !booted || didExtract {
+            createStorageLink()
         }
 
         // 4. Now that PHP is booted, allow WebView to render
@@ -309,6 +535,167 @@ struct NativePHPApp: App {
 
     private func createStorageLink() {
         _ = artisan(additionalArgs: ["storage:link"])
+    }
+
+    private func startupMigrationArtifactURL() -> URL {
+        return startupMigrationStorageRootURL()
+            .appendingPathComponent("framework")
+            .appendingPathComponent("nativephp")
+            .appendingPathComponent("startup-migration-status.json")
+    }
+
+    private func startupMigrationTraceURL() -> URL {
+        return startupMigrationStorageRootURL()
+            .appendingPathComponent("framework")
+            .appendingPathComponent("nativephp")
+            .appendingPathComponent("startup-migration-trace.json")
+    }
+
+    private func startupMigrationStorageRootURL() -> URL {
+        let supportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+
+        return supportDir
+            .appendingPathComponent("storage")
+    }
+
+    private func startupDatabaseURL() -> URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("database/database.sqlite")
+    }
+
+    private func deletePreviousStartupMigrationArtifact(at artifactURL: URL) throws {
+        let fileManager = FileManager.default
+
+        guard fileManager.fileExists(atPath: artifactURL.path) else {
+            return
+        }
+
+        try fileManager.removeItem(at: artifactURL)
+    }
+
+    private func deletePreviousStartupMigrationTrace(at traceURL: URL) throws {
+        let fileManager = FileManager.default
+
+        guard fileManager.fileExists(atPath: traceURL.path) else {
+            return
+        }
+
+        try fileManager.removeItem(at: traceURL)
+    }
+
+    private func loadStartupMigrationArtifact(at artifactURL: URL) -> StartupMigrationArtifactPayload? {
+        guard let data = try? Data(contentsOf: artifactURL) else {
+            return nil
+        }
+
+        return try? JSONDecoder().decode(StartupMigrationArtifactPayload.self, from: data)
+    }
+
+    private func startupMigrationFailureDetail(
+        from artifact: StartupMigrationArtifactPayload,
+        artifactURL: URL,
+        output: String
+    ) -> String {
+        let migrationSuffix = artifact.failedMigration.map { " Migration: \($0)." } ?? ""
+        let classSuffix = artifact.exceptionClass.map { " Error: \($0)." } ?? ""
+        let outputSuffix = output.isEmpty ? "" : " Output: \(output)"
+        let errorMessage = artifact.exceptionMessage ?? "Unknown migration failure."
+
+        return "Database migration failed for \(artifact.databasePath).\(migrationSuffix)\(classSuffix) \(errorMessage) Artifact: \(artifactURL.path).\(outputSuffix)"
+    }
+
+    private func loadStartupMigrationTrace(at traceURL: URL, runId: String) -> StartupMigrationTracePayload? {
+        guard let data = try? Data(contentsOf: traceURL),
+              let payload = try? JSONDecoder().decode(StartupMigrationTracePayload.self, from: data),
+              payload.runId == runId else {
+            return nil
+        }
+
+        return payload
+    }
+
+    private func recordStartupMigrationTrace(
+        at traceURL: URL,
+        runId: String,
+        runtimeMode: String,
+        checkpoint: String,
+        appPath: String?,
+        storagePath: String?,
+        databasePath: String?,
+        command: String?,
+        phpOutputExcerpt: String?,
+        exceptionClass: String?,
+        exceptionMessage: String?,
+        phpEmbedInitResult: Int?,
+        phpExecuteScriptReturned: Bool?,
+        phpExecuteScriptHasReturnValue: Bool?,
+        commandExitStatus: Int?,
+        artifactPath: String?,
+        connection: String?
+    ) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let trimmedOutput = trimmedStartupTraceOutput(phpOutputExcerpt)
+
+        let entry = StartupMigrationTraceEntry(
+            checkpoint: checkpoint,
+            timestamp: timestamp,
+            appPath: appPath,
+            storagePath: storagePath,
+            databasePath: databasePath,
+            command: command,
+            commandExitStatus: commandExitStatus,
+            connection: connection,
+            artifactPath: artifactPath,
+            phpEmbedInitResult: phpEmbedInitResult,
+            phpExecuteScriptReturned: phpExecuteScriptReturned,
+            phpExecuteScriptHasReturnValue: phpExecuteScriptHasReturnValue,
+            phpOutputExcerpt: trimmedOutput,
+            exceptionClass: exceptionClass,
+            exceptionMessage: exceptionMessage
+        )
+
+        let history = (loadStartupMigrationTrace(at: traceURL, runId: runId)?.history ?? []) + [entry]
+        let payload = StartupMigrationTracePayload(
+            runId: runId,
+            runtimeMode: runtimeMode,
+            checkpoint: checkpoint,
+            timestamp: timestamp,
+            appPath: appPath,
+            storagePath: storagePath,
+            databasePath: databasePath,
+            command: command,
+            commandExitStatus: commandExitStatus,
+            connection: connection,
+            artifactPath: artifactPath,
+            phpEmbedInitResult: phpEmbedInitResult,
+            phpExecuteScriptReturned: phpExecuteScriptReturned,
+            phpExecuteScriptHasReturnValue: phpExecuteScriptHasReturnValue,
+            phpOutputExcerpt: trimmedOutput,
+            exceptionClass: exceptionClass,
+            exceptionMessage: exceptionMessage,
+            history: history
+        )
+
+        do {
+            try FileManager.default.createDirectory(at: traceURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let data = try JSONEncoder.startupTrace.encode(payload)
+            try data.write(to: traceURL, options: .atomic)
+        } catch {
+            NSLog("[NativePHP] Failed to persist startup migration trace at \(traceURL.path): \(error.localizedDescription)")
+        }
+    }
+
+    private func trimmedStartupTraceOutput(_ output: String?) -> String? {
+        guard let output else {
+            return nil
+        }
+
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+
+        return String(trimmed.prefix(500))
     }
 
     private func preparePhpEnvironment() -> String {
@@ -527,7 +914,11 @@ struct NativePHPApp: App {
         return "base64:\(base64Key)"
     }
 
-    func artisan(additionalArgs: [String] = []) -> String {
+    func artisan(
+        additionalArgs: [String] = [],
+        startupMigrationRunId: String? = nil,
+        startupMigrationTraceURL: URL? = nil
+    ) -> ClassicStartupInvocationResult {
         print("Running `php artisan \(additionalArgs.joined())`...")
 
         let appPath = AppUpdateManager.shared.getAppPath()
@@ -535,7 +926,12 @@ struct NativePHPApp: App {
 
         guard FileManager.default.fileExists(atPath: phpFilePath) else {
             NSLog("[NativePHP] Refusing artisan — missing \(phpFilePath)")
-            return ""
+            return ClassicStartupInvocationResult(
+                output: "",
+                phpEmbedInitResult: -1,
+                phpExecuteScriptReturned: false,
+                phpExecuteScriptHasReturnValue: false
+            )
         }
 
         output = ""
@@ -548,25 +944,61 @@ struct NativePHPApp: App {
 
         setenv("PHP_SELF", "artisan.php", 1)
         setenv("APP_RUNNING_IN_CONSOLE", "true", 1)
+        setenv("NATIVEPHP_RUNNING", "true", 1)
+        setenv("NATIVEPHP_PLATFORM", "ios", 1)
+        setenv("APP_URL", "php://127.0.0.1", 1)
+        setenv("ASSET_URL", "php://127.0.0.1/_assets/", 1)
+
+        if let startupMigrationRunId {
+            setenv("NATIVEPHP_STARTUP_RUN_ID", startupMigrationRunId, 1)
+            setenv("NATIVEPHP_STARTUP_RUNTIME_MODE", "classic", 1)
+            setenv("NATIVEPHP_STARTUP_APP_PATH", appPath, 1)
+            setenv("NATIVEPHP_STARTUP_STORAGE_PATH", startupMigrationStorageRootURL().path, 1)
+            setenv("NATIVEPHP_STARTUP_DATABASE_PATH", startupDatabaseURL().path, 1)
+
+            if let startupMigrationTraceURL {
+                setenv("NATIVEPHP_STARTUP_TRACE_PATH", startupMigrationTraceURL.path, 1)
+            }
+        }
 
         let additionalCArgs = additionalArgs.map { strdup($0) }
         argv.append(contentsOf: additionalCArgs)
 
         let argc = Int32(argv.count)
+        var phpEmbedInitResult: Int32 = -1
+        var phpExecuteScriptReturned = false
 
         argv.withUnsafeMutableBufferPointer { bufferPtr in
-            php_embed_init(argc, bufferPtr.baseAddress)
+            phpEmbedInitResult = php_embed_init(argc, bufferPtr.baseAddress)
+
+            guard phpEmbedInitResult == 0 else {
+                return
+            }
 
             var fileHandle = zend_file_handle()
             zend_stream_init_filename(&fileHandle, phpFilePath)
 
             php_execute_script(&fileHandle)
+            phpExecuteScriptReturned = true
 
             php_embed_shutdown()
         }
 
         argv.forEach { free($0) }
 
-        return output
+        return ClassicStartupInvocationResult(
+            output: output,
+            phpEmbedInitResult: phpEmbedInitResult,
+            phpExecuteScriptReturned: phpExecuteScriptReturned,
+            phpExecuteScriptHasReturnValue: false
+        )
+    }
+}
+
+private extension JSONEncoder {
+    static var startupTrace: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
+        return encoder
     }
 }
