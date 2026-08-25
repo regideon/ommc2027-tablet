@@ -95,6 +95,14 @@ class SalescallPage extends Page
      */
     public array $pendingPhoto = [];
 
+    /**
+     * Same purpose as $pendingPhoto but for Change Profile attachments — no
+     * type_id, since attachments aren't categorized by photo subcategory.
+     *
+     * @var array<string, array{salescall_id: int}>
+     */
+    public array $pendingAttachment = [];
+
     public function mount(): void
     {
         $this->preselectedId = (int) request()->get('call') ?: null;
@@ -418,6 +426,180 @@ class SalescallPage extends Page
         $this->mirrorPhotoForPreview($image);
 
         $this->loadPhotos($salescallId);
+    }
+
+    /**
+     * Change Profile "Supporting Documents" — photo capture only mirrors the
+     * Photos tab's native flow exactly (Camera facade has no document/PDF
+     * picker, so PDFs still go through the plain file-input fallback in the
+     * blade, handled by saveProfileAttachment()).
+     */
+    public function takeProfileAttachmentPhoto(int $salescallId): void
+    {
+        if (function_exists('nativephp_call')) {
+            $capture = Camera::getPhoto();
+
+            $this->pendingAttachment[$capture->getId()] = [
+                'salescall_id' => $salescallId,
+            ];
+
+            $capture->start();
+        }
+    }
+
+    public function pickProfileAttachmentFromGallery(int $salescallId): void
+    {
+        if (function_exists('nativephp_call')) {
+            $picker = Camera::pickImages('image')->single();
+
+            $this->pendingAttachment[$picker->getId()] = [
+                'salescall_id' => $salescallId,
+            ];
+
+            $picker->start();
+        }
+    }
+
+    #[On('native:'.PhotoTaken::class)]
+    public function onAttachmentPhotoTaken(string $path, string $mimeType = 'image/jpeg', ?string $id = null): void
+    {
+        $salescallId = $this->resolvePendingAttachmentContext($id);
+
+        if (! $salescallId) {
+            return;
+        }
+
+        $this->saveProfileAttachmentFromPath($path, $salescallId);
+    }
+
+    #[On('native:'.MediaSelected::class)]
+    public function onAttachmentMediaSelected(bool $success, array $files = [], int $count = 0, ?string $error = null, bool $cancelled = false, ?string $id = null): void
+    {
+        $salescallId = $this->resolvePendingAttachmentContext($id);
+
+        if ($cancelled) {
+            return;
+        }
+
+        if (! $success || empty($files) || ! $salescallId) {
+            if ($salescallId) {
+                Notification::make()
+                    ->title($error ?: 'Could not import the selected photo.')
+                    ->danger()
+                    ->send();
+            }
+
+            return;
+        }
+
+        $path = NativeMediaPath::resolve($files[0]);
+
+        if ($path === null) {
+            Notification::make()
+                ->title('Selected photo path is invalid.')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $this->saveProfileAttachmentFromPath($path, $salescallId);
+    }
+
+    #[On('native:'.PhotoCancelled::class)]
+    public function onAttachmentPhotoCancelled(bool $cancelled = true, ?string $id = null): void
+    {
+        if ($id !== null) {
+            unset($this->pendingAttachment[$id]);
+        }
+    }
+
+    #[On('native:'.PermissionDenied::class)]
+    public function onAttachmentPermissionDenied(string $action = 'photo', ?string $id = null): void
+    {
+        if ($id !== null && ! isset($this->pendingAttachment[$id])) {
+            return; // belongs to the Photos tab's own permission-denied handler
+        }
+
+        if ($id !== null) {
+            unset($this->pendingAttachment[$id]);
+        }
+
+        Notification::make()
+            ->title('Camera permission is required to take photos.')
+            ->danger()
+            ->send();
+    }
+
+    /**
+     * Mirrors resolvePendingPhotoContext(), minus type_id. Only acts when the
+     * incoming capture ID belongs to *this* feature's pending dict — a native
+     * event fired by the Photos tab's own capture correctly no-ops here.
+     */
+    private function resolvePendingAttachmentContext(?string $id): ?int
+    {
+        if ($id === null || ! isset($this->pendingAttachment[$id])) {
+            return null;
+        }
+
+        $context = $this->pendingAttachment[$id];
+        unset($this->pendingAttachment[$id]);
+
+        return $context['salescall_id'];
+    }
+
+    private function saveProfileAttachmentFromPath(string $sourcePath, int $salescallId): void
+    {
+        $resolvedPath = NativeMediaPath::resolve($sourcePath) ?? $sourcePath;
+
+        if (! is_file($resolvedPath)) {
+            Log::warning('Profile attachment source file missing', ['path' => $resolvedPath]);
+            Notification::make()
+                ->title('Photo file was not available. Please try again.')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $ext = strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)) ?: 'jpg';
+        $filename = 'customer_profile_attachments/'.\Str::uuid().'.'.$ext;
+
+        Storage::disk('local')->makeDirectory('customer_profile_attachments');
+        $fullPath = Storage::disk('local')->path($filename);
+
+        if (! @copy($resolvedPath, $fullPath)) {
+            Log::warning('Profile attachment copy failed', ['from' => $resolvedPath, 'to' => $fullPath]);
+            Notification::make()
+                ->title('Could not save the file.')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $attachment = CustomerProfileAttachment::create([
+            'salescall_id' => $salescallId,
+            'local_path' => $fullPath,
+            'original_name' => basename($resolvedPath),
+            'mime_type' => $this->mimeTypeForExtension($ext),
+            'local_uuid' => (string) \Str::uuid(),
+            'sync_status' => 'pending',
+        ]);
+
+        $this->mirrorAttachmentForPreview($attachment);
+
+        $this->loadProfileAttachments($salescallId);
+    }
+
+    private function mimeTypeForExtension(string $ext): string
+    {
+        return match ($ext) {
+            'pdf' => 'application/pdf',
+            'png' => 'image/png',
+            'heic' => 'image/heic',
+            default => 'image/jpeg',
+        };
     }
 
     public function saveImage(int $salescallId, int $typeId, string $base64Data): void

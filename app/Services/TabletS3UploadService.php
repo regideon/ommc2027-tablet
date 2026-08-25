@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\CustomerProfile;
+use App\Models\CustomerProfileAttachment;
 use App\Models\SalescallImage;
 use Illuminate\Support\Facades\Storage;
 
@@ -24,6 +25,25 @@ class TabletS3UploadService
             existingKey: $profile->signature_s3_key,
             generatedKey: $this->customerProfileSignatureKey($profile),
         );
+    }
+
+    public function ensureProfileAttachmentUploaded(CustomerProfileAttachment $attachment): string
+    {
+        return $this->ensureUploaded(
+            localPath: $attachment->local_path,
+            existingKey: $attachment->s3_key,
+            generatedKey: $this->customerProfileAttachmentKey($attachment),
+        );
+    }
+
+    private function customerProfileAttachmentKey(CustomerProfileAttachment $attachment): string
+    {
+        $salescallIdentity = $attachment->salescall?->local_uuid
+            ?? ($attachment->salescall?->server_id ? (string) $attachment->salescall->server_id : (string) $attachment->salescall_id);
+
+        $extension = strtolower(pathinfo((string) $attachment->local_path, PATHINFO_EXTENSION)) ?: 'bin';
+
+        return "customer_profile_attachments/{$salescallIdentity}/{$attachment->local_uuid}.{$extension}";
     }
 
     private function salescallImageKey(SalescallImage $image): string

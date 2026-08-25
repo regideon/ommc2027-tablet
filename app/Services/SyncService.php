@@ -15,6 +15,7 @@ use App\Models\SalescallImage;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -29,8 +30,7 @@ class SyncService
 
     public function __construct(
         private readonly TabletS3UploadService $tabletS3UploadService,
-    )
-    {
+    ) {
         $this->serverUrl = rtrim(config('sync.server_url', ''), '/');
         $this->timeout = (int) config('sync.timeout', 15);
     }
@@ -346,7 +346,7 @@ class SyncService
                                     'local_uuid' => (string) \Str::uuid(),
                                     'sync_status' => 'synced',
                                 ]);
-                            } catch (\Throwable $e) {
+                            } catch (Throwable $e) {
                                 report($e);
                             }
                         }
@@ -370,7 +370,7 @@ class SyncService
                             ]);
 
                             $categoryRecord->save();
-                        } catch (\Throwable $e) {
+                        } catch (Throwable $e) {
                             report($e);
                         }
                     }
@@ -406,7 +406,7 @@ class SyncService
                             'last_salescall_id' => $row['last_salescall_id'] ?? null,
                             'last_updated_by' => $row['last_updated_by'] ?? null,
                         ]);
-                    } catch (\Throwable $e) {
+                    } catch (Throwable $e) {
                         report($e);
                     }
                 }
@@ -431,7 +431,7 @@ class SyncService
                             'last_updated_by' => $categoryRow['last_updated_by'] ?? null,
                         ]
                     );
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     report($e);
                 }
             }
@@ -608,10 +608,10 @@ class SyncService
                 }
             }
 
-        $pendingBrandSalescallIds = SalescallBrand::where('sync_status', 'pending')
-            ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
-            ->distinct()
-            ->pluck('salescall_id');
+            $pendingBrandSalescallIds = SalescallBrand::where('sync_status', 'pending')
+                ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
+                ->distinct()
+                ->pluck('salescall_id');
 
             foreach ($pendingBrandSalescallIds as $salescallId) {
                 $salescall = Salescall::find($salescallId);
@@ -666,9 +666,9 @@ class SyncService
                 }
             }
 
-        $pendingCategories = SalescallCategory::where('sync_status', 'pending')
-            ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
-            ->get();
+            $pendingCategories = SalescallCategory::where('sync_status', 'pending')
+                ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
+                ->get();
 
             foreach ($pendingCategories as $categoryRecord) {
                 $salescall = Salescall::find($categoryRecord->salescall_id);
@@ -709,12 +709,12 @@ class SyncService
                 }
             }
 
-        $pendingImages = SalescallImage::with('salescall')
-            ->where(function ($q) {
-                $q->where('sync_status', 'pending')
-                    ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
-            })
-            ->get();
+            $pendingImages = SalescallImage::with('salescall')
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
 
             foreach ($pendingImages as $image) {
                 if (! $image->salescall?->server_id) {
@@ -736,61 +736,39 @@ class SyncService
                 }
             }
 
-        $pendingAttachments = CustomerProfileAttachment::with('salescall')
-            ->where(function ($q) {
-                $q->where('sync_status', 'pending')
-                    ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
-            })
-            ->get();
+            $pendingAttachments = CustomerProfileAttachment::with('salescall')
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
 
-        foreach ($pendingAttachments as $attachment) {
-            if (! $attachment->salescall?->server_id) {
-                continue; // wait for salescall to sync first
-            }
-
-            if (! file_exists($attachment->local_path)) {
-                $this->markFailed($attachment, 'Local file not found: '.$attachment->local_path);
-                $failed++;
-
-                continue;
-            }
-
-            try {
-                $response = $client
-                    ->attach('file', fopen($attachment->local_path, 'r'), basename($attachment->local_path))
-                    ->post("{$this->serverUrl}/api/sync/push/customer-profile-attachment", [
-                        'local_uuid' => $attachment->local_uuid,
-                        'salescall_server_id' => $attachment->salescall->server_id,
-                        'original_name' => $attachment->original_name,
-                    ]);
-
-                if ($response->status() === 401) {
-                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+            foreach ($pendingAttachments as $attachment) {
+                if (! $attachment->salescall?->server_id) {
+                    continue; // wait for salescall to sync first
                 }
 
-                if ($response->successful()) {
-                    $attachment->update([
-                        'sync_status' => 'synced',
-                        'server_id' => $response->json('server_id'),
-                        'sync_error' => null,
-                    ]);
+                $result = $this->pushProfileAttachmentItem($client, $attachment);
+
+                if ($result instanceof SyncResult) {
+                    return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
+                }
+
+                if ($result['success']) {
                     $pushed++;
                 } else {
-                    $this->markFailed($attachment, $response->status().': '.$response->body());
                     $failed++;
+                    $retryable++;
+                    $failureReasons[$result['reason']] = true;
                 }
-            } catch (\Exception $e) {
-                $this->markFailed($attachment, $e->getMessage());
-                $failed++;
             }
-        }
 
-        $pendingProfiles = CustomerProfile::with('salescall')
-            ->where(function ($q) {
-                $q->where('sync_status', 'pending')
-                    ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
-            })
-            ->get();
+            $pendingProfiles = CustomerProfile::with('salescall')
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
 
             foreach ($pendingProfiles as $profile) {
                 if (! $profile->salescall?->server_id) {
@@ -812,10 +790,10 @@ class SyncService
                 }
             }
 
-        $pendingNotes = CustomerNote::where(function ($q) {
-            $q->where('sync_status', 'pending')
-                ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
-        })->get();
+            $pendingNotes = CustomerNote::where(function ($q) {
+                $q->where('sync_status', 'pending')
+                    ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+            })->get();
 
             foreach ($pendingNotes as $note) {
                 try {
@@ -1000,6 +978,83 @@ class SyncService
     /**
      * @return array{success: bool, reason?: string}|SyncResult
      */
+    private function pushProfileAttachmentItem(PendingRequest $client, CustomerProfileAttachment $attachment): array|SyncResult
+    {
+        try {
+            if (! $this->isReadableLocalFile($attachment->local_path)) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'profile-attachment:local-file',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            $s3Key = $this->ensureProfileAttachmentS3Key($attachment);
+
+            $stream = fopen($attachment->local_path, 'r');
+
+            if ($stream === false) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: unable to open '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'profile-attachment:local-open',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            try {
+                $response = $client
+                    ->attach('file', $stream, basename($attachment->local_path))
+                    ->post("{$this->serverUrl}/api/sync/push/customer-profile-attachment", [
+                        'local_uuid' => $attachment->local_uuid,
+                        'salescall_server_id' => $attachment->salescall->server_id,
+                        'original_name' => $attachment->original_name,
+                    ]);
+            } finally {
+                fclose($stream);
+            }
+
+            if ($response->status() === 401) {
+                return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+            }
+
+            if (! $response->successful()) {
+                $failure = $response->failed() && $response->status() >= 500
+                    ? 'portal_upload_failed'
+                    : 'portal_rejected';
+
+                $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
+                    'stage' => 'profile-attachment:portal',
+                    'endpoint' => '/api/sync/push/customer-profile-attachment',
+                    'http_status' => $response->status(),
+                    's3_key' => $s3Key,
+                ]);
+
+                return ['success' => false, 'reason' => $failure];
+            }
+
+            $this->markSynced($attachment, [
+                'server_id' => $response->json('server_id'),
+            ]);
+
+            return ['success' => true];
+        } catch (Throwable $e) {
+            $classification = $this->classifyBinaryThrowable($e);
+            $this->recordThrowableFailure($attachment, $classification, $e, [
+                'stage' => 'profile-attachment:unexpected',
+                'endpoint' => '/api/sync/push/customer-profile-attachment',
+                'local_path' => $attachment->local_path,
+                's3_key' => $attachment->s3_key,
+            ]);
+
+            return ['success' => false, 'reason' => $classification];
+        }
+    }
+
+    /**
+     * @return array{success: bool, reason?: string}|SyncResult
+     */
     private function pushCustomerProfileItem(PendingRequest $client, CustomerProfile $profile): array|SyncResult
     {
         try {
@@ -1106,6 +1161,25 @@ class SyncService
         return $s3Key;
     }
 
+    private function ensureProfileAttachmentS3Key(CustomerProfileAttachment $attachment): string
+    {
+        try {
+            $s3Key = $this->tabletS3UploadService->ensureProfileAttachmentUploaded($attachment);
+        } catch (Throwable $e) {
+            throw $this->rethrowWithClassification($e, 's3_upload_failed');
+        }
+
+        if ($attachment->s3_key !== $s3Key) {
+            try {
+                $attachment->update(['s3_key' => $s3Key]);
+            } catch (Throwable $e) {
+                throw $this->rethrowWithClassification($e, 's3_key_persist_failed');
+            }
+        }
+
+        return $s3Key;
+    }
+
     private function ensureProfileSignatureS3Key(CustomerProfile $profile): string
     {
         try {
@@ -1201,17 +1275,17 @@ class SyncService
     }
 
     /**
-     * @param  \Illuminate\Support\Collection<int, Model>  $models
+     * @param  Collection<int, Model>  $models
      */
-    private function recordCollectionFailure(\Illuminate\Support\Collection $models, string $classification, string $error, array $context = []): void
+    private function recordCollectionFailure(Collection $models, string $classification, string $error, array $context = []): void
     {
         $models->each(fn (Model $model) => $this->recordItemFailure($model, $classification, $error, $context));
     }
 
     /**
-     * @param  \Illuminate\Support\Collection<int, Model>  $models
+     * @param  Collection<int, Model>  $models
      */
-    private function recordCollectionUnexpectedFailure(\Illuminate\Support\Collection $models, Throwable $e, string $stage, array $context = []): void
+    private function recordCollectionUnexpectedFailure(Collection $models, Throwable $e, string $stage, array $context = []): void
     {
         $models->each(fn (Model $model) => $this->recordThrowableFailure($model, 'unexpected_sync_error', $e, [
             'stage' => $stage,
@@ -1243,7 +1317,7 @@ class SyncService
 
         if ($failed > 0) {
             return SyncResult::ok(
-                "{$pushed} item".($pushed === 1 ? '' : 's')." synced. {$failed} item".($failed === 1 ? '' : 's')." could not be uploaded and will retry later.",
+                "{$pushed} item".($pushed === 1 ? '' : 's')." synced. {$failed} item".($failed === 1 ? '' : 's').' could not be uploaded and will retry later.',
                 $pushed,
                 $failed,
                 $retryable,
@@ -1252,7 +1326,7 @@ class SyncService
         }
 
         return SyncResult::ok(
-            "{$pushed} item".($pushed === 1 ? '' : 's')." synced successfully.",
+            "{$pushed} item".($pushed === 1 ? '' : 's').' synced successfully.',
             $pushed,
             0,
             0,

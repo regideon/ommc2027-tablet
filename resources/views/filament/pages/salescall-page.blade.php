@@ -2340,16 +2340,56 @@
                             <div class="space-y-3">
                                 <div class="flex items-center justify-between border-b border-gray-100 pb-2">
                                     <h4 class="text-sm font-bold text-[#191c1e]">Supporting Documents</h4>
-                                    <button type="button" @click="$refs.profileAttachmentInput.click()" :disabled="attachmentUploading"
-                                        class="flex items-center gap-1 text-xs text-[#890f00] font-bold disabled:opacity-50">
-                                        <span class="material-symbols-outlined text-base">attach_file</span>
-                                        <span x-text="attachmentUploading ? 'Uploading...' : 'Add File'"></span>
-                                    </button>
+                                    <span x-show="attachmentUploading" class="text-xs text-[#890f00] font-bold">Uploading...</span>
                                 </div>
-                                <input type="file" x-ref="profileAttachmentInput" accept="image/*,.pdf,application/pdf" class="hidden"
-                                    @change="uploadProfileAttachment($event.target.files[0]); $event.target.value = ''">
 
-                                <p x-show="profileAttachments.length === 0" class="text-xs text-[#737685] italic py-1">Photo of ID, business permit, or other supporting document (optional).</p>
+                                {{-- Hidden file inputs — browser fallback for Photo/Gallery (ignored on
+                                     Android WebView, same as the Photos tab). --}}
+                                <input type="file" x-ref="attachmentCameraInput" accept="image/*" capture="camera" class="hidden"
+                                    @change="uploadProfileAttachment($event.target.files[0]); $event.target.value = ''">
+                                <input type="file" x-ref="attachmentGalleryInput" accept="image/*" class="hidden"
+                                    @change="uploadProfileAttachment($event.target.files[0]); $event.target.value = ''">
+                                {{-- PDF hidden for now, camera/gallery only — uncomment to re-enable:
+                                <input type="file" x-ref="attachmentPdfInput" accept=".pdf,application/pdf" class="hidden"
+                                    @change="uploadProfileAttachment($event.target.files[0]); $event.target.value = ''">
+                                --}}
+
+                                <div class="grid grid-cols-2 gap-2">
+                                    <button type="button" :disabled="attachmentUploading"
+                                        @click="
+                                            if (document.body.classList.contains('nativephp-android') || document.body.classList.contains('nativephp-ios')) {
+                                                $wire.takeProfileAttachmentPhoto(selected);
+                                            } else {
+                                                $refs.attachmentCameraInput.click();
+                                            }
+                                        "
+                                        class="flex flex-col items-center justify-center gap-1 py-3 border-2 border-gray-200 rounded-xl text-[#434654] hover:border-[#890f00] hover:bg-red-50 active:scale-[0.97] transition-all disabled:opacity-50">
+                                        <span class="material-symbols-outlined text-xl">photo_camera</span>
+                                        <span class="text-[10px] font-bold">Photo</span>
+                                    </button>
+                                    <button type="button" :disabled="attachmentUploading"
+                                        @click="
+                                            if (document.body.classList.contains('nativephp-android') || document.body.classList.contains('nativephp-ios')) {
+                                                $wire.pickProfileAttachmentFromGallery(selected);
+                                            } else {
+                                                $refs.attachmentGalleryInput.click();
+                                            }
+                                        "
+                                        class="flex flex-col items-center justify-center gap-1 py-3 border-2 border-gray-200 rounded-xl text-[#434654] hover:border-[#890f00] hover:bg-red-50 active:scale-[0.97] transition-all disabled:opacity-50">
+                                        <span class="material-symbols-outlined text-xl">photo_library</span>
+                                        <span class="text-[10px] font-bold">Gallery</span>
+                                    </button>
+                                    {{-- PDF button hidden for now, camera/gallery only — uncomment to re-enable:
+                                    <button type="button" :disabled="attachmentUploading"
+                                        @click="$refs.attachmentPdfInput.click()"
+                                        class="flex flex-col items-center justify-center gap-1 py-3 border-2 border-gray-200 rounded-xl text-[#434654] hover:border-[#890f00] hover:bg-red-50 active:scale-[0.97] transition-all disabled:opacity-50">
+                                        <span class="material-symbols-outlined text-xl">picture_as_pdf</span>
+                                        <span class="text-[10px] font-bold">PDF</span>
+                                    </button>
+                                    --}}
+                                </div>
+
+                                <p x-show="profileAttachments.length === 0" class="text-xs text-[#737685] italic py-1">Photo of ID or other supporting document (optional).</p>
 
                                 <div class="space-y-2">
                                     <template x-for="att in profileAttachments" :key="att.id">
