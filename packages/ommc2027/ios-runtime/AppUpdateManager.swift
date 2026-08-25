@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import ZIPFoundation
+import CryptoKit
 
 
 class AppUpdateManager {
@@ -137,8 +138,8 @@ class AppUpdateManager {
             }
 
             try? FileManager.default.removeItem(atPath: swapBackupPath)
-            createInstalledVersionFile()
-            runMigrationsAndClearCaches()
+            createInstalledVersionFile(preferBundledIdentity: true)
+            clearCaches()
             print("✅ Bundled app extracted successfully")
             return true
         } catch {
@@ -262,10 +263,11 @@ class AppUpdateManager {
             try FileManager.default.moveItem(atPath: extractPath, toPath: appPath)
 
             // Create installed.version file for the new version
-            createInstalledVersionFile()
+            createInstalledVersionFile(preferBundledIdentity: false)
 
-            // Run migrations and clear caches for updated app
-            runMigrationsAndClearCaches()
+            // Clear caches for updated app. Schema upgrades are handled by the
+            // startup migration gate before the WebView is allowed to load.
+            clearCaches()
 
             // Cleanup
             try? FileManager.default.removeItem(atPath: extractPath)
@@ -421,16 +423,28 @@ class AppUpdateManager {
     }
 
     private func shouldUpdateFromBundle() -> Bool {
-        guard let bundledId = getBundledAppVersionFast() else {
-            print("⚠️ Could not read version from bundled.version file, falling back to ZIP extraction")
-            guard let bundledId = getBundledAppVersion() else {
+        guard let bundledIdentity = getBundledExtractionIdentity() else {
+            print("⚠️ Could not build bundled extraction identity")
+            guard let bundledId = getBundledAppVersionFast() ?? getBundledAppVersion() else {
                 print("⚠️ Could not read version from bundled app.zip")
                 return false
             }
             return shouldUpdateWithVersion(bundledId)
         }
 
-        return shouldUpdateWithVersion(bundledId)
+        return shouldUpdateWithIdentity(bundledIdentity)
+    }
+
+    private func shouldUpdateWithIdentity(_ bundledIdentity: String) -> Bool {
+        let currentIdentity = getInstalledVersion()
+
+        if currentIdentity != bundledIdentity {
+            print("📦 Bundle identity (\(bundledIdentity)) differs from current (\(currentIdentity ?? "none")), updating from bundle")
+            return true
+        }
+
+        print("✅ App already up to date with bundle identity (\(bundledIdentity))")
+        return false
     }
 
     private func shouldUpdateWithVersion(_ bundledId: String) -> Bool {
@@ -739,6 +753,55 @@ class AppUpdateManager {
         }
     }
 
+    private func getBundledExtractionIdentity() -> String? {
+        let versionId = getBundledAppVersionFast() ?? getBundledAppVersion()
+
+        guard let versionId else {
+            return nil
+        }
+
+        guard let zipFingerprint = getBundledAppZipFingerprint() else {
+            print("⚠️ Could not read bundled app.zip fingerprint, falling back to version-only identity")
+            return versionId
+        }
+
+        return "\(versionId)|zipsha256:\(zipFingerprint)"
+    }
+
+    private func getBundledAppZipFingerprint() -> String? {
+        guard let zipPath = Bundle.main.path(forResource: "app", ofType: "zip") else {
+            print("❌ No bundled app.zip found for fingerprinting")
+            return nil
+        }
+
+        let zipURL = URL(fileURLWithPath: zipPath)
+
+        do {
+            let handle = try FileHandle(forReadingFrom: zipURL)
+            defer {
+                try? handle.close()
+            }
+
+            var hasher = SHA256()
+
+            while true {
+                let chunk = try handle.read(upToCount: 1024 * 1024) ?? Data()
+                if chunk.isEmpty {
+                    break
+                }
+
+                hasher.update(data: chunk)
+            }
+
+            let digest = hasher.finalize()
+
+            return digest.map { String(format: "%02x", $0) }.joined()
+        } catch {
+            print("❌ Failed to fingerprint bundled app.zip: \(error)")
+            return nil
+        }
+    }
+
     private func getInstalledVersion() -> String? {
         let installedVersionPath = documentsPath + "/app/installed.version"
 
@@ -758,15 +821,22 @@ class AppUpdateManager {
         }
     }
 
-    private func createInstalledVersionFile() {
+    private func createInstalledVersionFile(preferBundledIdentity: Bool) {
         let installedVersionPath = documentsPath + "/app/installed.version"
 
-        // Prefer composite identity from the extracted .env; fall back to bundled.version
-        // so upgrade checks remain stable even when NATIVEPHP_APP_VERSION is absent.
-        let id = getInstalledVersionIdFromEnv()
-            ?? getBundledAppVersionFast()
-            ?? getBundledAppVersion()
-            ?? "DEBUG"
+        let id: String
+        if preferBundledIdentity {
+            id = getBundledExtractionIdentity()
+                ?? getInstalledVersionIdFromEnv()
+                ?? getBundledAppVersionFast()
+                ?? getBundledAppVersion()
+                ?? "DEBUG"
+        } else {
+            id = getInstalledVersionIdFromEnv()
+                ?? getBundledAppVersionFast()
+                ?? getBundledAppVersion()
+                ?? "DEBUG"
+        }
 
         do {
             try id.write(toFile: installedVersionPath, atomically: true, encoding: .utf8)
@@ -776,21 +846,18 @@ class AppUpdateManager {
         }
     }
 
-    private func runMigrationsAndClearCaches() {
-        print("🔄 Running migrations and clearing caches...")
+    private func clearCaches() {
+        print("🔄 Clearing caches after extraction...")
 
         guard let app = NativePHPApp.shared else {
             print("❌ NativePHPApp.shared not available")
             return
         }
 
-        // Run migrations
-        _ = app.artisan(additionalArgs: ["migrate", "--force"])
-
         // Clear caches
         _ = app.artisan(additionalArgs: ["view:clear"])
 
-        print("✅ Migrations and cache clearing completed")
+        print("✅ Cache clearing completed")
     }
 
 }

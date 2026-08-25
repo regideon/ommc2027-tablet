@@ -21,6 +21,7 @@ use App\Models\SalescallImageType;
 use App\Models\SalescallStatus;
 use App\Models\SalescallType;
 use App\Models\SubCategory;
+use App\Services\SyncResult;
 use App\Services\SyncService;
 use App\Support\NativeMediaPath;
 use BackedEnum;
@@ -973,9 +974,45 @@ class SalescallPage extends Page
         ));
     }
 
-    public function finishLocation(int $salescallId, float $lat, float $lng, bool $isOnline = false): void
+    public function finishLocation(mixed $salescallId, float $lat, float $lng, bool $isOnline = false): void
     {
-        Salescall::findOrFail($salescallId)->update([
+        $normalizedSalescallId = filter_var($salescallId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+
+        if ($normalizedSalescallId === false) {
+            Log::warning('Ignoring finish location update with invalid sales call ID.', [
+                'salescall_id' => $salescallId,
+                'latitude' => $lat,
+                'longitude' => $lng,
+                'is_online' => $isOnline,
+            ]);
+
+            Notification::make()
+                ->title('Visit was saved, but exit GPS could not be attached.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $salescall = Salescall::find($normalizedSalescallId);
+
+        if (! $salescall) {
+            Log::warning('Ignoring finish location update for missing sales call.', [
+                'salescall_id' => $normalizedSalescallId,
+                'latitude' => $lat,
+                'longitude' => $lng,
+                'is_online' => $isOnline,
+            ]);
+
+            Notification::make()
+                ->title('Visit was saved, but exit GPS could not be attached.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $salescall->update([
             'latitude_actual_out' => $lat ?: null,
             'longitude_actual_out' => $lng ?: null,
         ]);
@@ -1026,9 +1063,13 @@ class SalescallPage extends Page
 
         $this->dispatch('auto-sync-started');
 
-        $result = app(SyncService::class)->push();
+        $result = null;
 
-        $this->dispatch('auto-sync-done', success: $result->success);
+        try {
+            $result = $this->safePushSync();
+        } finally {
+            $this->dispatch('auto-sync-done', success: $result?->success ?? false);
+        }
 
         if ($result->success) {
             $this->refreshCallsSyncStatus();
@@ -1244,6 +1285,7 @@ class SalescallPage extends Page
             $filename = 'customer_profiles/'.\Str::uuid().'.png';
             Storage::disk('local')->put($filename, base64_decode($raw));
             $profile->signature_path = Storage::disk('local')->path($filename);
+            $profile->signature_s3_key = null;
         }
 
         $profile->save();
@@ -1253,14 +1295,39 @@ class SalescallPage extends Page
 
     private function runSync(): void
     {
-        $result = app(SyncService::class)->push();
+        $result = null;
 
-        $this->dispatch('sync-done');
+        try {
+            $result = $this->safePushSync();
+        } finally {
+            $this->dispatch('sync-done');
+        }
 
         if ($result->success) {
             $this->refreshCallsSyncStatus();
         } else {
             Notification::make()->title($result->message)->danger()->send();
+        }
+    }
+
+    private function safePushSync(): SyncResult
+    {
+        try {
+            return app(SyncService::class)->push();
+        } catch (\Throwable $e) {
+            Log::error('salescall-page sync request failed unexpectedly', [
+                'exception_class' => $e::class,
+                'exception_message' => $e->getMessage(),
+            ]);
+
+            return SyncResult::fail(
+                'Sync could not be completed. Your pending data remains saved locally and can be retried.',
+                'unexpected_sync_error',
+                0,
+                1,
+                1,
+                ['unexpected_sync_error'],
+            );
         }
     }
 

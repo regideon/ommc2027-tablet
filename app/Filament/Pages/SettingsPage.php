@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Support\NativeAppReleaseMetadata;
 use App\Services\TrustedLoginService;
 use BackedEnum;
 use Filament\Facades\Filament;
@@ -10,6 +11,8 @@ use Filament\Support\Icons\Heroicon;
 
 class SettingsPage extends Page
 {
+    public string $releaseLabel = 'Release 0.0.0 (0)';
+
     protected string $view = 'filament.pages.settings-page';
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedCog6Tooth;
@@ -19,6 +22,11 @@ class SettingsPage extends Page
     protected static ?string $title = '';
 
     protected static ?int $navigationSort = 500;
+
+    public function mount(NativeAppReleaseMetadata $releaseMetadata): void
+    {
+        $this->releaseLabel = $releaseMetadata->releaseLabel();
+    }
 
     public function logout(): void
     {

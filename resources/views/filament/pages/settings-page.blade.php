@@ -161,7 +161,7 @@
     {{-- App Version --}}
     <div class="text-center pt-2 pb-4">
         <p class="text-xs font-black text-[#737685] tracking-widest uppercase">OMMC Henri V2</p>
-        <p class="text-[11px] text-gray-400 mt-0.5">Release 1.0.0.1</p>
+        <p class="text-[11px] text-gray-400 mt-0.5">{{ $this->releaseLabel }}</p>
     </div>
 
 </div>

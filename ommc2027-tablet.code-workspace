@@ -1,0 +1,13 @@
+{
+  "folders": [
+    {
+      "name": "ommc2027-tablet",
+      "path": "."
+    },
+    {
+      "name": "ommc2027",
+      "path": "../ommc2027"
+    }
+  ],
+  "settings": {}
+}
