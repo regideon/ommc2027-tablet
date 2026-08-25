@@ -6,6 +6,7 @@ use App\Models\CustomerBrand;
 use App\Models\CustomerCategory;
 use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
+use App\Models\CustomerProfileAttachment;
 use App\Models\Itinerary;
 use App\Models\Salescall;
 use App\Models\SalescallBrand;
@@ -42,6 +43,7 @@ class SyncService
             || $pendingOrRetryable(SalescallCategory::query())->exists()
             || $pendingOrRetryable(SalescallImage::query())->exists()
             || $pendingOrRetryable(CustomerProfile::query())->exists()
+            || $pendingOrRetryable(CustomerProfileAttachment::query())->exists()
             || $pendingOrRetryable(CustomerNote::query())->exists();
     }
 
@@ -715,6 +717,55 @@ class SyncService
                 }
             } catch (\Exception $e) {
                 $this->markFailed($image, $e->getMessage());
+                $failed++;
+            }
+        }
+
+        $pendingAttachments = CustomerProfileAttachment::with('salescall')
+            ->where(function ($q) {
+                $q->where('sync_status', 'pending')
+                    ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+            })
+            ->get();
+
+        foreach ($pendingAttachments as $attachment) {
+            if (! $attachment->salescall?->server_id) {
+                continue; // wait for salescall to sync first
+            }
+
+            if (! file_exists($attachment->local_path)) {
+                $this->markFailed($attachment, 'Local file not found: '.$attachment->local_path);
+                $failed++;
+
+                continue;
+            }
+
+            try {
+                $response = $client
+                    ->attach('file', fopen($attachment->local_path, 'r'), basename($attachment->local_path))
+                    ->post("{$this->serverUrl}/api/sync/push/customer-profile-attachment", [
+                        'local_uuid' => $attachment->local_uuid,
+                        'salescall_server_id' => $attachment->salescall->server_id,
+                        'original_name' => $attachment->original_name,
+                    ]);
+
+                if ($response->status() === 401) {
+                    return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+                }
+
+                if ($response->successful()) {
+                    $attachment->update([
+                        'sync_status' => 'synced',
+                        'server_id' => $response->json('server_id'),
+                        'sync_error' => null,
+                    ]);
+                    $pushed++;
+                } else {
+                    $this->markFailed($attachment, $response->status().': '.$response->body());
+                    $failed++;
+                }
+            } catch (\Exception $e) {
+                $this->markFailed($attachment, $e->getMessage());
                 $failed++;
             }
         }

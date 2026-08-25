@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\CustomerProfileAttachment;
 use App\Models\SalescallImage;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Session\Middleware\StartSession;
@@ -131,6 +132,17 @@ Route::middleware('auth')->get('salescall-image/{id}', function ($id) {
     abort_unless(file_exists($image->local_path), 404);
 
     return response()->file($image->local_path, [
+        'Cache-Control' => 'private, max-age=3600',
+    ]);
+});
+
+Route::middleware('auth')->get('customer-profile-attachment/{id}', function ($id) {
+    $attachment = CustomerProfileAttachment::findOrFail($id);
+
+    abort_unless(file_exists($attachment->local_path), 404);
+
+    return response()->file($attachment->local_path, [
+        'Content-Type' => $attachment->mime_type ?: 'application/octet-stream',
         'Cache-Control' => 'private, max-age=3600',
     ]);
 });

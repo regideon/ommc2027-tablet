@@ -9,6 +9,7 @@ use App\Models\Customer;
 use App\Models\CustomerBrand;
 use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
+use App\Models\CustomerProfileAttachment;
 use App\Models\Itinerary;
 use App\Models\MaterialGroup;
 use App\Models\Salescall;
@@ -73,6 +74,8 @@ class SalescallPage extends Page
     public array $currentCategory = [];
 
     public array $customerNotes = [];
+
+    public array $profileAttachments = [];
 
     public bool $hasSavedBrands = false;
 
@@ -1067,6 +1070,132 @@ class SalescallPage extends Page
             'brand_products' => $existing?->brand_products ?? [],
             'has_signature' => ! empty($existing?->signature_path),
         ];
+
+        $this->loadProfileAttachments($salescallId);
+    }
+
+    /**
+     * Supporting documents (photo or PDF) for the Change Profile form — e.g. a
+     * valid ID or business permit. Independent of the profile record itself
+     * (can be attached before the form is ever saved) so they're keyed directly
+     * by salescall_id, same as CustomerProfile.
+     */
+    public function loadProfileAttachments(int $salescallId): void
+    {
+        $this->profileAttachments = CustomerProfileAttachment::where('salescall_id', $salescallId)
+            ->orderBy('created_at', 'desc')
+            ->get()
+            ->map(fn (CustomerProfileAttachment $a) => [
+                'id' => $a->id,
+                'name' => $a->original_name ?: basename($a->local_path),
+                'is_pdf' => str_contains((string) $a->mime_type, 'pdf'),
+                'url' => $this->profileAttachmentUrlFor($a),
+            ])
+            ->all();
+    }
+
+    public function saveProfileAttachment(int $salescallId, string $base64Data, ?string $originalName, ?string $mimeType): void
+    {
+        $raw = preg_replace('#^data:[\w/.+-]+;base64,#i', '', $base64Data);
+        $mimeType = $mimeType ?: 'application/octet-stream';
+        $filename = 'customer_profile_attachments/'.\Str::uuid().'.'.$this->extensionForAttachment($mimeType, $originalName);
+
+        Storage::disk('local')->put($filename, base64_decode($raw));
+
+        $attachment = CustomerProfileAttachment::create([
+            'salescall_id' => $salescallId,
+            'local_path' => Storage::disk('local')->path($filename),
+            'original_name' => $originalName,
+            'mime_type' => $mimeType,
+            'local_uuid' => (string) \Str::uuid(),
+            'sync_status' => 'pending',
+        ]);
+
+        $this->mirrorAttachmentForPreview($attachment);
+
+        $this->loadProfileAttachments($salescallId);
+    }
+
+    public function deleteProfileAttachment(int $attachmentId): void
+    {
+        $attachment = CustomerProfileAttachment::findOrFail($attachmentId);
+        $salescallId = $attachment->salescall_id;
+
+        if ($attachment->local_path && file_exists($attachment->local_path)) {
+            @unlink($attachment->local_path);
+        }
+
+        $this->deleteAttachmentPreviewMirror($attachment);
+
+        $attachment->delete();
+
+        $this->loadProfileAttachments($salescallId);
+    }
+
+    private function extensionForAttachment(string $mimeType, ?string $originalName): string
+    {
+        if ($originalName && str_contains($originalName, '.')) {
+            return strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        }
+
+        return match (true) {
+            str_contains($mimeType, 'pdf') => 'pdf',
+            str_contains($mimeType, 'png') => 'png',
+            default => 'jpg',
+        };
+    }
+
+    private function attachmentPreviewMirrorRelativePath(CustomerProfileAttachment $attachment): string
+    {
+        $ext = strtolower(pathinfo($attachment->local_path, PATHINFO_EXTENSION)) ?: 'bin';
+        $uuid = $attachment->local_uuid ?: (string) $attachment->id;
+
+        return 'customer_profile_attachments/'.$uuid.'.'.$ext;
+    }
+
+    /**
+     * Same rationale as mirrorPhotoForPreview() — copies the canonical file into
+     * the web root so the native binary-safe /_assets/... handler can stream it.
+     */
+    private function mirrorAttachmentForPreview(CustomerProfileAttachment $attachment): ?string
+    {
+        $relative = $this->attachmentPreviewMirrorRelativePath($attachment);
+
+        if (! $attachment->local_path || ! is_file($attachment->local_path)) {
+            return null;
+        }
+
+        try {
+            File::ensureDirectoryExists(public_path('customer_profile_attachments'));
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if (@copy($attachment->local_path, public_path($relative)) === false) {
+            return null;
+        }
+
+        return $relative;
+    }
+
+    private function deleteAttachmentPreviewMirror(CustomerProfileAttachment $attachment): void
+    {
+        $relative = $this->attachmentPreviewMirrorRelativePath($attachment);
+
+        if (is_file(public_path($relative))) {
+            @unlink(public_path($relative));
+        }
+    }
+
+    private function profileAttachmentUrlFor(CustomerProfileAttachment $attachment): string
+    {
+        $relative = $this->attachmentPreviewMirrorRelativePath($attachment);
+
+        if (! is_file(public_path($relative)) && $this->mirrorAttachmentForPreview($attachment) === null) {
+            return '/customer-profile-attachment/'.$attachment->id;
+        }
+
+        return '/_assets/'.$relative;
     }
 
     public function saveProfile(

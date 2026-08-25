@@ -540,6 +540,23 @@
         profileSigDrawing: false,
         profileSaving: false,
 
+        profileAttachments: @entangle('profileAttachments'),
+        attachmentUploading: false,
+        uploadProfileAttachment(file) {
+            if (!file || !this.selected) return;
+            this.attachmentUploading = true;
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                await $wire.saveProfileAttachment(this.selected, e.target.result, file.name, file.type);
+                this.attachmentUploading = false;
+            };
+            reader.onerror = () => { this.attachmentUploading = false; };
+            reader.readAsDataURL(file);
+        },
+        deleteProfileAttachment(id) {
+            $wire.deleteProfileAttachment(id);
+        },
+
         get profileSubCategoryOptions() {
             if (!this.profileCategoryId) return [];
             return this.subCategories.filter(s => s.category_id == this.profileCategoryId);
@@ -2316,6 +2333,41 @@
                                         <option value="Separated">Separated</option>
                                         <option value="Prefer Not to Say">Prefer Not to Say</option>
                                     </select>
+                                </div>
+                            </div>
+
+                            {{-- Supporting Documents --}}
+                            <div class="space-y-3">
+                                <div class="flex items-center justify-between border-b border-gray-100 pb-2">
+                                    <h4 class="text-sm font-bold text-[#191c1e]">Supporting Documents</h4>
+                                    <button type="button" @click="$refs.profileAttachmentInput.click()" :disabled="attachmentUploading"
+                                        class="flex items-center gap-1 text-xs text-[#890f00] font-bold disabled:opacity-50">
+                                        <span class="material-symbols-outlined text-base">attach_file</span>
+                                        <span x-text="attachmentUploading ? 'Uploading...' : 'Add File'"></span>
+                                    </button>
+                                </div>
+                                <input type="file" x-ref="profileAttachmentInput" accept="image/*,.pdf,application/pdf" class="hidden"
+                                    @change="uploadProfileAttachment($event.target.files[0]); $event.target.value = ''">
+
+                                <p x-show="profileAttachments.length === 0" class="text-xs text-[#737685] italic py-1">Photo of ID, business permit, or other supporting document (optional).</p>
+
+                                <div class="space-y-2">
+                                    <template x-for="att in profileAttachments" :key="att.id">
+                                        <div class="flex items-center gap-3 border border-gray-200 rounded-xl p-3 bg-gray-50">
+                                            <div class="w-10 h-10 rounded-lg bg-white border border-gray-200 flex items-center justify-center shrink-0 overflow-hidden">
+                                                <template x-if="!att.is_pdf">
+                                                    <img :src="att.url" class="w-full h-full object-cover">
+                                                </template>
+                                                <template x-if="att.is_pdf">
+                                                    <span class="material-symbols-outlined text-red-500 text-xl">picture_as_pdf</span>
+                                                </template>
+                                            </div>
+                                            <a :href="att.url" target="_blank" class="flex-1 min-w-0 text-xs font-medium text-[#191c1e] truncate" x-text="att.name"></a>
+                                            <button type="button" @click="deleteProfileAttachment(att.id)" class="text-red-400 hover:text-red-600 shrink-0">
+                                                <span class="material-symbols-outlined text-lg">delete</span>
+                                            </button>
+                                        </div>
+                                    </template>
                                 </div>
                             </div>
 
