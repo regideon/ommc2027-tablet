@@ -120,7 +120,49 @@ class CustomerPage extends Page
 
         $photoCount = SalescallImage::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))->count();
 
+        $customer = Customer::with(['company', 'tradeProfile', 'categoryHistories'])->findOrFail($customerId);
+        $region = $customer->region_specific_id
+            ? DB::table('region_specifics')->where('id', $customer->region_specific_id)->value('name')
+            : null;
+        $municipality = $customer->municipality_id
+            ? DB::table('municipalities')->where('id', $customer->municipality_id)->value('name')
+            : null;
+
         $this->customerDetail = [
+            'customer' => [
+                'unique_id' => $customer->unique_id,
+                'company' => $customer->company?->name,
+                'address' => $customer->address,
+                'contact_person' => $customer->contact_person,
+                'contact_number' => $customer->contact_number,
+                'region' => $region,
+                'municipality' => $municipality,
+                'latitude' => $customer->latitude,
+                'longitude' => $customer->longitude,
+                'general_category' => $customer->generalCategory?->name,
+                'competitor_volume' => match ($customer->competitor_volume) { 1 => 'High', 2 => 'Medium', 3 => 'Low', default => null },
+                'is_active' => $customer->is_active,
+            ],
+            'trade_profile' => $customer->tradeProfile ? [
+                'house_number' => $customer->tradeProfile->house_number,
+                'entry_detail' => $customer->tradeProfile->entry_detail,
+                'classifications' => $customer->tradeProfile->classifications,
+                'ommc_brands' => $customer->tradeProfile->ommc_brands,
+                'ommc_mcb_brands' => $customer->tradeProfile->ommc_mcb_brands,
+                'tpl_pollux' => $customer->tradeProfile->tpl_pollux,
+                'other_competitor_brands' => $customer->tradeProfile->other_competitor_brands,
+                'mcb_competitors' => $customer->tradeProfile->mcb_competitors,
+                'other_competitors_note' => $customer->tradeProfile->other_competitors_note,
+                'working_days' => $customer->tradeProfile->working_days,
+                'operating_hours' => $customer->tradeProfile->operating_hours,
+                'motiv_user' => $customer->tradeProfile->motiv_user,
+                'delivery_method' => match ($customer->tradeProfile->delivery_method) { 'resq_hub' => 'ResQ Hub', 'own_delivery' => 'Own Delivery', default => null },
+                'ulab' => $customer->tradeProfile->ulab,
+            ] : null,
+            'category_histories' => $customer->categoryHistories->map(fn ($history) => [
+                'year' => $history->category_year,
+                'category' => $history->category,
+            ])->all(),
             'profile' => $profile ? [
                 'registered_name' => $profile->registered_name,
                 'owner_name' => $profile->owner_name,

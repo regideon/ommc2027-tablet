@@ -166,10 +166,65 @@ class SyncService
             // carry salescall_brands/salescall_categories data (e.g. an RSM-added call)
             // would otherwise throw a foreign key integrity violation and abort the
             // entire pull before customers/brands/categories ever get written.
+            foreach ($data['general_categories'] ?? [] as $category) {
+                DB::table('general_categories')->updateOrInsert(
+                    ['id' => $category['id']],
+                    [
+                        'name' => $category['name'],
+                        'priority_visit' => $category['priority_visit'] ?? null,
+                        'duration_per_visit' => $category['duration_per_visit'] ?? null,
+                        'sort' => $category['sort'] ?? 0,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
+            foreach ($data['companies'] ?? [] as $company) {
+                DB::table('companies')->updateOrInsert(
+                    ['id' => $company['id']],
+                    ['name' => $company['name'], 'code' => $company['code'] ?? null, 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['regions'] ?? [] as $region) {
+                DB::table('regions')->updateOrInsert(
+                    ['id' => $region['id']],
+                    ['code' => $region['code'], 'name' => $region['name'], 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['region_specifics'] ?? [] as $regionSpecific) {
+                DB::table('region_specifics')->updateOrInsert(
+                    ['id' => $regionSpecific['id']],
+                    [
+                        'region_id' => $regionSpecific['region_id'],
+                        'name' => $regionSpecific['name'],
+                        'sort' => $regionSpecific['sort'] ?? 0,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
+            foreach ($data['municipalities'] ?? [] as $municipality) {
+                DB::table('municipalities')->updateOrInsert(
+                    ['id' => $municipality['id']],
+                    [
+                        'region_id' => $municipality['region_id'] ?? null,
+                        'province_id' => $municipality['province_id'] ?? null,
+                        'name' => $municipality['name'],
+                        'sort' => $municipality['sort'] ?? 0,
+                        'enabled' => $municipality['enabled'] ?? true,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
             foreach ($data['customers'] ?? [] as $customer) {
                 DB::table('customers')->updateOrInsert(
                     ['id' => $customer['id']],
                     [
+                        'company_id' => $customer['company_id'] ?? null,
+                        'general_category_id' => $customer['general_category_id'] ?? null,
                         'region_specific_id' => $customer['region_specific_id'] ?? null,
                         'municipality_id' => $customer['municipality_id'] ?? null,
                         'name' => $customer['name'],
@@ -180,8 +235,39 @@ class SyncService
                         'latitude' => $customer['latitude'] ?? null,
                         'longitude' => $customer['longitude'] ?? null,
                         'is_active' => $customer['is_active'] ?? true,
+                        'competitor_volume' => $customer['competitor_volume'] ?? null,
                         'updated_at' => now(),
                     ]
+                );
+            }
+
+            foreach ($data['customer_trade_profiles'] ?? [] as $profile) {
+                DB::table('customer_trade_profiles')->updateOrInsert(
+                    ['customer_id' => $profile['customer_id']],
+                    [
+                        'house_number' => $profile['house_number'] ?? null,
+                        'entry_detail' => $profile['entry_detail'] ?? null,
+                        'classifications' => isset($profile['classifications']) ? json_encode($profile['classifications']) : null,
+                        'ommc_brands' => isset($profile['ommc_brands']) ? json_encode($profile['ommc_brands']) : null,
+                        'ommc_mcb_brands' => isset($profile['ommc_mcb_brands']) ? json_encode($profile['ommc_mcb_brands']) : null,
+                        'tpl_pollux' => isset($profile['tpl_pollux']) ? json_encode($profile['tpl_pollux']) : null,
+                        'other_competitor_brands' => isset($profile['other_competitor_brands']) ? json_encode($profile['other_competitor_brands']) : null,
+                        'mcb_competitors' => isset($profile['mcb_competitors']) ? json_encode($profile['mcb_competitors']) : null,
+                        'other_competitors_note' => $profile['other_competitors_note'] ?? null,
+                        'working_days' => isset($profile['working_days']) ? json_encode($profile['working_days']) : null,
+                        'operating_hours' => isset($profile['operating_hours']) ? json_encode($profile['operating_hours']) : null,
+                        'motiv_user' => $profile['motiv_user'] ?? null,
+                        'delivery_method' => $profile['delivery_method'] ?? null,
+                        'ulab' => $profile['ulab'] ?? null,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
+            foreach ($data['customer_category_histories'] ?? [] as $history) {
+                DB::table('customer_category_histories')->updateOrInsert(
+                    ['customer_id' => $history['customer_id'], 'category_year' => $history['category_year']],
+                    ['category' => $history['category'], 'updated_at' => now()]
                 );
             }
 

@@ -7,6 +7,12 @@
     {
       "name": "ommc2027",
       "path": "../ommc2027"
+    },
+    {
+      "path": "../../Laravel/henri"
+    },
+    {
+      "path": "../../IOS/kOne-Motolite"
     }
   ],
   "settings": {}

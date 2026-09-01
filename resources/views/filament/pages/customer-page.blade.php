@@ -57,6 +57,52 @@
 
                 <div class="flex-1 overflow-y-auto px-6 py-5 space-y-6">
 
+                    <div>
+                        <h3 class="text-xs font-extrabold text-[#737685] uppercase tracking-wider mb-2">Customer Information</h3>
+                        <div class="bg-[#f3f4f6] rounded-2xl p-4 space-y-1.5 text-xs text-[#434654]">
+                            @if($customerDetail['customer']['unique_id'] ?? null)<p><span class="font-bold">Customer Code:</span> {{ $customerDetail['customer']['unique_id'] }}</p>@endif
+                            @if($customerDetail['customer']['company'] ?? null)<p><span class="font-bold">Company:</span> {{ $customerDetail['customer']['company'] }}</p>@endif
+                            <p><span class="font-bold">Address:</span> {{ $customerDetail['customer']['address'] ?? '—' }}</p>
+                            <p><span class="font-bold">Contact Person:</span> {{ $customerDetail['customer']['contact_person'] ?? '—' }}</p>
+                            <p><span class="font-bold">Contact Number:</span> {{ $customerDetail['customer']['contact_number'] ?? '—' }}</p>
+                            <p><span class="font-bold">Region:</span> {{ $customerDetail['customer']['region'] ?? '—' }}</p>
+                            <p><span class="font-bold">Municipality:</span> {{ $customerDetail['customer']['municipality'] ?? '—' }}</p>
+                            <p><span class="font-bold">Coordinates:</span> {{ $customerDetail['customer']['latitude'] ?? '—' }}, {{ $customerDetail['customer']['longitude'] ?? '—' }}</p>
+                            <p><span class="font-bold">General Category:</span> {{ $customerDetail['customer']['general_category'] ?? '—' }}</p>
+                            @if($customerDetail['customer']['competitor_volume'] ?? null)<p><span class="font-bold">Competitor Volume:</span> {{ $customerDetail['customer']['competitor_volume'] }}</p>@endif
+                            <p><span class="font-bold">Status:</span> {{ ($customerDetail['customer']['is_active'] ?? false) ? 'Active' : 'Inactive' }}</p>
+                        </div>
+                    </div>
+
+                    @if($customerDetail['trade_profile'] ?? null)
+                        <div>
+                            <h3 class="text-xs font-extrabold text-[#737685] uppercase tracking-wider mb-2">Trade Profile</h3>
+                            <div class="bg-[#f3f4f6] rounded-2xl p-4 space-y-1.5 text-xs text-[#434654]">
+                                @php($trade = $customerDetail['trade_profile'])
+                                @if($trade['house_number'] ?? null)<p><span class="font-bold">House Number:</span> {{ $trade['house_number'] }}</p>@endif
+                                @if($trade['entry_detail'] ?? null)<p><span class="font-bold">Entry Detail:</span> {{ $trade['entry_detail'] }}</p>@endif
+                                @foreach(['classifications' => 'Classifications', 'ommc_brands' => 'OMMC Brands', 'ommc_mcb_brands' => 'OMMC MCB Brands', 'tpl_pollux' => 'TPL / Pollux', 'other_competitor_brands' => 'Other Competitor Brands', 'mcb_competitors' => 'MCB Competitors', 'working_days' => 'Working Days', 'operating_hours' => 'Operating Hours'] as $key => $label)
+                                    @if(!empty($trade[$key]))<p><span class="font-bold">{{ $label }}:</span> {{ implode(', ', $trade[$key]) }}</p>@endif
+                                @endforeach
+                                @if($trade['other_competitors_note'] ?? null)<p><span class="font-bold">If Others:</span> {{ $trade['other_competitors_note'] }}</p>@endif
+                                @if(($trade['motiv_user'] ?? null) !== null)<p><span class="font-bold">MOTIV User:</span> {{ $trade['motiv_user'] ? 'Yes' : 'No' }}</p>@endif
+                                @if($trade['delivery_method'] ?? null)<p><span class="font-bold">Delivery Method:</span> {{ $trade['delivery_method'] }}</p>@endif
+                                @if($trade['ulab'] ?? null)<p><span class="font-bold">ULAB:</span> {{ $trade['ulab'] }}</p>@endif
+                            </div>
+                        </div>
+                    @endif
+
+                    @if(!empty($customerDetail['category_histories']))
+                        <div>
+                            <h3 class="text-xs font-extrabold text-[#737685] uppercase tracking-wider mb-2">Annual Categories</h3>
+                            <div class="bg-[#f3f4f6] rounded-2xl p-4 space-y-1 text-xs text-[#434654]">
+                                @foreach($customerDetail['category_histories'] as $history)
+                                    <p><span class="font-bold">{{ $history['year'] }}:</span> {{ $history['category'] }}</p>
+                                @endforeach
+                            </div>
+                        </div>
+                    @endif
+
                     {{-- Change Profile --}}
                     <div>
                         <h3 class="text-xs font-extrabold text-[#737685] uppercase tracking-wider mb-2">Latest Change Profile</h3>
