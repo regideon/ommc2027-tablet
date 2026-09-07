@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\CustomerBrand;
 use App\Models\CustomerCategory;
+use App\Models\Customer;
 use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
 use App\Models\CustomerProfileAttachment;
@@ -205,6 +206,18 @@ class SyncService
                 );
             }
 
+            foreach ($data['provinces'] ?? [] as $province) {
+                DB::table('provinces')->updateOrInsert(
+                    ['id' => $province['id']],
+                    [
+                        'region_specific_id' => $province['region_specific_id'] ?? null,
+                        'name' => $province['name'],
+                        'enabled' => $province['enabled'] ?? true,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
             foreach ($data['municipalities'] ?? [] as $municipality) {
                 DB::table('municipalities')->updateOrInsert(
                     ['id' => $municipality['id']],
@@ -220,9 +233,16 @@ class SyncService
             }
 
             foreach ($data['customers'] ?? [] as $customer) {
+                $existing = DB::table('customers')
+                    ->where('server_id', $customer['id'])
+                    ->orWhere(fn ($query) => $query->where('id', $customer['id'])->where('sync_status', '!=', 'pending'))
+                    ->first();
+                $localId = $existing?->id ?? $customer['id'];
+
                 DB::table('customers')->updateOrInsert(
-                    ['id' => $customer['id']],
+                    ['id' => $localId],
                     [
+                        'server_id' => $customer['id'],
                         'company_id' => $customer['company_id'] ?? null,
                         'general_category_id' => $customer['general_category_id'] ?? null,
                         'region_specific_id' => $customer['region_specific_id'] ?? null,
@@ -236,6 +256,9 @@ class SyncService
                         'longitude' => $customer['longitude'] ?? null,
                         'is_active' => $customer['is_active'] ?? true,
                         'competitor_volume' => $customer['competitor_volume'] ?? null,
+                        'sync_status' => 'synced',
+                        'sync_error' => null,
+                        'synced_at' => now(),
                         'updated_at' => now(),
                     ]
                 );
@@ -581,6 +604,57 @@ class SyncService
         $failureReasons = [];
 
         try {
+            $pendingCustomers = Customer::with(['tradeProfile', 'categoryHistories'])
+                ->where(function ($query): void {
+                    $query->where('sync_status', 'pending')
+                        ->orWhere(fn ($retry) => $retry->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })->get();
+
+            foreach ($pendingCustomers as $customer) {
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/push/customer", [
+                        'local_uuid' => $customer->local_uuid,
+                        'name' => $customer->name,
+                        'unique_id' => $customer->unique_id,
+                        'company_id' => $customer->company_id,
+                        'general_category_id' => $customer->general_category_id,
+                        'competitor_volume' => $customer->competitor_volume,
+                        'region_specific_id' => $customer->region_specific_id,
+                        'municipality_id' => $customer->municipality_id,
+                        'address' => $customer->address,
+                        'latitude' => $customer->latitude,
+                        'longitude' => $customer->longitude,
+                        'contact_person' => $customer->contact_person,
+                        'contact_number' => $customer->contact_number,
+                        'is_active' => $customer->is_active,
+                        'trade_profile' => $customer->tradeProfile?->toArray() ?? [],
+                        'category_histories' => $customer->categoryHistories->map(fn ($history) => [
+                            'category_year' => $history->category_year,
+                            'category' => $history->category,
+                        ])->values()->all(),
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    if ($response->successful()) {
+                        $this->markSynced($customer, ['server_id' => $response->json('server_id'), 'synced_at' => now()]);
+                        $pushed++;
+                    } else {
+                        $this->recordItemFailure($customer, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), ['stage' => 'customer:portal', 'endpoint' => '/api/sync/push/customer', 'http_status' => $response->status()]);
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordUnexpectedItemFailure($customer, $e, 'customer:unexpected');
+                    $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
+                }
+            }
+
             $pendingItineraries = Itinerary::where('sync_status', 'pending')
                 ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
                 ->get();
@@ -632,12 +706,17 @@ class SyncService
                     continue;
                 }
 
+                $customer = Customer::find($salescall->customer_id);
+                if (! $customer?->server_id) {
+                    continue;
+                }
+
                 try {
                     $response = $client->post("{$this->serverUrl}/api/sync/push/salescall", [
                         'local_uuid' => $salescall->local_uuid,
                         'itinerary_uuid' => $salescall->itinerary->local_uuid,
                         'itinerary_server_id' => $salescall->itinerary->server_id,
-                        'customer_id' => $salescall->customer_id,
+                        'customer_id' => $customer->server_id,
                         'salescall_type_id' => $salescall->salescall_type_id,
                         'route_start_at' => $salescall->route_start_at?->toDateTimeString(),
                         'latitude' => $salescall->latitude,

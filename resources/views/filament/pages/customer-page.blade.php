@@ -1,4 +1,7 @@
 <x-filament-panels::page>
+    <div class="flex items-center justify-end mb-3">
+        <a href="{{ \App\Filament\Pages\CustomerCreatePage::getUrl() }}" class="fi-btn fi-color-primary">Add Customer</a>
+    </div>
     <div class="space-y-2">
         @forelse($customers as $customer)
             <button
@@ -39,8 +42,12 @@
 
     {{-- CUSTOMER DETAIL OVERLAY --}}
     @if($selectedCustomer)
-        <div class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-end lg:items-center justify-center" wire:click.self="closeCustomer">
-            <div class="bg-white rounded-t-3xl lg:rounded-3xl w-full lg:max-w-lg shadow-2xl overflow-hidden flex flex-col" style="max-height: 90vh;">
+        <div class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-end lg:items-center justify-center overscroll-none"
+             wire:click.self="closeCustomer" @click.self="unlock()"
+             x-on:customer-modal-closed.window="unlock()"
+             x-data="{ previousHtmlOverflow: '', previousBodyOverflow: '', lock() { this.previousHtmlOverflow = document.documentElement.style.overflow; this.previousBodyOverflow = document.body.style.overflow; document.documentElement.style.overflow = 'hidden'; document.body.style.overflow = 'hidden'; }, unlock() { document.documentElement.style.overflow = this.previousHtmlOverflow; document.body.style.overflow = this.previousBodyOverflow; } }"
+             x-init="lock(); return () => unlock()">
+            <div class="bg-white rounded-t-3xl lg:rounded-3xl w-full lg:max-w-lg shadow-2xl overflow-hidden flex flex-col min-h-0" style="max-height: 90vh;">
 
                 {{-- Header --}}
                 <div class="flex items-start justify-between gap-3 px-6 py-5 border-b border-gray-100 shrink-0">
@@ -50,12 +57,12 @@
                             <p class="text-xs text-[#737685] truncate mt-0.5">{{ $selectedCustomer->address }}</p>
                         @endif
                     </div>
-                    <button wire:click="closeCustomer" class="w-8 h-8 rounded-full bg-[#edeef0] flex items-center justify-center hover:bg-[#e7e8ea] transition-colors shrink-0">
+                    <button wire:click="closeCustomer" @click="unlock()" class="w-8 h-8 rounded-full bg-[#edeef0] flex items-center justify-center hover:bg-[#e7e8ea] transition-colors shrink-0">
                         <span class="material-symbols-outlined text-[#434654] text-lg">close</span>
                     </button>
                 </div>
 
-                <div class="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+                <div class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 space-y-6" style="-webkit-overflow-scrolling: touch;">
 
                     <div>
                         <h3 class="text-xs font-extrabold text-[#737685] uppercase tracking-wider mb-2">Customer Information</h3>

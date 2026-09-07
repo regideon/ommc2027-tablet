@@ -14,6 +14,10 @@ class Customer extends Model
 
     protected $guarded = ['id'];
 
+    protected $casts = [
+        'is_active' => 'boolean',
+    ];
+
     public function generalCategory(): BelongsTo
     {
         return $this->belongsTo(GeneralCategory::class);

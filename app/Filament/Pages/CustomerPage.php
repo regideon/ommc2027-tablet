@@ -204,6 +204,7 @@ class CustomerPage extends Page
         $this->customerDetail = [];
         $this->showPhotos = false;
         $this->customerPhotos = [];
+        $this->dispatch('customer-modal-closed');
     }
 
     /**
