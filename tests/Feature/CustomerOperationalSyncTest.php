@@ -50,10 +50,9 @@ test('pull persists customer category and competitor volume without affecting se
                 'classifications' => ['Battery Specialist'], 'ommc_brands' => ['Motolite'],
                 'working_days' => ['Monday'], 'delivery_method' => 'resq_hub',
             ]],
-            'customer_category_histories' => [
-                ['customer_id' => 99, 'category_year' => 2018, 'category' => 'AB Loyal'],
-                ['customer_id' => 99, 'category_year' => 2024, 'category' => 'AB Loyal'],
-            ],
+            'customer_category_histories' => collect(config('customer_trade_form.category_years'))->map(fn ($year) => [
+                'customer_id' => 99, 'category_year' => $year, 'category' => 'AB Loyal',
+            ])->all(),
             'salescall_statuses' => [], 'salescall_types' => [], 'material_groups' => [], 'brands' => [],
             'categories' => [], 'sub_categories' => [], 'sub_sub_categories' => [],
             'salescall_image_categories' => [], 'salescall_image_types' => [], 'itineraries' => [],
@@ -76,5 +75,6 @@ test('pull persists customer category and competitor volume without affecting se
     $profile = DB::table('customer_trade_profiles')->where('customer_id', 99)->first();
     expect($profile->entry_detail)->toBe('AB')
         ->and(json_decode($profile->classifications, true))->toBe(['Battery Specialist'])
-        ->and(DB::table('customer_category_histories')->where('customer_id', 99)->count())->toBe(2);
+        ->and(DB::table('customer_category_histories')->where('customer_id', 99)->count())->toBe(9)
+        ->and(DB::table('customer_category_histories')->where('customer_id', 99)->whereIn('category_year', [2025, 2026])->count())->toBe(2);
 });
