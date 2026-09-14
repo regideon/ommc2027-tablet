@@ -13,6 +13,7 @@ class CustomerTradeProfile extends Model
         'classifications' => 'array', 'ommc_brands' => 'array', 'ommc_mcb_brands' => 'array',
         'tpl_pollux' => 'array', 'other_competitor_brands' => 'array', 'mcb_competitors' => 'array',
         'working_days' => 'array', 'operating_hours' => 'array', 'motiv_user' => 'boolean',
+        'profile_data' => 'array',
     ];
 
     public function customer(): BelongsTo

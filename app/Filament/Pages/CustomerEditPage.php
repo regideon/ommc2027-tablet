@@ -2,118 +2,34 @@
 
 namespace App\Filament\Pages;
 
-use App\Models\Company;
 use App\Models\Customer;
-use App\Models\GeneralCategory;
-use App\Models\Municipality;
-use App\Models\Province;
-use App\Models\RegionSpecific;
-use App\Models\User;
 use App\Services\CustomerProfileFormService;
-use BackedEnum;
 use Filament\Notifications\Notification;
-use Filament\Pages\Page;
-use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
-class CustomerCreatePage extends Page
+class CustomerEditPage extends CustomerCreatePage
 {
-    protected string $view = 'filament.pages.customer-create-page';
+    protected static ?string $slug = 'customers/{customerId}/edit';
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedBuildingStorefront;
+    protected static ?string $title = 'Edit Customer';
 
-    protected static bool $shouldRegisterNavigation = false;
-
-    protected static ?string $slug = 'customers/create';
-
-    protected static ?string $title = 'Add Customer';
-
-    public string $name = '';
-    public ?string $unique_id = null;
-    public ?int $company_id = null;
-    public ?int $region_specific_id = null;
-    public ?int $province_id = null;
-    public ?int $municipality_id = null;
-    public ?int $general_category_id = null;
-    public ?int $competitor_volume = null;
-    public string $address = '';
-    public ?string $latitude = null;
-    public ?string $longitude = null;
-    public ?string $contact_person = null;
-    public ?string $contact_number = null;
-    public ?string $business_landline_number = null;
-    public ?string $business_mobile_number = null;
-    public ?string $date_established = null;
-    public ?int $person_in_charge_id = null;
-    public array $access_user_ids = [];
-    public bool $is_active = true;
-    public array $trade = [];
-    public array $active = [];
-    public array $categories = [];
+    public int $customerId;
 
     public function mount(?int $customerId = null): void
     {
-        $this->trade = [
-            'house_number' => null,
-            'entry_detail' => null,
-            'classifications' => [],
-            'ommc_brands' => [],
-            'ommc_mcb_brands' => [],
-            'tpl_pollux' => [],
-            'other_competitor_brands' => [],
-            'mcb_competitors' => [],
-            'other_competitors_note' => null,
-            'working_days' => [],
-            'operating_hours' => [],
-            'motiv_user' => false,
-            'delivery_method' => null,
-            'ulab' => null,
-        ];
+        abort_unless($customerId !== null, 404);
+        $customer = Customer::with(['company', 'municipality', 'users', 'tradeProfile', 'categoryHistories'])->findOrFail($customerId);
+        $state = CustomerProfileFormService::hydrate($customer);
 
-        $this->categories = CustomerProfileFormService::defaultCategories('outlet');
-    }
-
-    protected function getViewData(): array
-    {
-        return [
-            'companies' => Company::orderBy('name')->get(),
-            'regions' => RegionSpecific::orderBy('name')->get(),
-            'provinces' => Province::where('enabled', true)->orderBy('name')->get(),
-            'municipalities' => Municipality::where('enabled', true)->orderBy('name')->get(),
-            'generalCategories' => GeneralCategory::orderBy('sort')->get(),
-            'users' => User::orderBy('name')->get(),
-        ];
-    }
-
-    public function profileType(): ?string
-    {
-        return CustomerProfileFormService::profileForCompany($this->company_id);
-    }
-
-    public function updatedCompanyId(): void
-    {
-        $profile = $this->profileType();
-        $this->trade = [];
-        $this->active = [];
-        $this->categories = $profile ? CustomerProfileFormService::defaultCategories($profile) : [];
-        $this->person_in_charge_id = null;
-    }
-
-    public function updatedRegionSpecificId(): void
-    {
-        $this->province_id = null;
-        $this->municipality_id = null;
-    }
-
-    public function updatedProvinceId(): void
-    {
-        $this->municipality_id = null;
-    }
-
-    public function categoryOptions(string $stream): array
-    {
-        return CustomerProfileFormService::categoryOptions($this->profileType() ?: 'outlet', $stream);
+        foreach ($state as $key => $value) {
+            if (property_exists($this, $key)) {
+                $this->{$key} = $value;
+            }
+        }
+        $this->trade = array_merge($this->trade, $state['trade'] ?? []);
+        $this->active = $state['active'] ?? [];
+        $this->categories = $state['categories'] ?? [];
+        $this->customerId = $customer->id;
     }
 
     public function saveCustomer(): void
@@ -134,9 +50,6 @@ class CustomerCreatePage extends Page
             'latitude' => 'required|numeric',
             'longitude' => 'required|numeric',
             'contact_person' => 'required|string|max:255',
-            'contact_number' => 'nullable|string|max:50',
-            'business_landline_number' => 'nullable|string|max:50',
-            'business_mobile_number' => 'nullable|string|max:50',
             'date_established' => 'required|date',
         ]);
 
@@ -147,7 +60,7 @@ class CustomerCreatePage extends Page
         }
 
         foreach (CustomerProfileFormService::categoryStreams($profileType) as $stream) {
-            foreach ($this->categories[$stream] ?? [] as $year => $category) {
+            foreach ($this->categories[$stream] ?? [] as $category) {
                 if (! $category || ! array_key_exists($category, $this->categoryOptions($stream))) {
                     $this->addError('categories', "Every {$stream} annual category must be selected from the allowed options.");
                     return;
@@ -184,20 +97,15 @@ class CustomerCreatePage extends Page
             $this->addError('active.delivery_detail', 'Delivery Detail is required when Delivery Type is Yes.');
             return;
         }
-        if ($profileType === 'oe' && ($this->trade['entry_detail'] ?? null) === 'Acid' && ! array_key_exists('sulfuric_acid', $this->active)) {
-            $this->addError('active.sulfuric_acid', 'Sulfuric Acid is required for Acid accounts.');
-            return;
-        }
 
         DB::transaction(function () use ($profileType): void {
-            do {
-                $localId = -random_int(1, PHP_INT_MAX);
-            } while (Customer::withTrashed()->whereKey($localId)->exists());
+            $customer = Customer::with(['company', 'tradeProfile', 'categoryHistories'])->findOrFail($this->customerId);
+            $oldProfile = $customer->tradeProfile?->profile_type ?: CustomerProfileFormService::profileForCompany($customer->company_id);
+            if ($oldProfile && $oldProfile !== $profileType) {
+                CustomerProfileFormService::archiveProfile($customer, $profileType, auth()->id());
+            }
 
-            $customer = new Customer;
-            $customer->id = $localId;
-            $customer->fill([
-                'local_uuid' => (string) Str::uuid(),
+            CustomerProfileFormService::saveAggregate($customer, [
                 'name' => $this->name,
                 'unique_id' => $this->unique_id,
                 'company_id' => $this->company_id,
@@ -213,21 +121,17 @@ class CustomerCreatePage extends Page
                 'business_landline_number' => $this->business_landline_number,
                 'business_mobile_number' => $this->business_mobile_number,
                 'date_established' => $this->date_established,
-                'person_in_charge_id' => $profileType === 'outlet' ? $this->person_in_charge_id : null,
                 'is_active' => $this->is_active,
-                'sync_status' => 'pending',
-                'sync_attempts' => 0,
-            ]);
-            $customer->save();
-            CustomerProfileFormService::saveAggregate($customer, [
+                'person_in_charge_id' => $profileType === 'outlet' ? $this->person_in_charge_id : null,
                 'trade' => $this->trade,
                 'active' => $this->active,
                 'categories' => $this->categories,
                 'access_user_ids' => $this->access_user_ids,
             ], $profileType);
+            $customer->update(['sync_status' => 'pending', 'sync_error' => null]);
         });
 
-        Notification::make()->title('Customer saved offline')->success()->send();
+        Notification::make()->title('Customer updated offline')->success()->send();
         $this->redirect(CustomerPage::getUrl());
     }
 }

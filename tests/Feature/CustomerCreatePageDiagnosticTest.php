@@ -42,7 +42,9 @@ function validCustomerCreateState(): array
         'latitude' => '14.6500',
         'longitude' => '121.0500',
         'contact_person' => 'Diagnostic Contact',
-        'contact_number' => '09170000000',
+        'business_landline_number' => '02-8000000',
+        'business_mobile_number' => '09170000000',
+        'date_established' => '2018-01-01',
         'is_active' => true,
         'trade' => [
             'house_number' => '1',
@@ -60,9 +62,12 @@ function validCustomerCreateState(): array
             'delivery_method' => 'resq_hub',
             'ulab' => 'GRC',
         ],
-        'category_histories' => collect($years)->mapWithKeys(fn (int $year) => [
-            $year => ['category_year' => $year, 'category' => 'AB Loyal'],
-        ])->all(),
+        'active' => [
+            'ulab' => 'GRC',
+            'operating_hours' => ['start' => '08:00', 'end' => '17:00'],
+            'owner' => ['name' => 'Owner', 'birthday' => '1970-01-01', 'relationship' => 'Owner', 'generation' => '1st Gen'],
+        ],
+        'categories' => ['ab' => collect($years)->mapWithKeys(fn (int $year) => [$year => 'AB Loyal'])->all()],
     ];
 }
 
@@ -82,6 +87,8 @@ test('customer add page renders against the complete migrated sqlite schema', fu
         ->and(Schema::hasColumns('customers', ['local_uuid', 'server_id', 'sync_status', 'sync_attempts', 'sync_error', 'synced_at']))->toBeTrue();
 
     $component = Livewire::test(CustomerCreatePage::class)
+        ->set('company_id', 1)
+        ->set('trade.entry_detail', 'AB')
         ->assertOk()
         ->assertSee('OMMC')
         ->assertSee('NCR')
@@ -91,53 +98,36 @@ test('customer add page renders against the complete migrated sqlite schema', fu
         ->assertSee('Company')
         ->assertSee('General Category')
         ->assertSee('Contact Person')
-        ->assertSee('Contact Number')
+        ->assertSee('Business Landline Number')
+        ->assertSee('Business Mobile Number')
         ->assertSee('Address')
-        ->assertSee('Region')
-        ->assertSee('City / Province')
-        ->assertSee('Municipality')
+        ->assertSee('Specific Region')
+        ->assertSee('Province')
+        ->assertSee('City / Municipality')
         ->assertSee('Latitude')
         ->assertSee('Longitude')
-        ->assertSee('House Number')
         ->assertSee('Entry Detail')
         ->assertSee('Classifications')
-        ->assertSee('OMMC Brands')
         ->assertSee('MOTIV User')
-        ->assertSee('Delivery Method')
         ->assertSee('ULAB')
-        ->assertSee('Annual Categories (2018–2026)')
-        ->assertSee('customer-page-layout-scope')
-        ->assertSee('class="customer-page-layout-scope bg-white rounded-2xl shadow-sm p-5 space-y-4"', false)
-        ->assertSee('class="customer-create-form space-y-5 pb-8"', false)
-        ->assertSee('.customer-page-layout-scope .customer-row', false)
-        ->assertDontSee('CUSTOMER_LAYOUT_DIAGNOSTIC', false)
-        ->assertDontSee('TEMPORARY physical-device layout diagnostics', false)
-        ->assertSee('customer-history-grid')
-        ->assertSee('customer-span-6')
-        ->assertSee('customer-span-4')
-        ->assertSee('customer-control-shell')
-        ->assertSee('customer-history-header')
-        ->assertSee('Year')
-        ->assertSee('value="2018"', false)
-        ->assertSee('value="2026"', false)
-        ->assertSee('wire:model.live="region_specific_id" class="customer-control"', false)
-        ->assertSee('wire:model.live="province_id" class="customer-control"', false)
-        ->assertSee('wire:model="municipality_id" class="customer-control"', false)
+        ->assertSee('AB Annual Categories')
+        ->assertSee('Owner Profile')
+        ->assertSee('2018 *')
+        ->assertSee('2026 *')
         ->assertSee('wire:model="latitude"', false)
         ->assertSee('wire:model.live="trade.entry_detail"', false)
         ->assertSee('wire:model="trade.classifications"', false)
-        ->assertSee('wire:model="trade.ommc_brands"', false)
-        ->assertSee('wire:model="category_histories.2018.category"', false);
+        ->assertSee('wire:model="categories.ab.2018"', false);
 
     $component->set('region_specific_id', 1)
         ->set('province_id', 1)
         ->assertSee('Metro Manila')
         ->assertSee('Quezon City');
 
-    $state = $component->get('category_histories');
+    $state = $component->get('categories.ab');
     expect(array_keys($state))->toBe(range(2018, 2026));
     foreach (range(2018, 2026) as $year) {
-        expect($state[$year])->toBe(['category_year' => $year, 'category' => null]);
+        expect($state[$year])->toBeNull();
     }
 });
 

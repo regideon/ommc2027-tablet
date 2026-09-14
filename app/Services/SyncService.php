@@ -232,12 +232,18 @@ class SyncService
                 );
             }
 
+            $protectedStatuses = ['pending', 'failed', 'conflict'];
+            $serverToLocalCustomer = [];
+            $protectedCustomerIds = DB::table('customers')->whereIn('sync_status', $protectedStatuses)->pluck('id', 'server_id')->filter()->all();
+
             foreach ($data['customers'] ?? [] as $customer) {
                 $existing = DB::table('customers')
                     ->where('server_id', $customer['id'])
-                    ->orWhere(fn ($query) => $query->where('id', $customer['id'])->where('sync_status', '!=', 'pending'))
+                    ->orWhere(fn ($query) => $query->where('id', $customer['id'])->whereNotIn('sync_status', $protectedStatuses))
                     ->first();
                 $localId = $existing?->id ?? $customer['id'];
+                $serverToLocalCustomer[$customer['id']] = $localId;
+                if (isset($protectedCustomerIds[$customer['id']])) continue;
 
                 DB::table('customers')->updateOrInsert(
                     ['id' => $localId],
@@ -251,6 +257,10 @@ class SyncService
                         'unique_id' => $customer['unique_id'] ?? null,
                         'contact_person' => $customer['contact_person'] ?? null,
                         'contact_number' => $customer['contact_number'] ?? null,
+                        'business_landline_number' => $customer['business_landline_number'] ?? null,
+                        'business_mobile_number' => $customer['business_mobile_number'] ?? null,
+                        'date_established' => $customer['date_established'] ?? null,
+                        'person_in_charge_id' => $customer['person_in_charge_id'] ?? null,
                         'address' => $customer['address'] ?? null,
                         'latitude' => $customer['latitude'] ?? null,
                         'longitude' => $customer['longitude'] ?? null,
@@ -259,15 +269,20 @@ class SyncService
                         'sync_status' => 'synced',
                         'sync_error' => null,
                         'synced_at' => now(),
+                        'server_updated_at' => $customer['updated_at'] ?? null,
                         'updated_at' => now(),
                     ]
                 );
             }
 
             foreach ($data['customer_trade_profiles'] ?? [] as $profile) {
+                $localCustomerId = $serverToLocalCustomer[$profile['customer_id']] ?? $profile['customer_id'];
+                if (isset($protectedCustomerIds[$profile['customer_id']])) continue;
                 DB::table('customer_trade_profiles')->updateOrInsert(
-                    ['customer_id' => $profile['customer_id']],
+                    ['customer_id' => $localCustomerId],
                     [
+                        'profile_type' => $profile['profile_type'] ?? null,
+                        'profile_data' => isset($profile['profile_data']) ? json_encode($profile['profile_data']) : null,
                         'house_number' => $profile['house_number'] ?? null,
                         'entry_detail' => $profile['entry_detail'] ?? null,
                         'classifications' => isset($profile['classifications']) ? json_encode($profile['classifications']) : null,
@@ -288,8 +303,10 @@ class SyncService
             }
 
             foreach ($data['customer_category_histories'] ?? [] as $history) {
+                $localCustomerId = $serverToLocalCustomer[$history['customer_id']] ?? $history['customer_id'];
+                if (isset($protectedCustomerIds[$history['customer_id']])) continue;
                 DB::table('customer_category_histories')->updateOrInsert(
-                    ['customer_id' => $history['customer_id'], 'category_year' => $history['category_year']],
+                    ['customer_id' => $localCustomerId, 'profile_type' => $history['profile_type'] ?? null, 'stream' => $history['stream'] ?? null, 'category_year' => $history['category_year']],
                     ['category' => $history['category'], 'updated_at' => now()]
                 );
             }
@@ -574,13 +591,6 @@ class SyncService
                 );
             }
 
-            // foreach ($data['customer_user'] ?? [] as $pivot) {
-            //     \Illuminate\Support\Facades\DB::table('customer_user')->updateOrInsert(
-            //         ['customer_id' => $pivot['customer_id'], 'user_id' => $pivot['user_id']],
-            //         ['updated_at' => now()]
-            //     );
-            // }
-
             $customerCount = count($data['customers'] ?? []);
 
             return SyncResult::ok("Pulled {$itineraryCount} itineraries, {$salescallCount} salescalls, {$customerCount} customers.");
@@ -614,6 +624,9 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/sync/push/customer", [
                         'local_uuid' => $customer->local_uuid,
+                        'server_id' => $customer->server_id,
+                        'base_updated_at' => $customer->server_updated_at,
+                        'sync_intent' => $customer->server_id ? 'update' : 'create',
                         'name' => $customer->name,
                         'unique_id' => $customer->unique_id,
                         'company_id' => $customer->company_id,
@@ -626,9 +639,19 @@ class SyncService
                         'longitude' => $customer->longitude,
                         'contact_person' => $customer->contact_person,
                         'contact_number' => $customer->contact_number,
+                        'business_landline_number' => $customer->business_landline_number,
+                        'business_mobile_number' => $customer->business_mobile_number,
+                        'date_established' => optional($customer->date_established)->format('Y-m-d'),
                         'is_active' => $customer->is_active,
+                        'profile_type' => $customer->tradeProfile?->profile_type,
+                        'person_in_charge_id' => $customer->person_in_charge_id,
                         'trade_profile' => $customer->tradeProfile?->toArray() ?? [],
+                        'profile_data' => $customer->tradeProfile?->profile_data ?? [],
                         'category_histories' => $customer->categoryHistories->map(fn ($history) => [
+                            'profile_type' => $history->profile_type ?: $customer->tradeProfile?->profile_type,
+                            'stream' => $history->stream ?: (($customer->tradeProfile?->profile_type === 'outlet') ? match ($customer->tradeProfile?->entry_detail) {
+                                'AB' => 'ab', 'MCB' => 'mcb', default => (str_starts_with((string) $history->category, 'AB ') ? 'ab' : (str_starts_with((string) $history->category, 'MCB ') ? 'mcb' : null)),
+                            } : $customer->tradeProfile?->profile_type),
                             'category_year' => $history->category_year,
                             'category' => $history->category,
                         ])->values()->all(),
@@ -639,8 +662,12 @@ class SyncService
                     }
 
                     if ($response->successful()) {
-                        $this->markSynced($customer, ['server_id' => $response->json('server_id'), 'synced_at' => now()]);
+                        $this->markSynced($customer, ['server_id' => $response->json('server_id'), 'server_updated_at' => $response->json('updated_at'), 'synced_at' => now()]);
                         $pushed++;
+                    } elseif ($response->status() === 409 && $response->json('code') === 'customer_conflict') {
+                        $customer->update(['sync_status' => 'conflict', 'sync_error' => $response->json('message', 'Customer changed on Portal.')]);
+                        $failed++;
+                        $failureReasons['customer_conflict'] = true;
                     } else {
                         $this->recordItemFailure($customer, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), ['stage' => 'customer:portal', 'endpoint' => '/api/sync/push/customer', 'http_status' => $response->status()]);
                         $failed++;

@@ -142,8 +142,12 @@ class CustomerPage extends Page
                 'general_category' => $customer->generalCategory?->name,
                 'competitor_volume' => match ($customer->competitor_volume) { 1 => 'High', 2 => 'Medium', 3 => 'Low', default => null },
                 'is_active' => $customer->is_active,
+                'sync_status' => $customer->sync_status,
+                'sync_error' => $customer->sync_error,
+                'server_id' => $customer->server_id,
             ],
             'trade_profile' => $customer->tradeProfile ? [
+                'profile_type' => $customer->tradeProfile->profile_type,
                 'house_number' => $customer->tradeProfile->house_number,
                 'entry_detail' => $customer->tradeProfile->entry_detail,
                 'classifications' => $customer->tradeProfile->classifications,
@@ -158,9 +162,12 @@ class CustomerPage extends Page
                 'motiv_user' => $customer->tradeProfile->motiv_user,
                 'delivery_method' => match ($customer->tradeProfile->delivery_method) { 'resq_hub' => 'ResQ Hub', 'own_delivery' => 'Own Delivery', default => null },
                 'ulab' => $customer->tradeProfile->ulab,
+                'profile_data' => $customer->tradeProfile->profile_data,
             ] : null,
             'category_histories' => $customer->categoryHistories->map(fn ($history) => [
                 'year' => $history->category_year,
+                'profile_type' => $history->profile_type,
+                'stream' => $history->stream,
                 'category' => $history->category,
             ])->all(),
             'profile' => $profile ? [

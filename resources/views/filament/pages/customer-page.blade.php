@@ -60,6 +60,7 @@
                     <button wire:click="closeCustomer" @click="unlock()" class="w-8 h-8 rounded-full bg-[#edeef0] flex items-center justify-center hover:bg-[#e7e8ea] transition-colors shrink-0">
                         <span class="material-symbols-outlined text-[#434654] text-lg">close</span>
                     </button>
+                    <a href="{{ \App\Filament\Pages\CustomerEditPage::getUrl(['customerId' => $selectedCustomer->id]) }}" class="fi-btn fi-color-primary">Edit</a>
                 </div>
 
                 <div class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 space-y-6" style="-webkit-overflow-scrolling: touch;">
@@ -78,6 +79,8 @@
                             <p><span class="font-bold">General Category:</span> {{ $customerDetail['customer']['general_category'] ?? '—' }}</p>
                             @if($customerDetail['customer']['competitor_volume'] ?? null)<p><span class="font-bold">Competitor Volume:</span> {{ $customerDetail['customer']['competitor_volume'] }}</p>@endif
                             <p><span class="font-bold">Status:</span> {{ ($customerDetail['customer']['is_active'] ?? false) ? 'Active' : 'Inactive' }}</p>
+                            <p><span class="font-bold">Sync:</span> {{ $customerDetail['customer']['sync_status'] ?? 'synced' }}@if($customerDetail['customer']['server_id'] ?? null) (Server ID {{ $customerDetail['customer']['server_id'] }})@endif</p>
+                            @if($customerDetail['customer']['sync_error'] ?? null)<p class="text-danger-600"><span class="font-bold">Sync Error:</span> {{ $customerDetail['customer']['sync_error'] }}</p>@endif
                         </div>
                     </div>
 
@@ -86,6 +89,7 @@
                             <h3 class="text-xs font-extrabold text-[#737685] uppercase tracking-wider mb-2">Trade Profile</h3>
                             <div class="bg-[#f3f4f6] rounded-2xl p-4 space-y-1.5 text-xs text-[#434654]">
                                 @php($trade = $customerDetail['trade_profile'])
+                                @if($trade['profile_type'] ?? null)<p><span class="font-bold">Profile:</span> {{ strtoupper($trade['profile_type']) }}</p>@endif
                                 @if($trade['house_number'] ?? null)<p><span class="font-bold">House Number:</span> {{ $trade['house_number'] }}</p>@endif
                                 @if($trade['entry_detail'] ?? null)<p><span class="font-bold">Entry Detail:</span> {{ $trade['entry_detail'] }}</p>@endif
                                 @foreach(['classifications' => 'Classifications', 'ommc_brands' => 'OMMC Brands', 'ommc_mcb_brands' => 'OMMC MCB Brands', 'tpl_pollux' => 'TPL / Pollux', 'other_competitor_brands' => 'Other Competitor Brands', 'mcb_competitors' => 'MCB Competitors', 'working_days' => 'Working Days', 'operating_hours' => 'Operating Hours'] as $key => $label)
@@ -95,6 +99,9 @@
                                 @if(($trade['motiv_user'] ?? null) !== null)<p><span class="font-bold">MOTIV User:</span> {{ $trade['motiv_user'] ? 'Yes' : 'No' }}</p>@endif
                                 @if($trade['delivery_method'] ?? null)<p><span class="font-bold">Delivery Method:</span> {{ $trade['delivery_method'] }}</p>@endif
                                 @if($trade['ulab'] ?? null)<p><span class="font-bold">ULAB:</span> {{ $trade['ulab'] }}</p>@endif
+                                @foreach(($trade['profile_data']['active'] ?? []) as $key => $value)
+                                    @if(is_scalar($value) && $value !== null && $value !== '')<p><span class="font-bold">{{ str_replace('_', ' ', ucfirst($key)) }}:</span> {{ $value }}</p>@endif
+                                @endforeach
                             </div>
                         </div>
                     @endif
@@ -104,7 +111,7 @@
                             <h3 class="text-xs font-extrabold text-[#737685] uppercase tracking-wider mb-2">Annual Categories</h3>
                             <div class="bg-[#f3f4f6] rounded-2xl p-4 space-y-1 text-xs text-[#434654]">
                                 @foreach($customerDetail['category_histories'] as $history)
-                                    <p><span class="font-bold">{{ $history['year'] }}:</span> {{ $history['category'] }}</p>
+                                    <p><span class="font-bold">{{ $history['year'] }} @if($history['stream'] ?? null)({{ strtoupper($history['stream']) }})@endif:</span> {{ $history['category'] }}</p>
                                 @endforeach
                             </div>
                         </div>
