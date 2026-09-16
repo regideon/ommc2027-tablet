@@ -51,6 +51,11 @@ class Customer extends Model
         return $this->hasMany(CustomerCategoryHistory::class)->orderBy('category_year');
     }
 
+    public function categoryEvents(): HasMany
+    {
+        return $this->hasMany(CustomerCategoryEvent::class)->orderBy('effective_at')->orderBy('id');
+    }
+
     public function salescalls()
     {
         return $this->hasMany(Salescall::class);

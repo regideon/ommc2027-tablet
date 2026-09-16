@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\CustomerBrand;
 use App\Models\CustomerCategory;
+use App\Models\CustomerCategoryEvent;
 use App\Models\Customer;
 use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
@@ -190,7 +191,7 @@ class SyncService
             foreach ($data['regions'] ?? [] as $region) {
                 DB::table('regions')->updateOrInsert(
                     ['id' => $region['id']],
-                    ['code' => $region['code'], 'name' => $region['name'], 'updated_at' => now()]
+                    ['code' => $region['code'], 'psgc_code' => $region['psgc_code'] ?? null, 'name' => $region['name'], 'updated_at' => now()]
                 );
             }
 
@@ -210,6 +211,8 @@ class SyncService
                 DB::table('provinces')->updateOrInsert(
                     ['id' => $province['id']],
                     [
+                        'region_id' => $province['region_id'] ?? null,
+                        'psgc_code' => $province['psgc_code'] ?? null,
                         'region_specific_id' => $province['region_specific_id'] ?? null,
                         'name' => $province['name'],
                         'enabled' => $province['enabled'] ?? true,
@@ -222,8 +225,10 @@ class SyncService
                 DB::table('municipalities')->updateOrInsert(
                     ['id' => $municipality['id']],
                     [
+                        'psgc_code' => $municipality['psgc_code'] ?? null,
                         'region_id' => $municipality['region_id'] ?? null,
                         'province_id' => $municipality['province_id'] ?? null,
+                        'locality_type' => $municipality['locality_type'] ?? null,
                         'name' => $municipality['name'],
                         'sort' => $municipality['sort'] ?? 0,
                         'enabled' => $municipality['enabled'] ?? true,
@@ -308,6 +313,28 @@ class SyncService
                 DB::table('customer_category_histories')->updateOrInsert(
                     ['customer_id' => $localCustomerId, 'profile_type' => $history['profile_type'] ?? null, 'stream' => $history['stream'] ?? null, 'category_year' => $history['category_year']],
                     ['category' => $history['category'], 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['customer_category_events'] ?? [] as $event) {
+                $localCustomerId = $serverToLocalCustomer[$event['customer_id']] ?? $event['customer_id'];
+                if (isset($protectedCustomerIds[$event['customer_id']])) continue;
+                $supersedesId = filled($event['supersedes_event_key'] ?? null)
+                    ? DB::table('customer_category_events')->where('event_key', $event['supersedes_event_key'])->value('id')
+                    : null;
+                DB::table('customer_category_events')->updateOrInsert(
+                    ['event_key' => $event['event_key']],
+                    [
+                        'customer_id' => $localCustomerId,
+                        'profile_type' => $event['profile_type'],
+                        'stream' => $event['stream'],
+                        'category' => $event['category'],
+                        'effective_at' => $event['effective_at'],
+                        'source' => $event['source'],
+                        'supersedes_event_id' => $supersedesId,
+                        'supersedes_event_key' => $event['supersedes_event_key'] ?? null,
+                        'updated_at' => now(),
+                    ]
                 );
             }
 
@@ -614,7 +641,7 @@ class SyncService
         $failureReasons = [];
 
         try {
-            $pendingCustomers = Customer::with(['tradeProfile', 'categoryHistories'])
+            $pendingCustomers = Customer::with(['tradeProfile', 'categoryHistories', 'categoryEvents'])
                 ->where(function ($query): void {
                     $query->where('sync_status', 'pending')
                         ->orWhere(fn ($retry) => $retry->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
@@ -654,6 +681,15 @@ class SyncService
                             } : $customer->tradeProfile?->profile_type),
                             'category_year' => $history->category_year,
                             'category' => $history->category,
+                        ])->values()->all(),
+                        'category_events' => $customer->categoryEvents->map(fn ($event) => [
+                            'event_key' => $event->event_key,
+                            'profile_type' => $event->profile_type,
+                            'stream' => $event->stream,
+                            'category' => $event->category,
+                            'effective_at' => $event->effective_at?->toISOString(),
+                            'source' => $event->source,
+                            'supersedes_event_key' => $event->supersedes_event_key,
                         ])->values()->all(),
                     ]);
 

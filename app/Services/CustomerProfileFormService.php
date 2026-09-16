@@ -108,6 +108,7 @@ class CustomerProfileFormService
         return [
             'profile_type' => $profile?->profile_type ?: self::profileForCompany($customer->company_id),
             'company_code' => $customer->company?->code,
+            'person_in_charge_id' => $customer->person_in_charge_id,
             'typed_trade_values' => $profile?->only([
                 'house_number', 'entry_detail', 'classifications', 'ommc_brands',
                 'ommc_mcb_brands', 'tpl_pollux', 'other_competitor_brands',

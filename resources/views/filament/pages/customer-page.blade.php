@@ -73,8 +73,10 @@
                             <p><span class="font-bold">Address:</span> {{ $customerDetail['customer']['address'] ?? '—' }}</p>
                             <p><span class="font-bold">Contact Person:</span> {{ $customerDetail['customer']['contact_person'] ?? '—' }}</p>
                             <p><span class="font-bold">Contact Number:</span> {{ $customerDetail['customer']['contact_number'] ?? '—' }}</p>
-                            <p><span class="font-bold">Region:</span> {{ $customerDetail['customer']['region'] ?? '—' }}</p>
+                            <p><span class="font-bold">Physical Region:</span> {{ $customerDetail['customer']['physical_region'] ?? '—' }}</p>
+                            <p><span class="font-bold">Province:</span> {{ $customerDetail['customer']['province'] ?? 'Not applicable' }}</p>
                             <p><span class="font-bold">Municipality:</span> {{ $customerDetail['customer']['municipality'] ?? '—' }}</p>
+                            <p><span class="font-bold">Specific Region:</span> {{ $customerDetail['customer']['specific_region'] ?? '—' }}</p>
                             <p><span class="font-bold">Coordinates:</span> {{ $customerDetail['customer']['latitude'] ?? '—' }}, {{ $customerDetail['customer']['longitude'] ?? '—' }}</p>
                             <p><span class="font-bold">General Category:</span> {{ $customerDetail['customer']['general_category'] ?? '—' }}</p>
                             @if($customerDetail['customer']['competitor_volume'] ?? null)<p><span class="font-bold">Competitor Volume:</span> {{ $customerDetail['customer']['competitor_volume'] }}</p>@endif

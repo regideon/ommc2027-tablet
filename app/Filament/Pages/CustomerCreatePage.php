@@ -8,6 +8,7 @@ use App\Models\GeneralCategory;
 use App\Models\Municipality;
 use App\Models\Province;
 use App\Models\RegionSpecific;
+use App\Models\Region;
 use App\Models\User;
 use App\Services\CustomerProfileFormService;
 use BackedEnum;
@@ -33,6 +34,7 @@ class CustomerCreatePage extends Page
     public ?string $unique_id = null;
     public ?int $company_id = null;
     public ?int $region_specific_id = null;
+    public ?int $physical_region_id = null;
     public ?int $province_id = null;
     public ?int $municipality_id = null;
     public ?int $general_category_id = null;
@@ -51,6 +53,8 @@ class CustomerCreatePage extends Page
     public array $trade = [];
     public array $active = [];
     public array $categories = [];
+
+    protected ?string $companyChangeOldProfile = null;
 
     public function mount(?int $customerId = null): void
     {
@@ -78,7 +82,8 @@ class CustomerCreatePage extends Page
     {
         return [
             'companies' => Company::orderBy('name')->get(),
-            'regions' => RegionSpecific::orderBy('name')->get(),
+            'regions' => Region::whereNotNull('psgc_code')->orderBy('name')->get(),
+            'regionSpecifics' => RegionSpecific::orderBy('name')->get(),
             'provinces' => Province::where('enabled', true)->orderBy('name')->get(),
             'municipalities' => Municipality::where('enabled', true)->orderBy('name')->get(),
             'generalCategories' => GeneralCategory::orderBy('sort')->get(),
@@ -91,19 +96,43 @@ class CustomerCreatePage extends Page
         return CustomerProfileFormService::profileForCompany($this->company_id);
     }
 
+    public function updatingCompanyId(): void
+    {
+        $this->companyChangeOldProfile = $this->profileType();
+    }
+
     public function updatedCompanyId(): void
     {
         $profile = $this->profileType();
+
+        if ($this->companyChangeOldProfile !== null && $this->companyChangeOldProfile === $profile) {
+            $this->companyChangeOldProfile = null;
+            return;
+        }
+
         $this->trade = [];
         $this->active = [];
         $this->categories = $profile ? CustomerProfileFormService::defaultCategories($profile) : [];
         $this->person_in_charge_id = null;
+        $this->companyChangeOldProfile = null;
     }
 
     public function updatedRegionSpecificId(): void
     {
+        // Commercial geography is independent from physical geography.
+    }
+
+    public function updatedPhysicalRegionId(): void
+    {
         $this->province_id = null;
         $this->municipality_id = null;
+    }
+
+    public function updatedGeneralCategoryId(): void
+    {
+        if ((int) $this->general_category_id !== 1) {
+            $this->competitor_volume = null;
+        }
     }
 
     public function updatedProvinceId(): void
@@ -125,9 +154,13 @@ class CustomerCreatePage extends Page
             'name' => 'required|string|max:255',
             'unique_id' => 'nullable|string|max:50',
             'company_id' => 'required|exists:companies,id',
+            'access_user_ids' => 'required|array|min:1',
+            'access_user_ids.*' => 'integer|exists:users,id',
             'region_specific_id' => 'required|exists:region_specifics,id',
-            'province_id' => 'required|exists:provinces,id',
+            'physical_region_id' => 'required|exists:regions,id',
+            'province_id' => 'nullable|exists:provinces,id',
             'municipality_id' => 'required|exists:municipalities,id',
+            'person_in_charge_id' => 'nullable|integer|exists:users,id',
             'general_category_id' => 'required|exists:general_categories,id',
             'competitor_volume' => 'nullable|integer|in:1,2,3',
             'address' => 'required|string|max:500',
@@ -139,6 +172,14 @@ class CustomerCreatePage extends Page
             'business_mobile_number' => 'nullable|string|max:50',
             'date_established' => 'required|date',
         ]);
+
+        if (! $this->physicalGeographyIsValid()) {
+            return;
+        }
+
+        if (! $this->validateScopedPortalRules($profileType)) {
+            return;
+        }
 
         $classifications = $profileType === 'outlet' ? ($this->trade['classifications'] ?? []) : ($this->active['classifications'] ?? null);
         if ($profileType === 'outlet' ? count($classifications) < 1 : blank($classifications)) {
@@ -229,5 +270,68 @@ class CustomerCreatePage extends Page
 
         Notification::make()->title('Customer saved offline')->success()->send();
         $this->redirect(CustomerPage::getUrl());
+    }
+
+    protected function physicalGeographyIsValid(): bool
+    {
+        $municipality = Municipality::find($this->municipality_id);
+        if (! $municipality || (int) $municipality->region_id !== (int) $this->physical_region_id) {
+            $this->addError('municipality_id', 'The City / Municipality does not belong to the selected physical Region.');
+            return false;
+        }
+
+        if ((int) $municipality->province_id !== (int) $this->province_id && ! ($municipality->province_id === null && $this->province_id === null)) {
+            $this->addError('municipality_id', 'The City / Municipality does not belong to the selected Province.');
+            return false;
+        }
+
+        return true;
+    }
+
+    protected function validateScopedPortalRules(string $profileType): bool
+    {
+        $accessIds = array_filter($this->access_user_ids);
+        if (User::whereIn('id', $accessIds)->whereNull('rsm_id')->exists()) {
+            $this->addError('access_user_ids', 'Each assigned Access user must have an RSM relationship.');
+            return false;
+        }
+
+        if ($profileType === 'outlet' && blank($this->person_in_charge_id)) {
+            $this->addError('person_in_charge_id', 'Person in Charge is required for Outlet.');
+            return false;
+        }
+
+        if ($profileType === 'outlet') {
+            foreach ([
+                'working_days' => 'Working Days',
+                'ulab' => 'ULAB',
+                'operating_hours.start' => 'Opening Time',
+                'operating_hours.end' => 'Closing Time',
+                'delivery_type' => 'Delivery Type',
+            ] as $key => $label) {
+                $value = data_get($this->trade, $key) ?? data_get($this->active, $key);
+                if (blank($value) || (is_array($value) && count($value) === 0)) {
+                    $this->addError('trade', "{$label} is required for Outlet.");
+                    return false;
+                }
+            }
+
+            if (($this->active['delivery_type'] ?? null) === 'yes' && blank($this->active['delivery_detail'] ?? null)) {
+                $this->addError('active.delivery_detail', 'Delivery Detail is required when Delivery Type is Yes.');
+                return false;
+            }
+
+            if (($this->trade['motiv_user'] ?? false) && blank($this->active['warehouse_code'] ?? null)) {
+                $this->addError('active.warehouse_code', 'Warehouse Code is required for MOTIV users.');
+                return false;
+            }
+        }
+
+        if ($profileType === 'oe' && ($this->trade['entry_detail'] ?? null) === 'Acid' && ! array_key_exists('sulfuric_acid', $this->active)) {
+            $this->addError('active.sulfuric_acid', 'Sulfuric Acid is required for Acid accounts.');
+            return false;
+        }
+
+        return true;
     }
 }

@@ -18,7 +18,7 @@ class CustomerEditPage extends CustomerCreatePage
     public function mount(?int $customerId = null): void
     {
         abort_unless($customerId !== null, 404);
-        $customer = Customer::with(['company', 'municipality', 'users', 'tradeProfile', 'categoryHistories'])->findOrFail($customerId);
+        $customer = Customer::with(['company', 'municipality.region', 'municipality.province', 'users', 'tradeProfile', 'categoryHistories'])->findOrFail($customerId);
         $state = CustomerProfileFormService::hydrate($customer);
 
         foreach ($state as $key => $value) {
@@ -26,6 +26,7 @@ class CustomerEditPage extends CustomerCreatePage
                 $this->{$key} = $value;
             }
         }
+        $this->physical_region_id = $customer->municipality?->region_id;
         $this->trade = array_merge($this->trade, $state['trade'] ?? []);
         $this->active = $state['active'] ?? [];
         $this->categories = $state['categories'] ?? [];
@@ -41,9 +42,13 @@ class CustomerEditPage extends CustomerCreatePage
             'name' => 'required|string|max:255',
             'unique_id' => 'nullable|string|max:50',
             'company_id' => 'required|exists:companies,id',
+            'access_user_ids' => 'required|array|min:1',
+            'access_user_ids.*' => 'integer|exists:users,id',
             'region_specific_id' => 'required|exists:region_specifics,id',
-            'province_id' => 'required|exists:provinces,id',
+            'physical_region_id' => 'required|exists:regions,id',
+            'province_id' => 'nullable|exists:provinces,id',
             'municipality_id' => 'required|exists:municipalities,id',
+            'person_in_charge_id' => 'nullable|integer|exists:users,id',
             'general_category_id' => 'required|exists:general_categories,id',
             'competitor_volume' => 'nullable|integer|in:1,2,3',
             'address' => 'required|string|max:500',
@@ -52,6 +57,14 @@ class CustomerEditPage extends CustomerCreatePage
             'contact_person' => 'required|string|max:255',
             'date_established' => 'required|date',
         ]);
+
+        if (! $this->physicalGeographyIsValid()) {
+            return;
+        }
+
+        if (! $this->validateScopedPortalRules($profileType)) {
+            return;
+        }
 
         $classifications = $profileType === 'outlet' ? ($this->trade['classifications'] ?? []) : ($this->active['classifications'] ?? null);
         if ($profileType === 'outlet' ? count($classifications) < 1 : blank($classifications)) {

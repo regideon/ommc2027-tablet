@@ -120,12 +120,12 @@ class CustomerPage extends Page
 
         $photoCount = SalescallImage::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))->count();
 
-        $customer = Customer::with(['company', 'tradeProfile', 'categoryHistories'])->findOrFail($customerId);
-        $region = $customer->region_specific_id
+        $customer = Customer::with(['company', 'tradeProfile', 'categoryHistories', 'municipality.region', 'municipality.province'])->findOrFail($customerId);
+        $physicalRegion = $customer->municipality?->region?->name;
+        $province = $customer->municipality?->province?->name;
+        $municipality = $customer->municipality?->name;
+        $specificRegion = $customer->region_specific_id
             ? DB::table('region_specifics')->where('id', $customer->region_specific_id)->value('name')
-            : null;
-        $municipality = $customer->municipality_id
-            ? DB::table('municipalities')->where('id', $customer->municipality_id)->value('name')
             : null;
 
         $this->customerDetail = [
@@ -135,8 +135,10 @@ class CustomerPage extends Page
                 'address' => $customer->address,
                 'contact_person' => $customer->contact_person,
                 'contact_number' => $customer->contact_number,
-                'region' => $region,
+                'physical_region' => $physicalRegion,
+                'province' => $province,
                 'municipality' => $municipality,
+                'specific_region' => $specificRegion,
                 'latitude' => $customer->latitude,
                 'longitude' => $customer->longitude,
                 'general_category' => $customer->generalCategory?->name,
