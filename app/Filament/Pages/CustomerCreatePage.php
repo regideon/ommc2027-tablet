@@ -154,23 +154,23 @@ class CustomerCreatePage extends Page
             'name' => 'required|string|max:255',
             'unique_id' => 'nullable|string|max:50',
             'company_id' => 'required|exists:companies,id',
-            'access_user_ids' => 'required|array|min:1',
+            'access_user_ids' => 'nullable|array',
             'access_user_ids.*' => 'integer|exists:users,id',
-            'region_specific_id' => 'required|exists:region_specifics,id',
-            'physical_region_id' => 'required|exists:regions,id',
+            'region_specific_id' => 'nullable|exists:region_specifics,id',
+            'physical_region_id' => 'nullable|exists:regions,id',
             'province_id' => 'nullable|exists:provinces,id',
-            'municipality_id' => 'required|exists:municipalities,id',
+            'municipality_id' => 'nullable|exists:municipalities,id',
             'person_in_charge_id' => 'nullable|integer|exists:users,id',
-            'general_category_id' => 'required|exists:general_categories,id',
+            'general_category_id' => 'nullable|exists:general_categories,id',
             'competitor_volume' => 'nullable|integer|in:1,2,3',
-            'address' => 'required|string|max:500',
-            'latitude' => 'required|numeric',
-            'longitude' => 'required|numeric',
-            'contact_person' => 'required|string|max:255',
+            'address' => 'nullable|string|max:500',
+            'latitude' => 'nullable|numeric',
+            'longitude' => 'nullable|numeric',
+            'contact_person' => 'nullable|string|max:255',
             'contact_number' => 'nullable|string|max:50',
             'business_landline_number' => 'nullable|string|max:50',
             'business_mobile_number' => 'nullable|string|max:50',
-            'date_established' => 'required|date',
+            'date_established' => 'nullable|date',
         ]);
 
         if (! $this->physicalGeographyIsValid()) {
@@ -181,55 +181,14 @@ class CustomerCreatePage extends Page
             return;
         }
 
-        $classifications = $profileType === 'outlet' ? ($this->trade['classifications'] ?? []) : ($this->active['classifications'] ?? null);
-        if ($profileType === 'outlet' ? count($classifications) < 1 : blank($classifications)) {
-            $this->addError('trade.classifications', 'Classification is required.');
-            return;
-        }
-
         foreach (CustomerProfileFormService::categoryStreams($profileType) as $stream) {
             foreach ($this->categories[$stream] ?? [] as $year => $category) {
-                if (! $category || ! array_key_exists($category, $this->categoryOptions($stream))) {
+                if ($category !== null && $category !== '' && ! array_key_exists($category, $this->categoryOptions($stream))) {
                     $this->addError('categories', "Every {$stream} annual category must be selected from the allowed options.");
                     return;
                 }
             }
         }
-        if ($profileType === 'outlet' && ! in_array($this->trade['entry_detail'] ?? null, ['AB', 'MCB', 'AB and MCB'], true)) {
-            $this->addError('trade.entry_detail', 'Entry Detail is required for Outlet.');
-            return;
-        }
-        foreach (['name' => 'Name of Owner', 'birthday' => 'Birthday', 'relationship' => 'Relationship with the Owner', 'generation' => 'Generation'] as $key => $label) {
-            if (blank($this->active['owner'][$key] ?? null)) {
-                $this->addError("active.owner.{$key}", "{$label} is required.");
-                return;
-            }
-        }
-        if ($profileType === 'fleet' && blank($this->active['account_type'] ?? null)) {
-            $this->addError('active.account_type', 'Type is required.');
-            return;
-        }
-        if (in_array($profileType, ['fleet', 'oe'], true) && blank($this->active['battery_class'] ?? null)) {
-            $this->addError('active.battery_class', 'Battery Class is required.');
-            return;
-        }
-        if ($profileType === 'fleet' && blank($this->active['status'] ?? null)) {
-            $this->addError('active.status', 'Status is required.');
-            return;
-        }
-        if (($this->trade['motiv_user'] ?? false) && blank($this->active['warehouse_code'] ?? null)) {
-            $this->addError('active.warehouse_code', 'Warehouse Code is required for MOTIV users.');
-            return;
-        }
-        if (($this->active['delivery_type'] ?? null) === 'yes' && blank($this->active['delivery_detail'] ?? null)) {
-            $this->addError('active.delivery_detail', 'Delivery Detail is required when Delivery Type is Yes.');
-            return;
-        }
-        if ($profileType === 'oe' && ($this->trade['entry_detail'] ?? null) === 'Acid' && ! array_key_exists('sulfuric_acid', $this->active)) {
-            $this->addError('active.sulfuric_acid', 'Sulfuric Acid is required for Acid accounts.');
-            return;
-        }
-
         DB::transaction(function () use ($profileType): void {
             do {
                 $localId = -random_int(1, PHP_INT_MAX);
@@ -274,6 +233,10 @@ class CustomerCreatePage extends Page
 
     protected function physicalGeographyIsValid(): bool
     {
+        if (! $this->municipality_id && ! $this->physical_region_id && ! $this->province_id) {
+            return true;
+        }
+
         $municipality = Municipality::find($this->municipality_id);
         if (! $municipality || (int) $municipality->region_id !== (int) $this->physical_region_id) {
             $this->addError('municipality_id', 'The City / Municipality does not belong to the selected physical Region.');
@@ -293,42 +256,6 @@ class CustomerCreatePage extends Page
         $accessIds = array_filter($this->access_user_ids);
         if (User::whereIn('id', $accessIds)->whereNull('rsm_id')->exists()) {
             $this->addError('access_user_ids', 'Each assigned Access user must have an RSM relationship.');
-            return false;
-        }
-
-        if ($profileType === 'outlet' && blank($this->person_in_charge_id)) {
-            $this->addError('person_in_charge_id', 'Person in Charge is required for Outlet.');
-            return false;
-        }
-
-        if ($profileType === 'outlet') {
-            foreach ([
-                'working_days' => 'Working Days',
-                'ulab' => 'ULAB',
-                'operating_hours.start' => 'Opening Time',
-                'operating_hours.end' => 'Closing Time',
-                'delivery_type' => 'Delivery Type',
-            ] as $key => $label) {
-                $value = data_get($this->trade, $key) ?? data_get($this->active, $key);
-                if (blank($value) || (is_array($value) && count($value) === 0)) {
-                    $this->addError('trade', "{$label} is required for Outlet.");
-                    return false;
-                }
-            }
-
-            if (($this->active['delivery_type'] ?? null) === 'yes' && blank($this->active['delivery_detail'] ?? null)) {
-                $this->addError('active.delivery_detail', 'Delivery Detail is required when Delivery Type is Yes.');
-                return false;
-            }
-
-            if (($this->trade['motiv_user'] ?? false) && blank($this->active['warehouse_code'] ?? null)) {
-                $this->addError('active.warehouse_code', 'Warehouse Code is required for MOTIV users.');
-                return false;
-            }
-        }
-
-        if ($profileType === 'oe' && ($this->trade['entry_detail'] ?? null) === 'Acid' && ! array_key_exists('sulfuric_acid', $this->active)) {
-            $this->addError('active.sulfuric_acid', 'Sulfuric Acid is required for Acid accounts.');
             return false;
         }
 

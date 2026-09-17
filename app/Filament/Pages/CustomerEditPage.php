@@ -42,20 +42,20 @@ class CustomerEditPage extends CustomerCreatePage
             'name' => 'required|string|max:255',
             'unique_id' => 'nullable|string|max:50',
             'company_id' => 'required|exists:companies,id',
-            'access_user_ids' => 'required|array|min:1',
+            'access_user_ids' => 'nullable|array',
             'access_user_ids.*' => 'integer|exists:users,id',
-            'region_specific_id' => 'required|exists:region_specifics,id',
-            'physical_region_id' => 'required|exists:regions,id',
+            'region_specific_id' => 'nullable|exists:region_specifics,id',
+            'physical_region_id' => 'nullable|exists:regions,id',
             'province_id' => 'nullable|exists:provinces,id',
-            'municipality_id' => 'required|exists:municipalities,id',
+            'municipality_id' => 'nullable|exists:municipalities,id',
             'person_in_charge_id' => 'nullable|integer|exists:users,id',
-            'general_category_id' => 'required|exists:general_categories,id',
+            'general_category_id' => 'nullable|exists:general_categories,id',
             'competitor_volume' => 'nullable|integer|in:1,2,3',
-            'address' => 'required|string|max:500',
-            'latitude' => 'required|numeric',
-            'longitude' => 'required|numeric',
-            'contact_person' => 'required|string|max:255',
-            'date_established' => 'required|date',
+            'address' => 'nullable|string|max:500',
+            'latitude' => 'nullable|numeric',
+            'longitude' => 'nullable|numeric',
+            'contact_person' => 'nullable|string|max:255',
+            'date_established' => 'nullable|date',
         ]);
 
         if (! $this->physicalGeographyIsValid()) {
@@ -66,51 +66,14 @@ class CustomerEditPage extends CustomerCreatePage
             return;
         }
 
-        $classifications = $profileType === 'outlet' ? ($this->trade['classifications'] ?? []) : ($this->active['classifications'] ?? null);
-        if ($profileType === 'outlet' ? count($classifications) < 1 : blank($classifications)) {
-            $this->addError('trade.classifications', 'Classification is required.');
-            return;
-        }
-
         foreach (CustomerProfileFormService::categoryStreams($profileType) as $stream) {
             foreach ($this->categories[$stream] ?? [] as $category) {
-                if (! $category || ! array_key_exists($category, $this->categoryOptions($stream))) {
+                if ($category !== null && $category !== '' && ! array_key_exists($category, $this->categoryOptions($stream))) {
                     $this->addError('categories', "Every {$stream} annual category must be selected from the allowed options.");
                     return;
                 }
             }
         }
-        if ($profileType === 'outlet' && ! in_array($this->trade['entry_detail'] ?? null, ['AB', 'MCB', 'AB and MCB'], true)) {
-            $this->addError('trade.entry_detail', 'Entry Detail is required for Outlet.');
-            return;
-        }
-        foreach (['name' => 'Name of Owner', 'birthday' => 'Birthday', 'relationship' => 'Relationship with the Owner', 'generation' => 'Generation'] as $key => $label) {
-            if (blank($this->active['owner'][$key] ?? null)) {
-                $this->addError("active.owner.{$key}", "{$label} is required.");
-                return;
-            }
-        }
-        if ($profileType === 'fleet' && blank($this->active['account_type'] ?? null)) {
-            $this->addError('active.account_type', 'Type is required.');
-            return;
-        }
-        if (in_array($profileType, ['fleet', 'oe'], true) && blank($this->active['battery_class'] ?? null)) {
-            $this->addError('active.battery_class', 'Battery Class is required.');
-            return;
-        }
-        if ($profileType === 'fleet' && blank($this->active['status'] ?? null)) {
-            $this->addError('active.status', 'Status is required.');
-            return;
-        }
-        if (($this->trade['motiv_user'] ?? false) && blank($this->active['warehouse_code'] ?? null)) {
-            $this->addError('active.warehouse_code', 'Warehouse Code is required for MOTIV users.');
-            return;
-        }
-        if (($this->active['delivery_type'] ?? null) === 'yes' && blank($this->active['delivery_detail'] ?? null)) {
-            $this->addError('active.delivery_detail', 'Delivery Detail is required when Delivery Type is Yes.');
-            return;
-        }
-
         DB::transaction(function () use ($profileType): void {
             $customer = Customer::with(['company', 'tradeProfile', 'categoryHistories'])->findOrFail($this->customerId);
             $oldProfile = $customer->tradeProfile?->profile_type ?: CustomerProfileFormService::profileForCompany($customer->company_id);

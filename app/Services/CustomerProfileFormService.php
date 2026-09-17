@@ -8,6 +8,7 @@ use App\Models\CustomerCategoryHistory;
 use App\Models\CustomerTradeProfile;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Schema;
+use RuntimeException;
 
 class CustomerProfileFormService
 {
@@ -150,7 +151,10 @@ class CustomerProfileFormService
         $profile->profile_data = ['active' => $active, 'archived_profiles' => $existing['archived_profiles'] ?? []];
         $profile->save();
 
-        if (array_key_exists('access_user_ids', $state) && Schema::hasTable('customer_user')) {
+        if (array_key_exists('access_user_ids', $state)) {
+            if (! Schema::hasTable('customer_user')) {
+                throw new RuntimeException('Customer Access persistence is unavailable until the customer_user migration is applied.');
+            }
             $customer->users()->sync(array_values(array_filter($state['access_user_ids'] ?? [])));
         }
 

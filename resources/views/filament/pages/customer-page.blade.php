@@ -60,7 +60,7 @@
                     <button wire:click="closeCustomer" @click="unlock()" class="w-8 h-8 rounded-full bg-[#edeef0] flex items-center justify-center hover:bg-[#e7e8ea] transition-colors shrink-0">
                         <span class="material-symbols-outlined text-[#434654] text-lg">close</span>
                     </button>
-                    <a href="{{ \App\Filament\Pages\CustomerEditPage::getUrl(['customerId' => $selectedCustomer->id]) }}" class="fi-btn fi-color-primary">Edit</a>
+                    {{-- <a href="{{ \App\Filament\Pages\CustomerEditPage::getUrl(['customerId' => $selectedCustomer->id]) }}" class="fi-btn fi-color-primary">Edit</a> --}}
                 </div>
 
                 <div class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 space-y-6" style="-webkit-overflow-scrolling: touch;">
@@ -95,13 +95,13 @@
                                 @if($trade['house_number'] ?? null)<p><span class="font-bold">House Number:</span> {{ $trade['house_number'] }}</p>@endif
                                 @if($trade['entry_detail'] ?? null)<p><span class="font-bold">Entry Detail:</span> {{ $trade['entry_detail'] }}</p>@endif
                                 @foreach(['classifications' => 'Classifications', 'ommc_brands' => 'OMMC Brands', 'ommc_mcb_brands' => 'OMMC MCB Brands', 'tpl_pollux' => 'TPL / Pollux', 'other_competitor_brands' => 'Other Competitor Brands', 'mcb_competitors' => 'MCB Competitors', 'working_days' => 'Working Days', 'operating_hours' => 'Operating Hours'] as $key => $label)
-                                    @if(!empty($trade[$key]))<p><span class="font-bold">{{ $label }}:</span> {{ implode(', ', $trade[$key]) }}</p>@endif
+                                    @if(!empty($trade[$key]))<p><span class="font-bold">{{ $label }}:</span> {{ is_array($trade[$key]) ? implode(', ', $trade[$key]) : $trade[$key] }}</p>@endif
                                 @endforeach
                                 @if($trade['other_competitors_note'] ?? null)<p><span class="font-bold">If Others:</span> {{ $trade['other_competitors_note'] }}</p>@endif
                                 @if(($trade['motiv_user'] ?? null) !== null)<p><span class="font-bold">MOTIV User:</span> {{ $trade['motiv_user'] ? 'Yes' : 'No' }}</p>@endif
                                 @if($trade['delivery_method'] ?? null)<p><span class="font-bold">Delivery Method:</span> {{ $trade['delivery_method'] }}</p>@endif
                                 @if($trade['ulab'] ?? null)<p><span class="font-bold">ULAB:</span> {{ $trade['ulab'] }}</p>@endif
-                                @foreach(($trade['profile_data']['active'] ?? []) as $key => $value)
+                                @foreach(is_array($trade['profile_data']['active'] ?? null) ? $trade['profile_data']['active'] : [] as $key => $value)
                                     @if(is_scalar($value) && $value !== null && $value !== '')<p><span class="font-bold">{{ str_replace('_', ' ', ucfirst($key)) }}:</span> {{ $value }}</p>@endif
                                 @endforeach
                             </div>

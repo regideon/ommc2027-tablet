@@ -81,54 +81,55 @@ class CustomerPage extends Page
      */
     public function viewCustomer(int $customerId): void
     {
-        $this->selectedCustomerId = $customerId;
-        $this->showPhotos = false;
-        $this->customerPhotos = [];
 
-        $profile = CustomerProfile::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))
-            ->latest('created_at')
-            ->first();
+            $this->selectedCustomerId = $customerId;
+            $this->showPhotos = false;
+            $this->customerPhotos = [];
 
-        $brands = CustomerBrand::where('customer_id', $customerId)
-            ->with(['materialGroup', 'brand'])
-            ->get();
+            $profile = CustomerProfile::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))
+                ->latest('created_at')
+                ->first();
 
-        $category = CustomerCategory::where('customer_id', $customerId)
-            ->with(['category', 'subCategory'])
-            ->first();
+            $brands = CustomerBrand::where('customer_id', $customerId)
+                ->with(['materialGroup', 'brand'])
+                ->get();
 
-        $notes = CustomerNote::where('customer_id', $customerId)
-            ->where('created_by', auth()->id())
-            ->latest('created_at')
-            ->limit(self::RECENT_LIMIT)
-            ->get();
+            $category = CustomerCategory::where('customer_id', $customerId)
+                ->with(['category', 'subCategory'])
+                ->first();
 
-        // DRMs see only their own visits; RSMs see every rep's visits to this
-        // customer (mirrors the "RSM sees all DRMs under them" visibility used
-        // elsewhere in the app — see mountVp()/CustomerPage's commented role logic).
-        $visitsQuery = Salescall::where('customer_id', $customerId)
-            ->with(['salescallStatus', 'createdBy']);
+            $notes = CustomerNote::where('customer_id', $customerId)
+                ->where('created_by', auth()->id())
+                ->latest('created_at')
+                ->limit(self::RECENT_LIMIT)
+                ->get();
 
-        if (! auth()->user()?->hasRole('rsm')) {
-            $visitsQuery->where('created_by', auth()->id());
-        }
+            // DRMs see only their own visits; RSMs see every rep's visits to this
+            // customer (mirrors the "RSM sees all DRMs under them" visibility used
+            // elsewhere in the app — see mountVp()/CustomerPage's commented role logic).
+            $visitsQuery = Salescall::where('customer_id', $customerId)
+                ->with(['salescallStatus', 'createdBy']);
 
-        $visits = $visitsQuery
-            ->orderByRaw('COALESCE(actual_in, visit_date) DESC')
-            ->limit(self::RECENT_LIMIT)
-            ->get();
+            if (! auth()->user()?->hasRole('rsm')) {
+                $visitsQuery->where('created_by', auth()->id());
+            }
 
-        $photoCount = SalescallImage::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))->count();
+            $visits = $visitsQuery
+                ->orderByRaw('COALESCE(actual_in, visit_date) DESC')
+                ->limit(self::RECENT_LIMIT)
+                ->get();
 
-        $customer = Customer::with(['company', 'tradeProfile', 'categoryHistories', 'municipality.region', 'municipality.province'])->findOrFail($customerId);
-        $physicalRegion = $customer->municipality?->region?->name;
-        $province = $customer->municipality?->province?->name;
-        $municipality = $customer->municipality?->name;
-        $specificRegion = $customer->region_specific_id
-            ? DB::table('region_specifics')->where('id', $customer->region_specific_id)->value('name')
-            : null;
+            $photoCount = SalescallImage::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))->count();
 
-        $this->customerDetail = [
+            $customer = Customer::with(['company', 'tradeProfile', 'categoryHistories', 'municipality.region', 'municipality.province'])->findOrFail($customerId);
+            $physicalRegion = $customer->municipality?->region?->name;
+            $province = $customer->municipality?->province?->name;
+            $municipality = $customer->municipality?->name;
+            $specificRegion = $customer->region_specific_id
+                ? DB::table('region_specifics')->where('id', $customer->region_specific_id)->value('name')
+                : null;
+
+            $this->customerDetail = [
             'customer' => [
                 'unique_id' => $customer->unique_id,
                 'company' => $customer->company?->name,

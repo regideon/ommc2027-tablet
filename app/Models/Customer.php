@@ -31,6 +31,11 @@ class Customer extends Model
         return $this->belongsTo(Company::class);
     }
 
+    public function municipality(): BelongsTo
+    {
+        return $this->belongsTo(Municipality::class);
+    }
+
     public function personInCharge(): BelongsTo
     {
         return $this->belongsTo(User::class, 'person_in_charge_id');
