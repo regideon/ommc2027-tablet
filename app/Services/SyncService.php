@@ -9,6 +9,8 @@ use App\Models\Customer;
 use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
 use App\Models\CustomerProfileAttachment;
+use App\Models\Expense;
+use App\Models\ExpenseAttachment;
 use App\Models\Itinerary;
 use App\Models\Salescall;
 use App\Models\SalescallBrand;
@@ -50,6 +52,8 @@ class SyncService
             || $pendingOrRetryable(SalescallImage::query())->exists()
             || $pendingOrRetryable(CustomerProfile::query())->exists()
             || $pendingOrRetryable(CustomerProfileAttachment::query())->exists()
+            || $pendingOrRetryable(Expense::query())->exists()
+            || $pendingOrRetryable(ExpenseAttachment::query())->exists()
             || $pendingOrRetryable(CustomerNote::query())->exists();
     }
 
@@ -836,6 +840,95 @@ class SyncService
                 }
             }
 
+            $pendingExpenses = Expense::with(['salescall', 'expenseType'])
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingExpenses as $expense) {
+                if (! $expense->salescall?->server_id) {
+                    continue; // wait for salescall to sync first
+                }
+
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/push/expense", [
+                        'local_uuid' => $expense->local_uuid,
+                        'salescall_server_id' => $expense->salescall->server_id,
+                        'expense_type_code' => $expense->expenseType?->code,
+                        'amount' => $expense->amount,
+                        'date_filed' => $expense->date_filed?->format('Y-m-d'),
+                        'payment_type' => $expense->payment_type,
+                        'payment_remarks' => $expense->payment_remarks,
+                        'invoice_number' => $expense->invoice_number,
+                        'with_invoice' => $expense->with_invoice,
+                        'establishment' => $expense->establishment,
+                        'location' => $expense->location,
+                        'purpose' => $expense->purpose,
+                        'tin' => $expense->tin,
+                        'latitude' => $expense->latitude,
+                        'longitude' => $expense->longitude,
+                        'form_data' => $expense->form_data,
+                        'form_schema_version' => $expense->form_schema_version,
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    $serverId = $response->json('server_id');
+                    if ($response->successful() && $serverId !== null) {
+                        $this->markSynced($expense, [
+                            'server_id' => $serverId,
+                            'synced_at' => now(),
+                        ]);
+                        $pushed++;
+                    } else {
+                        $this->recordItemFailure($expense, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
+                            'stage' => 'expense:portal',
+                            'endpoint' => '/api/sync/push/expense',
+                            'http_status' => $response->status(),
+                        ]);
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordUnexpectedItemFailure($expense, $e, 'expense:unexpected');
+                    $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
+                }
+            }
+
+            $pendingExpenseAttachments = ExpenseAttachment::with('expense')
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingExpenseAttachments as $attachment) {
+                if (! $attachment->expense?->server_id) {
+                    continue; // wait for expense to sync first
+                }
+
+                $result = $this->pushExpenseAttachmentItem($client, $attachment);
+
+                if ($result instanceof SyncResult) {
+                    return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
+                }
+
+                if ($result['success']) {
+                    $pushed++;
+                } else {
+                    $failed++;
+                    $retryable++;
+                    $failureReasons[$result['reason']] = true;
+                }
+            }
+
             $pendingBrandSalescallIds = SalescallBrand::where('sync_status', 'pending')
                 ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
                 ->distinct()
@@ -1274,6 +1367,85 @@ class SyncService
                 'endpoint' => '/api/sync/push/customer-profile-attachment',
                 'local_path' => $attachment->local_path,
                 's3_key' => $attachment->s3_key,
+            ]);
+
+            return ['success' => false, 'reason' => $classification];
+        }
+    }
+
+    /**
+     * @return array{success: bool, reason?: string}|SyncResult
+     */
+    private function pushExpenseAttachmentItem(PendingRequest $client, ExpenseAttachment $attachment): array|SyncResult
+    {
+        try {
+            if (! $this->isReadableLocalFile($attachment->local_path)) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'expense-attachment:local-file',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            $stream = fopen($attachment->local_path, 'r');
+
+            if ($stream === false) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: unable to open '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'expense-attachment:local-open',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            try {
+                $response = $client
+                    ->attach('file', $stream, basename($attachment->local_path))
+                    ->post("{$this->serverUrl}/api/sync/push/expense-attachment", [
+                        'local_uuid' => $attachment->local_uuid,
+                        'expense_server_id' => $attachment->expense->server_id,
+                        'original_name' => $attachment->original_name,
+                    ]);
+            } finally {
+                fclose($stream);
+            }
+
+            if ($response->status() === 401) {
+                return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired');
+            }
+
+            $serverId = $response->json('server_id');
+            if (! $response->successful() || $serverId === null) {
+                $failure = $response->failed() && $response->status() >= 500
+                    ? 'portal_upload_failed'
+                    : 'portal_rejected';
+
+                $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
+                    'stage' => 'expense-attachment:portal',
+                    'endpoint' => '/api/sync/push/expense-attachment',
+                    'http_status' => $response->status(),
+                ]);
+
+                return ['success' => false, 'reason' => $failure];
+            }
+
+            $this->markSynced($attachment, [
+                'server_id' => $serverId,
+                'storage_key' => $response->json('storage_key'),
+                'mime_type' => $response->json('mime_type'),
+                'extension' => $response->json('extension'),
+                'byte_size' => $response->json('byte_size'),
+                'synced_at' => now(),
+            ]);
+
+            return ['success' => true];
+        } catch (Throwable $e) {
+            $classification = $this->classifyBinaryThrowable($e);
+            $this->recordThrowableFailure($attachment, $classification, $e, [
+                'stage' => 'expense-attachment:unexpected',
+                'endpoint' => '/api/sync/push/expense-attachment',
+                'local_path' => $attachment->local_path,
             ]);
 
             return ['success' => false, 'reason' => $classification];
