@@ -79,6 +79,11 @@ class Salescall extends Model
         return $this->hasMany(SalescallImage::class);
     }
 
+    public function expenses()
+    {
+        return $this->hasMany(Expense::class);
+    }
+
     public function salescallBrands()
     {
         return $this->hasMany(SalescallBrand::class);
