@@ -10,6 +10,7 @@ use App\Models\CustomerBrand;
 use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
 use App\Models\CustomerProfileAttachment;
+use App\Models\ExpenseType;
 use App\Models\Itinerary;
 use App\Models\MaterialGroup;
 use App\Models\Salescall;
@@ -22,6 +23,7 @@ use App\Models\SalescallStatus;
 use App\Models\SalescallType;
 use App\Models\SubCategory;
 use App\Services\SyncResult;
+use App\Services\LocalExpenseCreationService;
 use App\Services\SyncService;
 use App\Support\NativeMediaPath;
 use BackedEnum;
@@ -33,6 +35,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\On;
 use Native\Mobile\Events\Camera\PermissionDenied;
 use Native\Mobile\Events\Camera\PhotoCancelled;
@@ -78,6 +81,8 @@ class SalescallPage extends Page
 
     public array $profileAttachments = [];
 
+    public array $expenseTypes = [];
+
     public bool $hasSavedBrands = false;
 
     public bool $photosComplete = false;
@@ -102,6 +107,9 @@ class SalescallPage extends Page
      * @var array<string, array{salescall_id: int}>
      */
     public array $pendingAttachment = [];
+
+    /** @var array<string, bool> */
+    public array $pendingExpenseAttachment = [];
 
     public function mount(): void
     {
@@ -191,6 +199,160 @@ class SalescallPage extends Page
 
         $this->loadCustomerNotes($customerId);
         Notification::make()->title('Note saved.')->success()->send();
+    }
+
+    /**
+     * Persist a supported Expense locally from the selected Sales Call.
+     * The returned shape is consumed by the Alpine form so validation errors
+     * remain in the form without creating a partial record.
+     *
+     * @param  array<string, mixed>  $form
+     * @return array{ok: bool, errors?: array<string, array<int, string>>}
+     */
+    public function saveExpense(int $salescallId, array $form, array $attachments = []): array
+    {
+        try {
+            $salescall = Salescall::query()
+                ->where('created_by', auth()->id())
+                ->findOrFail($salescallId);
+            $expense = app(LocalExpenseCreationService::class)->createFromSalescall(
+                $salescall,
+                auth()->user(),
+                array_merge($form, ['attachments' => $attachments]),
+            );
+
+            Notification::make()->title('Expense saved locally.')->success()->send();
+
+            return ['ok' => true, 'expense_id' => $expense->id];
+        } catch (ValidationException $exception) {
+            return ['ok' => false, 'errors' => $exception->errors()];
+        } catch (\Throwable $exception) {
+            Log::error('Local Expense creation failed.', [
+                'salescall_id' => $salescallId,
+                'message' => $exception->getMessage(),
+            ]);
+
+            Notification::make()->title('Could not save the Expense locally.')->danger()->send();
+
+            return ['ok' => false, 'errors' => [
+                'form' => ['The Expense could not be saved. Please try again.'],
+            ]];
+        }
+    }
+
+    public function takeExpenseAttachmentPhoto(): void
+    {
+        if (! function_exists('nativephp_call')) {
+            return;
+        }
+
+        $capture = Camera::getPhoto();
+        $this->pendingExpenseAttachment[$capture->getId()] = true;
+        $capture->start();
+    }
+
+    public function pickExpenseAttachmentFromGallery(): void
+    {
+        if (! function_exists('nativephp_call')) {
+            return;
+        }
+
+        $picker = Camera::pickImages('image')->single();
+        $this->pendingExpenseAttachment[$picker->getId()] = true;
+        $picker->start();
+    }
+
+    #[On('native:'.PhotoTaken::class)]
+    public function onExpenseAttachmentPhotoTaken(string $path, string $mimeType = 'image/jpeg', ?string $id = null): void
+    {
+        if ($id === null || ! isset($this->pendingExpenseAttachment[$id])) {
+            return;
+        }
+
+        unset($this->pendingExpenseAttachment[$id]);
+        $this->dispatchExpenseAttachmentFromPath($path);
+    }
+
+    #[On('native:'.MediaSelected::class)]
+    public function onExpenseAttachmentMediaSelected(bool $success, array $files = [], int $count = 0, ?string $error = null, bool $cancelled = false, ?string $id = null): void
+    {
+        if ($id === null || ! isset($this->pendingExpenseAttachment[$id])) {
+            return;
+        }
+
+        unset($this->pendingExpenseAttachment[$id]);
+
+        if ($cancelled) {
+            return;
+        }
+
+        if (! $success || empty($files)) {
+            Notification::make()
+                ->title($error ?: 'Could not import the selected photo.')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $path = NativeMediaPath::resolve($files[0]);
+        if ($path === null) {
+            Notification::make()->title('Selected attachment path is invalid.')->danger()->send();
+
+            return;
+        }
+
+        $this->dispatchExpenseAttachmentFromPath($path);
+    }
+
+    #[On('native:'.PhotoCancelled::class)]
+    public function onExpenseAttachmentCancelled(bool $cancelled = true, ?string $id = null): void
+    {
+        if ($id !== null) {
+            unset($this->pendingExpenseAttachment[$id]);
+        }
+    }
+
+    #[On('native:'.PermissionDenied::class)]
+    public function onExpenseAttachmentPermissionDenied(string $action = 'photo', ?string $id = null): void
+    {
+        if ($id === null || ! isset($this->pendingExpenseAttachment[$id])) {
+            return;
+        }
+
+        unset($this->pendingExpenseAttachment[$id]);
+        Notification::make()->title('Camera permission is required to add an attachment.')->danger()->send();
+    }
+
+    private function dispatchExpenseAttachmentFromPath(string $sourcePath): void
+    {
+        $resolvedPath = NativeMediaPath::resolve($sourcePath) ?? $sourcePath;
+        if (! is_file($resolvedPath)) {
+            Notification::make()->title('The selected attachment was not available.')->danger()->send();
+
+            return;
+        }
+
+        $bytes = @file_get_contents($resolvedPath);
+        if (! is_string($bytes) || $bytes === '') {
+            Notification::make()->title('The selected attachment could not be read.')->danger()->send();
+
+            return;
+        }
+
+        $mimeType = (new \finfo(FILEINFO_MIME_TYPE))->buffer($bytes) ?: null;
+        if (! in_array($mimeType, ['image/jpeg', 'image/png', 'application/pdf'], true)) {
+            Notification::make()->title('Only JPEG, PNG, and PDF attachments are supported.')->danger()->send();
+
+            return;
+        }
+
+        $this->dispatch('expense-attachment-ready', attachment: [
+            'data' => 'data:'.$mimeType.';base64,'.base64_encode($bytes),
+            'original_name' => basename($resolvedPath),
+            'mime_type' => $mimeType,
+            'byte_size' => strlen($bytes),
+        ]);
     }
 
     public function updateCustomerNote(int $noteId, ?string $title, string $body): void
@@ -1588,6 +1750,16 @@ class SalescallPage extends Page
             'customersJson' => Customer::where('is_active', true)->orderBy('name')
                 ->get(['id', 'name', 'unique_id', 'address', 'latitude', 'longitude'])->toJson(),
             'canAddSalescall' => auth()->user()?->hasAnyRole(['drm', 'rsm']) ?? false,
+            'expenseTypes' => ExpenseType::query()
+                ->where('is_enabled', true)
+                ->orderBy('sort_order')
+                ->get(['code', 'label'])
+                ->map(fn (ExpenseType $type): array => [
+                    'code' => $type->code,
+                    'label' => $type->label,
+                ])
+                ->values()
+                ->all(),
         ];
     }
 }

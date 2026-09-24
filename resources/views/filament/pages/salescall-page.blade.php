@@ -298,6 +298,185 @@
             this.noteDeletingId = null;
         },
 
+        expenseTypes: @js($expenseTypes),
+        expenseSupportedTypes: ['communication_expenses', 'emergency_expenses', 'lodging', 'per_diem', 'ancillary_expenses', 'airfare', 'representation', 'staff_meeting', 'repairs_and_maintenance', 'transportation_toll', 'transportation_gas', 'transportation_parking', 'transportation_commute'],
+        showExpenseModal: false,
+        expenseSaving: false,
+        expenseSelectedType: null,
+        expenseErrors: {},
+        expenseForm: {},
+        expenseAttachments: [],
+        expenseAttachmentError: '',
+        emptyExpenseForm() {
+            const today = new Date();
+            const date = new Date(today.getTime() - today.getTimezoneOffset() * 60000)
+                .toISOString().slice(0, 10);
+            return {
+                expense_type_code: '',
+                amount: '',
+                date_filed: date,
+                payment_type: '',
+                payment_remarks: '',
+                invoice_number: '',
+                establishment: '',
+                location: this.selectedCall?.location || '',
+                purpose: '',
+                tin: '',
+                latitude: this.selectedCall?.lat || null,
+                longitude: this.selectedCall?.lng || null,
+                form_data: {},
+            };
+        },
+        expenseFormDataFor(typeCode) {
+            return {
+                lodging: { number_of_nights: '', hotel: '' },
+                per_diem: { meal: '', number_of_days: '' },
+                ancillary_expenses: { expense_kind: '', expense_kind_other: '' },
+                airfare: { route: '' },
+                representation: { number_of_people: '', contact_person: '', names_included: [], meeting_agenda: '' },
+                staff_meeting: { number_of_people: '', contact_person: '', names_included: [], meeting_agenda: '' },
+                repairs_and_maintenance: { odometer: '' },
+                transportation_toll: { initial_odometer: '', last_odometer: '', distance_travelled: null },
+                transportation_gas: { initial_odometer: '', last_odometer: '', distance_travelled: null, liters: '' },
+                transportation_parking: { initial_odometer: '', last_odometer: '', distance_travelled: null, number_of_days: '' },
+                transportation_commute: { initial_odometer: '', last_odometer: '', distance_travelled: null, expense_kind: '', expense_kind_other: '', route: '' },
+            }[typeCode] || {};
+        },
+        openExpenseForm() {
+            if (!this.selectedCall) return;
+            this.expenseForm = this.emptyExpenseForm();
+            this.expenseSelectedType = null;
+            this.expenseErrors = {};
+            this.expenseAttachments = [];
+            this.expenseAttachmentError = '';
+            this.showExpenseModal = true;
+        },
+        closeExpenseForm() {
+            if (this.expenseSelectedType && !window.confirm('Cancel this Expense without saving?')) return;
+            this.showExpenseModal = false;
+            this.expenseSelectedType = null;
+            this.expenseErrors = {};
+            this.expenseAttachments = [];
+            this.expenseAttachmentError = '';
+        },
+        selectExpenseType(type) {
+            this.expenseErrors = {};
+            if (!this.expenseSupportedTypes.includes(type.code)) {
+                this.expenseErrors = { type: ['This Expense form is not available locally.'] };
+                return;
+            }
+            this.expenseSelectedType = type;
+            this.expenseForm.expense_type_code = type.code;
+            this.expenseForm.form_data = this.expenseFormDataFor(type.code);
+        },
+        isExpenseOther() {
+            const value = (this.expenseForm.form_data?.expense_kind || '').trim().toLowerCase();
+            return value === 'other' || value === 'others';
+        },
+        onExpenseKindInput() {
+            if (!this.isExpenseOther()) this.expenseForm.form_data.expense_kind_other = '';
+        },
+        isCommuteOther() {
+            const value = (this.expenseForm.form_data?.expense_kind || '').trim().toLowerCase();
+            return value === 'other' || value === 'others';
+        },
+        onCommuteKindChange() {
+            if (!this.isCommuteOther()) this.expenseForm.form_data.expense_kind_other = '';
+        },
+        addExpenseAttachmentPayload(attachment) {
+            this.expenseAttachmentError = '';
+            if (!attachment?.data) return;
+            if (this.expenseAttachments.length >= 10) {
+                this.expenseAttachmentError = 'An Expense may have at most 10 attachments.';
+                return;
+            }
+
+            const mimeType = attachment.mime_type || '';
+            if (!['image/jpeg', 'image/png', 'application/pdf'].includes(mimeType)) {
+                this.expenseAttachmentError = 'Only JPEG, PNG, and PDF attachments are supported.';
+                return;
+            }
+
+            this.expenseAttachments.push({
+                data: attachment.data,
+                original_name: attachment.original_name || 'attachment',
+                mime_type: mimeType,
+                byte_size: attachment.byte_size || 0,
+            });
+        },
+        addExpenseAttachmentFile(file) {
+            this.expenseAttachmentError = '';
+            if (!file) return;
+            if (this.expenseAttachments.length >= 10) {
+                this.expenseAttachmentError = 'An Expense may have at most 10 attachments.';
+                return;
+            }
+
+            const extension = (file.name.split('.').pop() || '').toLowerCase();
+            const allowed = ['image/jpeg', 'image/png', 'application/pdf'];
+            if (!allowed.includes(file.type) && !['jpg', 'jpeg', 'png', 'pdf'].includes(extension)) {
+                this.expenseAttachmentError = 'Only JPEG, PNG, and PDF attachments are supported.';
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = (event) => this.addExpenseAttachmentPayload({
+                data: event.target.result,
+                original_name: file.name,
+                mime_type: file.type || (extension === 'pdf' ? 'application/pdf' : extension === 'png' ? 'image/png' : 'image/jpeg'),
+                byte_size: file.size,
+            });
+            reader.onerror = () => { this.expenseAttachmentError = 'The selected attachment could not be read.'; };
+            reader.readAsDataURL(file);
+        },
+        removeExpenseAttachment(index) {
+            this.expenseAttachments.splice(index, 1);
+        },
+        updateExpenseDistance() {
+            const initialValue = this.expenseForm.form_data?.initial_odometer;
+            const lastValue = this.expenseForm.form_data?.last_odometer;
+            const initial = Number(initialValue);
+            const last = Number(lastValue);
+            this.expenseForm.form_data.distance_travelled = initialValue !== '' && lastValue !== ''
+                && initialValue !== null && lastValue !== null
+                && Number.isFinite(initial) && Number.isFinite(last)
+                ? last - initial
+                : null;
+        },
+        addExpenseName() {
+            if (!Array.isArray(this.expenseForm.form_data.names_included)) {
+                this.expenseForm.form_data.names_included = [];
+            }
+            this.expenseForm.form_data.names_included.push('');
+        },
+        removeExpenseName(index) {
+            this.expenseForm.form_data.names_included.splice(index, 1);
+        },
+        expenseError(field) {
+            return (this.expenseErrors[field] || [])[0] || '';
+        },
+        async saveExpenseForm() {
+            if (this.expenseSaving || !this.expenseSelectedType) return;
+            this.expenseSaving = true;
+            this.expenseErrors = {};
+            if (['representation', 'staff_meeting'].includes(this.expenseSelectedType.code)) {
+                this.expenseForm.form_data.names_included = (this.expenseForm.form_data.names_included || [])
+                    .map(name => String(name).trim())
+                    .filter(Boolean);
+            }
+            const result = await $wire.saveExpense(this.selectedCall.id, this.expenseForm, this.expenseAttachments);
+            this.expenseSaving = false;
+            if (!result?.ok) {
+                this.expenseErrors = result?.errors || { form: ['The Expense could not be saved.'] };
+                return;
+            }
+            this.showExpenseModal = false;
+            this.expenseSelectedType = null;
+            this.expenseForm = {};
+            this.expenseAttachments = [];
+            this.expenseAttachmentError = '';
+        },
+
         get inProgressCall() {
             return this.calls.find(c => c.status === 'in_progress') ?? null;
         },
@@ -714,6 +893,9 @@
         checkConnectivity().then(() => attemptAutoSync());
         autoPull();
         window.addEventListener('resize', () => { isMobile = window.innerWidth < 1024; });
+        window.addEventListener('expense-attachment-ready', (event) => {
+            if (showExpenseModal) addExpenseAttachmentPayload(event.detail?.attachment);
+        });
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') autoPull();
         });
@@ -1757,6 +1939,17 @@
                                 </button>
                                 @endforeach
                                 <button
+                                    @click="openExpenseForm()"
+                                    class="h-18 lg:h-20 bg-white border border-gray-200 rounded-2xl flex items-center px-4 lg:px-5 gap-3 lg:gap-4 hover:border-[#890f00] hover:bg-red-50 group transition-all">
+                                    <div class="w-9 h-9 lg:w-10 lg:h-10 rounded-full bg-[#edeef0] group-hover:bg-[#ffdad3] flex items-center justify-center shrink-0">
+                                        <span class="material-symbols-outlined text-lg text-[#737685] group-hover:text-[#890f00]">request_quote</span>
+                                    </div>
+                                    <div class="text-left min-w-0">
+                                        <p class="font-bold text-sm text-[#191c1e]">Add Expense</p>
+                                        <p class="text-xs text-[#737685] truncate">Record a visit expense locally</p>
+                                    </div>
+                                </button>
+                                <button
                                     :title="atNoteLimit ? `Limit reached — ${noteLimit} notes max for this customer` : 'Add Quick Note — Capture instant feedback'"
                                     @click="openAddNote()"
                                     :disabled="atNoteLimit"
@@ -2594,6 +2787,349 @@
             </div>
 
         </div>{{-- end right panel --}}
+
+        {{-- Expense creation is intentionally owned by the selected Sales Call. --}}
+        <div x-show="showExpenseModal" x-cloak x-transition
+             class="fixed inset-0 z-50 bg-black/40 flex items-end lg:items-center justify-center p-0 lg:p-6"
+             @keydown.escape.window="closeExpenseForm()">
+            <div @click.outside="closeExpenseForm()"
+                 class="w-full lg:max-w-2xl max-h-[92vh] overflow-y-auto bg-white rounded-t-3xl lg:rounded-3xl shadow-2xl">
+                <div class="sticky top-0 z-10 bg-white border-b border-gray-100 px-5 py-4 flex items-center justify-between">
+                    <div>
+                        <p class="text-[10px] font-black text-[#890f00] tracking-widest uppercase">Sales Call Expense</p>
+                        <h2 class="text-lg font-extrabold text-[#191c1e]">Add Expense</h2>
+                        <p class="text-xs text-[#737685]" x-text="selectedCall?.name + ' · Salescall #' + (selectedCall?.ref_number ?? selectedCall?.id)"></p>
+                    </div>
+                    <button type="button" @click="closeExpenseForm()" class="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
+                        <span class="material-symbols-outlined text-[#434654]">close</span>
+                    </button>
+                </div>
+
+                <div class="p-5 space-y-5">
+                    <div x-show="expenseErrors.type || expenseErrors.form" class="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+                        <p x-text="expenseError('type') || expenseError('form')"></p>
+                    </div>
+
+                    <div x-show="!expenseSelectedType" class="space-y-3">
+                        <div>
+                            <h3 class="font-bold text-[#191c1e]">Select Expense Type</h3>
+                            <p class="text-xs text-[#737685] mt-1">The form must be started from this Sales Call.</p>
+                        </div>
+                        <div class="grid gap-2">
+                            <template x-for="type in expenseTypes" :key="type.code">
+                                <button type="button" @click="selectExpenseType(type)"
+                                    class="w-full text-left px-4 py-3 rounded-xl border border-gray-200 hover:border-[#890f00] hover:bg-red-50 transition-colors flex items-center justify-between gap-3">
+                                    <span class="text-sm font-semibold text-[#191c1e]" x-text="type.label"></span>
+                                    <span x-show="!expenseSupportedTypes.includes(type.code)" class="text-[10px] font-bold text-[#737685] uppercase">Unavailable</span>
+                                    <span x-show="expenseSupportedTypes.includes(type.code)" class="material-symbols-outlined text-[#890f00]">chevron_right</span>
+                                </button>
+                            </template>
+                        </div>
+                    </div>
+
+                    <form x-show="expenseSelectedType" @submit.prevent="saveExpenseForm()" class="space-y-4">
+                        <div class="p-3 bg-gray-50 border border-gray-200 rounded-xl">
+                            <p class="text-[10px] font-black text-[#737685] uppercase tracking-wider">Expense Type</p>
+                            <p class="font-bold text-[#191c1e]" x-text="expenseSelectedType?.label"></p>
+                            <p class="text-xs text-[#737685] mt-1">Customer: <span x-text="selectedCall?.name"></span></p>
+                        </div>
+
+                        <div x-show="expenseSelectedType?.code === 'lodging'" class="space-y-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+                            <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Lodging Details</p>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-xs font-bold text-[#737685] mb-1">No. of Nights *</label>
+                                    <input type="number" min="1" step="1" x-model="expenseForm.form_data.number_of_nights" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm" inputmode="numeric">
+                                    <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.number_of_nights')"></p>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-[#737685] mb-1">Hotel *</label>
+                                    <input type="text" x-model="expenseForm.form_data.hotel" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm">
+                                    <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.hotel')"></p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div x-show="expenseSelectedType?.code === 'per_diem'" class="space-y-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+                            <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Per Diem Details</p>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-xs font-bold text-[#737685] mb-1">Meal *</label>
+                                    <input type="text" x-model="expenseForm.form_data.meal" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm">
+                                    <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.meal')"></p>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-[#737685] mb-1">Number of Days *</label>
+                                    <input type="number" min="1" step="1" x-model="expenseForm.form_data.number_of_days" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm" inputmode="numeric">
+                                    <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.number_of_days')"></p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div x-show="expenseSelectedType?.code === 'ancillary_expenses'" class="space-y-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+                            <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Ancillary Details</p>
+                            <div>
+                                <label class="block text-xs font-bold text-[#737685] mb-1">Expense Kind *</label>
+                                <input type="text" x-model="expenseForm.form_data.expense_kind" @input="onExpenseKindInput()" placeholder="e.g. Supplies, parcel, or Others" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm">
+                                <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.expense_kind')"></p>
+                            </div>
+                            <div x-show="isExpenseOther()" x-transition>
+                                <label class="block text-xs font-bold text-[#737685] mb-1">Specify Other Expense Kind *</label>
+                                <input type="text" x-model="expenseForm.form_data.expense_kind_other" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm">
+                                <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.expense_kind_other')"></p>
+                            </div>
+                        </div>
+
+                        <div x-show="expenseSelectedType?.code === 'airfare'" class="space-y-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+                            <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Airfare Details</p>
+                            <div>
+                                <label class="block text-xs font-bold text-[#737685] mb-1">Route *</label>
+                                <input type="text" x-model="expenseForm.form_data.route" placeholder="Origin to destination" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm">
+                                <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.route')"></p>
+                            </div>
+                        </div>
+
+                        <div x-show="['representation', 'staff_meeting'].includes(expenseSelectedType?.code)" class="space-y-4 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+                            <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Meeting Details</p>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-xs font-bold text-[#737685] mb-1">Number of People</label>
+                                    <input type="number" min="0" step="1" x-model="expenseForm.form_data.number_of_people" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm" inputmode="numeric">
+                                    <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.number_of_people')"></p>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-[#737685] mb-1">Contact Person</label>
+                                    <input type="text" x-model="expenseForm.form_data.contact_person" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm">
+                                    <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.contact_person')"></p>
+                                </div>
+                            </div>
+
+                            <div>
+                                <div class="flex items-center justify-between mb-2">
+                                    <label class="block text-xs font-bold text-[#737685]">Names Included</label>
+                                    <button type="button" @click="addExpenseName()" class="text-xs font-bold text-[#890f00]">+ Add Name</button>
+                                </div>
+                                <div class="space-y-2">
+                                    <template x-for="(name, index) in expenseForm.form_data.names_included" :key="index">
+                                        <div class="flex items-center gap-2">
+                                            <span class="w-6 text-xs font-bold text-[#737685] text-right" x-text="(index + 1) + '.'"></span>
+                                            <input type="text" x-model="expenseForm.form_data.names_included[index]" :placeholder="'Name ' + (index + 1)" class="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm">
+                                            <button type="button" @click="removeExpenseName(index)" class="w-9 h-9 rounded-full bg-white border border-gray-200 flex items-center justify-center text-[#890f00]" title="Remove name">
+                                                <span class="material-symbols-outlined text-base">close</span>
+                                            </button>
+                                        </div>
+                                    </template>
+                                    <p x-show="expenseForm.form_data.names_included.length === 0" class="text-xs text-[#737685] italic">No names added.</p>
+                                </div>
+                                <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.names_included')"></p>
+                            </div>
+
+                            <div>
+                                <label class="block text-xs font-bold text-[#737685] mb-1">Meeting Agenda</label>
+                                <textarea rows="3" x-model="expenseForm.form_data.meeting_agenda" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm"></textarea>
+                                <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.meeting_agenda')"></p>
+                            </div>
+                        </div>
+
+                        <div x-show="expenseSelectedType?.code === 'repairs_and_maintenance'" class="space-y-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+                            <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Repair Details</p>
+                            <div>
+                                <label class="block text-xs font-bold text-[#737685] mb-1">Odometer</label>
+                                <input type="number" min="0" step="0.01" x-model="expenseForm.form_data.odometer" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm" inputmode="decimal">
+                                <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.odometer')"></p>
+                            </div>
+                        </div>
+
+                        <div x-show="['transportation_toll', 'transportation_gas', 'transportation_parking', 'transportation_commute'].includes(expenseSelectedType?.code)" class="space-y-4 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+                            <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Transportation Details</p>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-xs font-bold text-[#737685] mb-1">Initial Odometer</label>
+                                    <input type="number" min="0" step="0.01" @input="updateExpenseDistance()" x-model="expenseForm.form_data.initial_odometer" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm" inputmode="decimal">
+                                    <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.initial_odometer')"></p>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-[#737685] mb-1">Last Odometer</label>
+                                    <input type="number" min="0" step="0.01" @input="updateExpenseDistance()" x-model="expenseForm.form_data.last_odometer" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm" inputmode="decimal">
+                                    <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.last_odometer')"></p>
+                                </div>
+                            </div>
+                            <div class="p-3 bg-white border border-gray-200 rounded-xl flex items-center justify-between">
+                                <span class="text-xs font-bold text-[#737685]">Distance Travelled</span>
+                                <span class="font-black text-[#191c1e]" x-text="expenseForm.form_data.distance_travelled === null ? '—' : expenseForm.form_data.distance_travelled"></span>
+                            </div>
+                            <p class="text-xs text-red-600" x-text="expenseError('form_data.distance_travelled')"></p>
+
+                            <div x-show="expenseSelectedType?.code === 'transportation_gas'">
+                                <label class="block text-xs font-bold text-[#737685] mb-1">Liters</label>
+                                <input type="number" min="0" step="0.01" x-model="expenseForm.form_data.liters" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm" inputmode="decimal">
+                                <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.liters')"></p>
+                            </div>
+
+                            <div x-show="expenseSelectedType?.code === 'transportation_parking'">
+                                <label class="block text-xs font-bold text-[#737685] mb-1">Number of Days</label>
+                                <input type="number" min="0" step="1" x-model="expenseForm.form_data.number_of_days" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm" inputmode="numeric">
+                                <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.number_of_days')"></p>
+                            </div>
+
+                            <div x-show="expenseSelectedType?.code === 'transportation_commute'" class="space-y-3">
+                                <div>
+                                    <label class="block text-xs font-bold text-[#737685] mb-1">Expense Kind</label>
+                                    <select x-model="expenseForm.form_data.expense_kind" @change="onCommuteKindChange()" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white">
+                                        <option value="">Select expense kind</option>
+                                        <option>RORO Fare</option>
+                                        <option>Terminal Fee</option>
+                                        <option>Taxi Fare</option>
+                                        <option>Others</option>
+                                    </select>
+                                    <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.expense_kind')"></p>
+                                </div>
+                                <div x-show="isCommuteOther()" x-transition>
+                                    <label class="block text-xs font-bold text-[#737685] mb-1">Specify Other Expense Kind</label>
+                                    <input type="text" x-model="expenseForm.form_data.expense_kind_other" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm">
+                                    <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.expense_kind_other')"></p>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-[#737685] mb-1">Route</label>
+                                    <input type="text" x-model="expenseForm.form_data.route" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm">
+                                    <p class="text-xs text-red-600 mt-1" x-text="expenseError('form_data.route')"></p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-bold text-[#737685] mb-1">Amount *</label>
+                                <input type="number" min="0.01" step="0.0001" x-model="expenseForm.amount" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm" inputmode="decimal">
+                                <p class="text-xs text-red-600 mt-1" x-text="expenseError('amount')"></p>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-[#737685] mb-1">Date Filed *</label>
+                                <input type="date" x-model="expenseForm.date_filed" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm">
+                                <p class="text-xs text-red-600 mt-1" x-text="expenseError('date_filed')"></p>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-bold text-[#737685] mb-1">Payment Type *</label>
+                            <select x-model="expenseForm.payment_type" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-white">
+                                <option value="">Select payment type</option>
+                                <option>Revolving Fund</option>
+                                <option>Petty Cash Voucher (PCV)</option>
+                                <option>SBC Credit Card</option>
+                                <option>Cash Advance</option>
+                                <option>Fleet Card</option>
+                            </select>
+                            <p class="text-xs text-red-600 mt-1" x-text="expenseError('payment_type')"></p>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-bold text-[#737685] mb-1">Payment Remarks *</label>
+                            <textarea rows="2" x-model="expenseForm.payment_remarks" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm"></textarea>
+                            <p class="text-xs text-red-600 mt-1" x-text="expenseError('payment_remarks')"></p>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-bold text-[#737685] mb-1">Invoice Number *</label>
+                                <input type="text" x-model="expenseForm.invoice_number" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm">
+                                <p class="text-xs text-red-600 mt-1" x-text="expenseError('invoice_number')"></p>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-[#737685] mb-1">TIN *</label>
+                                <input type="text" x-model="expenseForm.tin" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm">
+                                <p class="text-xs text-red-600 mt-1" x-text="expenseError('tin')"></p>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-bold text-[#737685] mb-1">Establishment *</label>
+                            <input type="text" x-model="expenseForm.establishment" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm">
+                            <p class="text-xs text-red-600 mt-1" x-text="expenseError('establishment')"></p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-[#737685] mb-1">Location *</label>
+                            <textarea rows="2" x-model="expenseForm.location" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm"></textarea>
+                            <p class="text-xs text-red-600 mt-1" x-text="expenseError('location')"></p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-[#737685] mb-1">Purpose *</label>
+                            <textarea rows="2" x-model="expenseForm.purpose" class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm"></textarea>
+                            <p class="text-xs text-red-600 mt-1" x-text="expenseError('purpose')"></p>
+                        </div>
+
+                        <div class="space-y-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Attachments</p>
+                                    <p class="text-xs text-[#737685] mt-1">Optional · <span x-text="expenseAttachments.length"></span> / 10</p>
+                                </div>
+                                <span class="material-symbols-outlined text-[#737685]">attach_file</span>
+                            </div>
+
+                            <input type="file" x-ref="expenseCameraInput" accept="image/jpeg,image/png" capture="environment" class="hidden"
+                                @change="addExpenseAttachmentFile($event.target.files[0]); $event.target.value = ''">
+                            <input type="file" x-ref="expenseGalleryInput" accept="image/jpeg,image/png,image/*" class="hidden"
+                                @change="addExpenseAttachmentFile($event.target.files[0]); $event.target.value = ''">
+                            <input type="file" x-ref="expenseFilesInput" accept="image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf" class="hidden"
+                                @change="addExpenseAttachmentFile($event.target.files[0]); $event.target.value = ''">
+
+                            <div class="grid grid-cols-3 gap-2">
+                                <button type="button" :disabled="expenseAttachments.length >= 10"
+                                    @click="if (document.body.classList.contains('nativephp-android') || document.body.classList.contains('nativephp-ios')) { $wire.takeExpenseAttachmentPhoto(); } else { $refs.expenseCameraInput.click(); }"
+                                    class="flex flex-col items-center justify-center gap-1 py-3 border-2 border-gray-200 rounded-xl text-[#434654] hover:border-[#890f00] hover:bg-red-50 disabled:opacity-40">
+                                    <span class="material-symbols-outlined text-xl">photo_camera</span>
+                                    <span class="text-[10px] font-bold">Camera</span>
+                                </button>
+                                <button type="button" :disabled="expenseAttachments.length >= 10"
+                                    @click="if (document.body.classList.contains('nativephp-android') || document.body.classList.contains('nativephp-ios')) { $wire.pickExpenseAttachmentFromGallery(); } else { $refs.expenseGalleryInput.click(); }"
+                                    class="flex flex-col items-center justify-center gap-1 py-3 border-2 border-gray-200 rounded-xl text-[#434654] hover:border-[#890f00] hover:bg-red-50 disabled:opacity-40">
+                                    <span class="material-symbols-outlined text-xl">photo_library</span>
+                                    <span class="text-[10px] font-bold">Gallery</span>
+                                </button>
+                                <button type="button" :disabled="expenseAttachments.length >= 10" @click="$refs.expenseFilesInput.click()"
+                                    class="flex flex-col items-center justify-center gap-1 py-3 border-2 border-gray-200 rounded-xl text-[#434654] hover:border-[#890f00] hover:bg-red-50 disabled:opacity-40">
+                                    <span class="material-symbols-outlined text-xl">folder_open</span>
+                                    <span class="text-[10px] font-bold">Files</span>
+                                </button>
+                            </div>
+
+                            <p x-show="expenseAttachmentError" class="text-xs text-red-600" x-text="expenseAttachmentError"></p>
+                            <div class="space-y-2">
+                                <template x-for="(attachment, index) in expenseAttachments" :key="index">
+                                    <div class="flex items-center gap-3 border border-gray-200 rounded-xl p-3 bg-white">
+                                        <div class="w-10 h-10 rounded-lg bg-gray-50 border border-gray-200 flex items-center justify-center shrink-0 overflow-hidden">
+                                            <template x-if="attachment.mime_type !== 'application/pdf'">
+                                                <img :src="attachment.data" class="w-full h-full object-cover">
+                                            </template>
+                                            <template x-if="attachment.mime_type === 'application/pdf'">
+                                                <span class="material-symbols-outlined text-red-500 text-xl">picture_as_pdf</span>
+                                            </template>
+                                        </div>
+                                        <span class="flex-1 min-w-0 text-xs font-medium text-[#191c1e] truncate" x-text="attachment.original_name"></span>
+                                        <button type="button" @click="removeExpenseAttachment(index)" class="text-red-400 hover:text-red-600 shrink-0" title="Remove attachment">
+                                            <span class="material-symbols-outlined text-lg">delete</span>
+                                        </button>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+
+                        <div class="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">
+                            This Expense and any attachments will be saved locally and remain pending synchronization.
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3 pt-1">
+                            <button type="button" @click="closeExpenseForm()" class="h-12 rounded-xl border border-gray-200 text-[#434654] font-bold">Cancel</button>
+                            <button type="submit" :disabled="expenseSaving" class="h-12 rounded-xl bg-[#890f00] text-white font-bold disabled:opacity-50">
+                                <span x-show="!expenseSaving">Save Locally</span>
+                                <span x-show="expenseSaving">Saving…</span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
 
     </div>{{-- end split view --}}
 
