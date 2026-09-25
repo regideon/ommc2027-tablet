@@ -855,6 +855,7 @@ class SalescallPage extends Page
             'type' => SalescallType::UNPLANNED,
             'sync_status' => 'pending',
             'filter_group' => $scheduled->isToday() ? 'today' : ($scheduled->between(Carbon::now()->startOfWeek(), Carbon::now()->endOfWeek()) ? 'week' : 'month'),
+            'is_next_month' => $scheduled->between(Carbon::now()->addMonthNoOverflow()->startOfMonth(), Carbon::now()->addMonthNoOverflow()->endOfMonth()),
         ];
     }
 
@@ -1527,18 +1528,20 @@ class SalescallPage extends Page
         $weekStart = Carbon::now()->startOfWeek();
         $weekEnd = Carbon::now()->endOfWeek();
         $monthStart = Carbon::now()->startOfMonth();
-        $monthEnd = Carbon::now()->endOfMonth();
+        // Range spans this month and next so the Next Month tab has data to show.
+        $nextMonthStart = Carbon::now()->addMonthNoOverflow()->startOfMonth();
+        $nextMonthEnd = Carbon::now()->addMonthNoOverflow()->endOfMonth();
 
         $calls = Salescall::with(['customer', 'salescallStatus', 'salescallType'])
             ->where('created_by', auth()->id())
-            ->where(function ($q) use ($monthStart, $monthEnd) {
-                $q->whereBetween('actual_in', [$monthStart, $monthEnd])
-                    ->orWhereBetween('visit_date', [$monthStart, $monthEnd]);
+            ->where(function ($q) use ($monthStart, $nextMonthEnd) {
+                $q->whereBetween('actual_in', [$monthStart, $nextMonthEnd])
+                    ->orWhereBetween('visit_date', [$monthStart, $nextMonthEnd]);
             })
             ->orderByRaw('COALESCE(actual_in, visit_date) ASC')
             ->get()
             ->values()
-            ->map(function (Salescall $call) use ($weekStart, $weekEnd) {
+            ->map(function (Salescall $call) use ($weekStart, $weekEnd, $nextMonthStart, $nextMonthEnd) {
                 $visitDate = $call->visit_date;
 
                 $filterGroup = match (true) {
@@ -1564,6 +1567,7 @@ class SalescallPage extends Page
                     'type' => $call->salescallType?->name,
                     'sync_status' => $call->sync_status,
                     'filter_group' => $filterGroup,
+                    'is_next_month' => $visitDate->between($nextMonthStart, $nextMonthEnd),
                 ];
             });
 

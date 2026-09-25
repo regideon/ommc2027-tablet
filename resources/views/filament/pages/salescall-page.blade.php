@@ -315,7 +315,8 @@
                 : base;
             if (this.filter === 'today') return searched.filter(c => c.filter_group === 'today');
             if (this.filter === 'week')  return searched.filter(c => ['today','week'].includes(c.filter_group));
-            return searched;
+            if (this.filter === 'next_month') return searched.filter(c => c.is_next_month);
+            return searched.filter(c => !c.is_next_month);
         },
 
         get syncButtonClass() {
@@ -1189,7 +1190,7 @@
                 <div class="flex items-center gap-2">
                     <span class="material-symbols-outlined mat-fill text-[#890f00]">map</span>
                     <h3 class="font-bold text-[#191c1e]"
-                        x-text="filter === 'today' ? 'Today\'s Calls' : filter === 'week' ? 'This Week\'s Calls' : 'This Month\'s Calls'"></h3>
+                        x-text="filter === 'today' ? 'Today\'s Calls' : filter === 'week' ? 'This Week\'s Calls' : filter === 'next_month' ? 'Next Month\'s Calls' : 'This Month\'s Calls'"></h3>
                     <span class="text-xs text-[#737685]" x-text="'(' + filteredCalls.filter(c => c.lat && c.lng).length + ' locations)'"></span>
                 </div>
                 <button @click="closeMap()"
@@ -1477,6 +1478,9 @@
                     <button @click="filter = 'month'; if (showMap) openMap()"
                         :class="filter === 'month' ? 'bg-[#890f00] text-white' : 'bg-white border border-gray-200 text-[#434654]'"
                         class="whitespace-nowrap px-4 py-1.5 rounded-full text-xs font-semibold transition-all">This Month</button>
+                    <button @click="filter = 'next_month'; if (showMap) openMap()"
+                        :class="filter === 'next_month' ? 'bg-[#890f00] text-white' : 'bg-white border border-gray-200 text-[#434654]'"
+                        class="whitespace-nowrap px-4 py-1.5 rounded-full text-xs font-semibold transition-all">Next Month</button>
                 </div>
                 <button @click="openMap()"
                     class="shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-all">
@@ -1509,7 +1513,8 @@
                 <div class="sticky top-0 bg-gray-50/90 backdrop-blur py-1.5 shrink-0">
                     <h3 class="text-[11px] font-extrabold text-[#737685] tracking-widest uppercase"
                         x-text="filter === 'today' ? 'Today, {{ now()->format('M j') }}' :
-                                filter === 'week'  ? 'This Week' : 'This Month'">
+                                filter === 'week'  ? 'This Week' :
+                                filter === 'next_month' ? 'Next Month' : 'This Month'">
                     </h3>
                 </div>
 
