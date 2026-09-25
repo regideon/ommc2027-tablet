@@ -1,3 +1,13 @@
+Before working on a task, read `docs/agent-workflow.md` and locate the relevant
+note under `docs/work/`. This file remains the Claude bootstrap surface and
+contains the Laravel Boost and Tablet project guidance below. The shared
+lifecycle, authorization boundary, durable state, worktree ownership,
+validation, and terminal-delivery rules live in `docs/agent-workflow.md` and
+must not be duplicated here.
+
+Implementation authorization permits local work and validation only. Do not
+commit or push until separate explicit Human terminal authorization is given.
+
 <laravel-boost-guidelines>
 === foundation rules ===
 
@@ -166,55 +176,5 @@ This application is a Laravel application and its main Laravel ecosystems packag
 - The `{name}` argument should not include the test suite directory. Use `php artisan make:test --pest SomeFeatureTest` instead of `php artisan make:test --pest Feature/SomeFeatureTest`.
 - Run tests: `php artisan test --compact` or filter: `php artisan test --compact --filter=testName`.
 - Do NOT delete tests without approval.
-
-=== automatic git delivery protocol ===
-
-For an explicitly authorized implementation task, the normal lifecycle is:
-
-1. Implement only the authorized scope.
-2. Run the validation appropriate to the task and repository.
-3. Inspect the complete worktree and diff.
-4. Stage only task-owned files or hunks.
-5. Inspect the staged diff.
-6. Commit with a concise conventional subject.
-7. Push the current authorized branch normally.
-8. Report validation, files, commit, branch, push result, and preserved unrelated work.
-
-Planning, investigation, review-only, and read-only tasks never authorize Git
-delivery. An implementation task that explicitly prohibits commit or push also
-remains undelivered.
-
-Automatic commit and push are allowed only when implementation is complete,
-validation passes, the final diff has been reviewed, task ownership is clear,
-no blocker remains, no protected local file is staged, the current branch is
-appropriate, and the normal push can proceed without history rewriting.
-
-Before staging, inspect `git status --short`, the complete diff, and all
-untracked files. Preserve unrelated human or agent work. Never use broad
-staging such as `git add .` or `git add -A` when unrelated work exists; stage
-explicit task-owned paths or hunks only, then inspect `git diff --cached`.
-
-Use task-appropriate validation. Respect explicit safety restrictions: do not
-invent migrations, database writes, production access, or tests that the task
-prohibits. If required validation fails, ownership is ambiguous, conflicts are
-present, or a protected file would be included, stop before committing.
-
-Portal and Tablet are independent repositories. For cross-repository work,
-validate and review each repository independently, create separate commits,
-and push each separately. If one side is blocked before delivery, do not
-commit or push either side when that would create an incomplete compatibility
-boundary. Git cannot make multi-repository pushes atomic; if a later commit or
-push fails, stop without rollback or reconciliation and report the partial
-state.
-
-Push only the existing authorized branch and configured upstream. Never force
-push, rebase, pull, merge, reset, amend published history, bypass hooks, delete
-branches, switch branches merely to deliver, or discard unrelated changes. If
-the normal push is rejected or requires reconciliation, stop and report it.
-
-Never stage or deliver `.env`, `.env.*` (except `.env.example`), credentials,
-tokens, secrets, machine-local settings, or generated local runtime state. Do
-not create a blind hook that commits or pushes automatically; delivery requires
-the gates above to be evaluated explicitly.
 
 </laravel-boost-guidelines>
