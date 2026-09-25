@@ -8,6 +8,10 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (Schema::hasColumn('users', 'rsm_id')) {
+            return;
+        }
+
         Schema::table('users', function (Blueprint $table) {
             $table->unsignedBigInteger('rsm_id')->nullable()->after('id');
         });
@@ -15,6 +19,10 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (! Schema::hasColumn('users', 'rsm_id')) {
+            return;
+        }
+
         Schema::table('users', function (Blueprint $table) {
             $table->dropColumn('rsm_id');
         });

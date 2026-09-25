@@ -1,0 +1,24 @@
+# OMMC-20260925-tablet-rsm-migration-reconciliation
+
+- **Title:** Tablet retained-database `rsm_id` migration reconciliation
+- **Objective:** Prevent Tablet startup migration failure when `users.rsm_id` already exists.
+- **Repository:** Tablet `ommc2027-tablet`
+- **State:** TERMINAL_DELIVERED
+- **Implementation authorization:** Granted for this Work.
+- **Terminal authorization:** Granted by explicit Human `TERMINAL: GO` instruction.
+- **Human-authorized scope:** Reconcile the bounded duplicate-schema migration sequence and maintain this Work note. Do not reset or mutate retained SQLite data.
+- **Observed failure:** NativePHP startup failed with SQLite `duplicate column name: rsm_id` while the migration attempted `alter table users add column rsm_id`.
+- **Root cause:** `2026_09_16_140000_add_user_reference_and_customer_access` already creates `users.rsm_id`; the later `2026_09_23_000001_add_rsm_id_to_users_table` repeats that additive operation. A retained database may have the physical column while the later migration ledger entry is pending.
+- **Manual retest result:** Startup progressed past the guarded `rsm_id` migration and then exposed the next duplicate object, `customer_user`.
+- **Root-cause reassessment:** The retained database contains schema from the earlier customer-access migration while the later duplicate migration entries remain pending in the migration ledger.
+- **Implementation decision:** The `rsm_id` migration preserves an existing column and adds it only when absent. The `customer_user` migration preserves an existing table and creates the earlier migration's complete contract, including the unique customer/user pair, only when absent. Its rollback does not drop the table owned by the earlier migration.
+- **Task-owned files:** `database/migrations/2026_09_23_000001_add_rsm_id_to_users_table.php`, `database/migrations/2026_09_23_000002_create_customer_user_table.php`, and this Work note.
+- **Unrelated worktree changes to preserve:** The pre-existing `.gitignore` modification, `.env.local`, `.env.prod`, and all other machine-local or unrelated changes.
+- **Migrations inspected:** `2026_09_16_120000_add_physical_geography_parity`, `2026_09_16_140000_add_user_reference_and_customer_access`, `2026_09_23_000001_add_rsm_id_to_users_table`, `2026_09_23_000002_create_customer_user_table`, and the separate `2026_09_24_000001`–`000003` Expense migrations.
+- **Migrations changed:** `2026_09_23_000001_add_rsm_id_to_users_table` and `2026_09_23_000002_create_customer_user_table` only.
+- **Migrations safe as-is:** Physical geography parity and the separate Expense migrations have no repository evidence in this Work of a duplicate retained object; they remain unchanged.
+- **Validation:** PHP syntax checks, source review of both absent/existing schema paths, migration ordering review, and `git diff --check` completed. No database, migration execution, or destructive validation performed.
+- **Manual acceptance:** PASS. The existing retained iPad/NativePHP installation started successfully after these reconciliation changes, progressed past both duplicate-schema migrations, showed no further duplicate-schema startup failure, and retained its SQLite database without deletion, reset, or recreation.
+- **Blockers:** None.
+- **Remaining work:** None for this Work.
+- **Delivery evidence:** Final commit trailers identify this Work ID and `TERMINAL_DELIVERED`; resulting commit hash and push result are reported externally after delivery.

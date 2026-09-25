@@ -8,6 +8,10 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (Schema::hasTable('customer_user')) {
+            return;
+        }
+
         Schema::create('customer_user', function (Blueprint $table) {
             $table->id();
             $table->foreignId('customer_id')
@@ -17,11 +21,12 @@ return new class extends Migration
                 ->constrained('users')
                 ->cascadeOnDelete();
             $table->timestamps();
+            $table->unique(['customer_id', 'user_id']);
         });
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('customer_user');
+        // customer_user is owned by the earlier customer-access migration.
     }
 };
