@@ -10,6 +10,7 @@ use App\Models\CustomerBrand;
 use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
 use App\Models\CustomerProfileAttachment;
+use App\Models\ExpenseType;
 use App\Models\Itinerary;
 use App\Models\MaterialGroup;
 use App\Models\Salescall;
@@ -1592,6 +1593,16 @@ class SalescallPage extends Page
             'customersJson' => Customer::where('is_active', true)->orderBy('name')
                 ->get(['id', 'name', 'unique_id', 'address', 'latitude', 'longitude'])->toJson(),
             'canAddSalescall' => auth()->user()?->hasAnyRole(['drm', 'rsm']) ?? false,
+            'expenseTypes' => ExpenseType::query()
+                ->where('is_enabled', true)
+                ->orderBy('sort_order')
+                ->get(['code', 'label'])
+                ->map(fn (ExpenseType $type): array => [
+                    'code' => $type->code,
+                    'label' => $type->label,
+                ])
+                ->values()
+                ->all(),
         ];
     }
 }

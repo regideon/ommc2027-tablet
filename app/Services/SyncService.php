@@ -4,9 +4,13 @@ namespace App\Services;
 
 use App\Models\CustomerBrand;
 use App\Models\CustomerCategory;
+use App\Models\CustomerCategoryEvent;
+use App\Models\Customer;
 use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
 use App\Models\CustomerProfileAttachment;
+use App\Models\Expense;
+use App\Models\ExpenseAttachment;
 use App\Models\Itinerary;
 use App\Models\Salescall;
 use App\Models\SalescallBrand;
@@ -48,6 +52,8 @@ class SyncService
             || $pendingOrRetryable(SalescallImage::query())->exists()
             || $pendingOrRetryable(CustomerProfile::query())->exists()
             || $pendingOrRetryable(CustomerProfileAttachment::query())->exists()
+            || $pendingOrRetryable(Expense::query())->exists()
+            || $pendingOrRetryable(ExpenseAttachment::query())->exists()
             || $pendingOrRetryable(CustomerNote::query())->exists();
     }
 
@@ -166,20 +172,171 @@ class SyncService
             // carry salescall_brands/salescall_categories data (e.g. an RSM-added call)
             // would otherwise throw a foreign key integrity violation and abort the
             // entire pull before customers/brands/categories ever get written.
-            foreach ($data['customers'] ?? [] as $customer) {
-                DB::table('customers')->updateOrInsert(
-                    ['id' => $customer['id']],
+            foreach ($data['general_categories'] ?? [] as $category) {
+                DB::table('general_categories')->updateOrInsert(
+                    ['id' => $category['id']],
                     [
+                        'name' => $category['name'],
+                        'priority_visit' => $category['priority_visit'] ?? null,
+                        'duration_per_visit' => $category['duration_per_visit'] ?? null,
+                        'sort' => $category['sort'] ?? 0,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
+            foreach ($data['companies'] ?? [] as $company) {
+                DB::table('companies')->updateOrInsert(
+                    ['id' => $company['id']],
+                    ['name' => $company['name'], 'code' => $company['code'] ?? null, 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['regions'] ?? [] as $region) {
+                DB::table('regions')->updateOrInsert(
+                    ['id' => $region['id']],
+                    ['code' => $region['code'], 'psgc_code' => $region['psgc_code'] ?? null, 'name' => $region['name'], 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['region_specifics'] ?? [] as $regionSpecific) {
+                DB::table('region_specifics')->updateOrInsert(
+                    ['id' => $regionSpecific['id']],
+                    [
+                        'region_id' => $regionSpecific['region_id'],
+                        'name' => $regionSpecific['name'],
+                        'sort' => $regionSpecific['sort'] ?? 0,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
+            foreach ($data['provinces'] ?? [] as $province) {
+                DB::table('provinces')->updateOrInsert(
+                    ['id' => $province['id']],
+                    [
+                        'region_id' => $province['region_id'] ?? null,
+                        'psgc_code' => $province['psgc_code'] ?? null,
+                        'region_specific_id' => $province['region_specific_id'] ?? null,
+                        'name' => $province['name'],
+                        'enabled' => $province['enabled'] ?? true,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
+            foreach ($data['municipalities'] ?? [] as $municipality) {
+                DB::table('municipalities')->updateOrInsert(
+                    ['id' => $municipality['id']],
+                    [
+                        'psgc_code' => $municipality['psgc_code'] ?? null,
+                        'region_id' => $municipality['region_id'] ?? null,
+                        'province_id' => $municipality['province_id'] ?? null,
+                        'locality_type' => $municipality['locality_type'] ?? null,
+                        'name' => $municipality['name'],
+                        'sort' => $municipality['sort'] ?? 0,
+                        'enabled' => $municipality['enabled'] ?? true,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
+            $protectedStatuses = ['pending', 'failed', 'conflict'];
+            $serverToLocalCustomer = [];
+            $protectedCustomerIds = DB::table('customers')->whereIn('sync_status', $protectedStatuses)->pluck('id', 'server_id')->filter()->all();
+
+            foreach ($data['customers'] ?? [] as $customer) {
+                $existing = DB::table('customers')
+                    ->where('server_id', $customer['id'])
+                    ->orWhere(fn ($query) => $query->where('id', $customer['id'])->whereNotIn('sync_status', $protectedStatuses))
+                    ->first();
+                $localId = $existing?->id ?? $customer['id'];
+                $serverToLocalCustomer[$customer['id']] = $localId;
+                if (isset($protectedCustomerIds[$customer['id']])) continue;
+
+                DB::table('customers')->updateOrInsert(
+                    ['id' => $localId],
+                    [
+                        'server_id' => $customer['id'],
+                        'company_id' => $customer['company_id'] ?? null,
+                        'general_category_id' => $customer['general_category_id'] ?? null,
                         'region_specific_id' => $customer['region_specific_id'] ?? null,
                         'municipality_id' => $customer['municipality_id'] ?? null,
                         'name' => $customer['name'],
                         'unique_id' => $customer['unique_id'] ?? null,
                         'contact_person' => $customer['contact_person'] ?? null,
                         'contact_number' => $customer['contact_number'] ?? null,
+                        'business_landline_number' => $customer['business_landline_number'] ?? null,
+                        'business_mobile_number' => $customer['business_mobile_number'] ?? null,
+                        'date_established' => $customer['date_established'] ?? null,
+                        'person_in_charge_id' => $customer['person_in_charge_id'] ?? null,
                         'address' => $customer['address'] ?? null,
                         'latitude' => $customer['latitude'] ?? null,
                         'longitude' => $customer['longitude'] ?? null,
                         'is_active' => $customer['is_active'] ?? true,
+                        'competitor_volume' => $customer['competitor_volume'] ?? null,
+                        'sync_status' => 'synced',
+                        'sync_error' => null,
+                        'synced_at' => now(),
+                        'server_updated_at' => $customer['updated_at'] ?? null,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
+            foreach ($data['customer_trade_profiles'] ?? [] as $profile) {
+                $localCustomerId = $serverToLocalCustomer[$profile['customer_id']] ?? $profile['customer_id'];
+                if (isset($protectedCustomerIds[$profile['customer_id']])) continue;
+                DB::table('customer_trade_profiles')->updateOrInsert(
+                    ['customer_id' => $localCustomerId],
+                    [
+                        'profile_type' => $profile['profile_type'] ?? null,
+                        'profile_data' => isset($profile['profile_data']) ? json_encode($profile['profile_data']) : null,
+                        'house_number' => $profile['house_number'] ?? null,
+                        'entry_detail' => $profile['entry_detail'] ?? null,
+                        'classifications' => isset($profile['classifications']) ? json_encode($profile['classifications']) : null,
+                        'ommc_brands' => isset($profile['ommc_brands']) ? json_encode($profile['ommc_brands']) : null,
+                        'ommc_mcb_brands' => isset($profile['ommc_mcb_brands']) ? json_encode($profile['ommc_mcb_brands']) : null,
+                        'tpl_pollux' => isset($profile['tpl_pollux']) ? json_encode($profile['tpl_pollux']) : null,
+                        'other_competitor_brands' => isset($profile['other_competitor_brands']) ? json_encode($profile['other_competitor_brands']) : null,
+                        'mcb_competitors' => isset($profile['mcb_competitors']) ? json_encode($profile['mcb_competitors']) : null,
+                        'other_competitors_note' => $profile['other_competitors_note'] ?? null,
+                        'working_days' => isset($profile['working_days']) ? json_encode($profile['working_days']) : null,
+                        'operating_hours' => isset($profile['operating_hours']) ? json_encode($profile['operating_hours']) : null,
+                        'motiv_user' => $profile['motiv_user'] ?? null,
+                        'delivery_method' => $profile['delivery_method'] ?? null,
+                        'ulab' => $profile['ulab'] ?? null,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
+            foreach ($data['customer_category_histories'] ?? [] as $history) {
+                $localCustomerId = $serverToLocalCustomer[$history['customer_id']] ?? $history['customer_id'];
+                if (isset($protectedCustomerIds[$history['customer_id']])) continue;
+                DB::table('customer_category_histories')->updateOrInsert(
+                    ['customer_id' => $localCustomerId, 'profile_type' => $history['profile_type'] ?? null, 'stream' => $history['stream'] ?? null, 'category_year' => $history['category_year']],
+                    ['category' => $history['category'], 'updated_at' => now()]
+                );
+            }
+
+            foreach ($data['customer_category_events'] ?? [] as $event) {
+                $localCustomerId = $serverToLocalCustomer[$event['customer_id']] ?? $event['customer_id'];
+                if (isset($protectedCustomerIds[$event['customer_id']])) continue;
+                $supersedesId = filled($event['supersedes_event_key'] ?? null)
+                    ? DB::table('customer_category_events')->where('event_key', $event['supersedes_event_key'])->value('id')
+                    : null;
+                DB::table('customer_category_events')->updateOrInsert(
+                    ['event_key' => $event['event_key']],
+                    [
+                        'customer_id' => $localCustomerId,
+                        'profile_type' => $event['profile_type'],
+                        'stream' => $event['stream'],
+                        'category' => $event['category'],
+                        'effective_at' => $event['effective_at'],
+                        'source' => $event['source'],
+                        'supersedes_event_id' => $supersedesId,
+                        'supersedes_event_key' => $event['supersedes_event_key'] ?? null,
                         'updated_at' => now(),
                     ]
                 );
@@ -465,13 +622,6 @@ class SyncService
                 );
             }
 
-            // foreach ($data['customer_user'] ?? [] as $pivot) {
-            //     \Illuminate\Support\Facades\DB::table('customer_user')->updateOrInsert(
-            //         ['customer_id' => $pivot['customer_id'], 'user_id' => $pivot['user_id']],
-            //         ['updated_at' => now()]
-            //     );
-            // }
-
             $customerCount = count($data['customers'] ?? []);
 
             return SyncResult::ok("Pulled {$itineraryCount} itineraries, {$salescallCount} salescalls, {$customerCount} customers.");
@@ -495,6 +645,83 @@ class SyncService
         $failureReasons = [];
 
         try {
+            $pendingCustomers = Customer::with(['tradeProfile', 'categoryHistories', 'categoryEvents'])
+                ->where(function ($query): void {
+                    $query->where('sync_status', 'pending')
+                        ->orWhere(fn ($retry) => $retry->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })->get();
+
+            foreach ($pendingCustomers as $customer) {
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/push/customer", [
+                        'local_uuid' => $customer->local_uuid,
+                        'server_id' => $customer->server_id,
+                        'base_updated_at' => $customer->server_updated_at,
+                        'sync_intent' => $customer->server_id ? 'update' : 'create',
+                        'name' => $customer->name,
+                        'unique_id' => $customer->unique_id,
+                        'company_id' => $customer->company_id,
+                        'general_category_id' => $customer->general_category_id,
+                        'competitor_volume' => $customer->competitor_volume,
+                        'region_specific_id' => $customer->region_specific_id,
+                        'municipality_id' => $customer->municipality_id,
+                        'address' => $customer->address,
+                        'latitude' => $customer->latitude,
+                        'longitude' => $customer->longitude,
+                        'contact_person' => $customer->contact_person,
+                        'contact_number' => $customer->contact_number,
+                        'business_landline_number' => $customer->business_landline_number,
+                        'business_mobile_number' => $customer->business_mobile_number,
+                        'date_established' => optional($customer->date_established)->format('Y-m-d'),
+                        'is_active' => $customer->is_active,
+                        'profile_type' => $customer->tradeProfile?->profile_type,
+                        'person_in_charge_id' => $customer->person_in_charge_id,
+                        'trade_profile' => $customer->tradeProfile?->toArray() ?? [],
+                        'profile_data' => $customer->tradeProfile?->profile_data ?? [],
+                        'category_histories' => $customer->categoryHistories->map(fn ($history) => [
+                            'profile_type' => $history->profile_type ?: $customer->tradeProfile?->profile_type,
+                            'stream' => $history->stream ?: (($customer->tradeProfile?->profile_type === 'outlet') ? match ($customer->tradeProfile?->entry_detail) {
+                                'AB' => 'ab', 'MCB' => 'mcb', default => (str_starts_with((string) $history->category, 'AB ') ? 'ab' : (str_starts_with((string) $history->category, 'MCB ') ? 'mcb' : null)),
+                            } : $customer->tradeProfile?->profile_type),
+                            'category_year' => $history->category_year,
+                            'category' => $history->category,
+                        ])->values()->all(),
+                        'category_events' => $customer->categoryEvents->map(fn ($event) => [
+                            'event_key' => $event->event_key,
+                            'profile_type' => $event->profile_type,
+                            'stream' => $event->stream,
+                            'category' => $event->category,
+                            'effective_at' => $event->effective_at?->toISOString(),
+                            'source' => $event->source,
+                            'supersedes_event_key' => $event->supersedes_event_key,
+                        ])->values()->all(),
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    if ($response->successful()) {
+                        $this->markSynced($customer, ['server_id' => $response->json('server_id'), 'server_updated_at' => $response->json('updated_at'), 'synced_at' => now()]);
+                        $pushed++;
+                    } elseif ($response->status() === 409 && $response->json('code') === 'customer_conflict') {
+                        $customer->update(['sync_status' => 'conflict', 'sync_error' => $response->json('message', 'Customer changed on Portal.')]);
+                        $failed++;
+                        $failureReasons['customer_conflict'] = true;
+                    } else {
+                        $this->recordItemFailure($customer, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), ['stage' => 'customer:portal', 'endpoint' => '/api/sync/push/customer', 'http_status' => $response->status()]);
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordUnexpectedItemFailure($customer, $e, 'customer:unexpected');
+                    $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
+                }
+            }
+
             $pendingItineraries = Itinerary::where('sync_status', 'pending')
                 ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
                 ->get();
@@ -546,12 +773,17 @@ class SyncService
                     continue;
                 }
 
+                $customer = Customer::find($salescall->customer_id);
+                if (! $customer?->server_id) {
+                    continue;
+                }
+
                 try {
                     $response = $client->post("{$this->serverUrl}/api/sync/push/salescall", [
                         'local_uuid' => $salescall->local_uuid,
                         'itinerary_uuid' => $salescall->itinerary->local_uuid,
                         'itinerary_server_id' => $salescall->itinerary->server_id,
-                        'customer_id' => $salescall->customer_id,
+                        'customer_id' => $customer->server_id,
                         'salescall_type_id' => $salescall->salescall_type_id,
                         'route_start_at' => $salescall->route_start_at?->toDateTimeString(),
                         'latitude' => $salescall->latitude,
@@ -605,6 +837,95 @@ class SyncService
                     $failed++;
                     $retryable++;
                     $failureReasons['unexpected_sync_error'] = true;
+                }
+            }
+
+            $pendingExpenses = Expense::with(['salescall', 'expenseType'])
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingExpenses as $expense) {
+                if (! $expense->salescall?->server_id) {
+                    continue; // wait for salescall to sync first
+                }
+
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/push/expense", [
+                        'local_uuid' => $expense->local_uuid,
+                        'salescall_server_id' => $expense->salescall->server_id,
+                        'expense_type_code' => $expense->expenseType?->code,
+                        'amount' => $expense->amount,
+                        'date_filed' => $expense->date_filed?->format('Y-m-d'),
+                        'payment_type' => $expense->payment_type,
+                        'payment_remarks' => $expense->payment_remarks,
+                        'invoice_number' => $expense->invoice_number,
+                        'with_invoice' => $expense->with_invoice,
+                        'establishment' => $expense->establishment,
+                        'location' => $expense->location,
+                        'purpose' => $expense->purpose,
+                        'tin' => $expense->tin,
+                        'latitude' => $expense->latitude,
+                        'longitude' => $expense->longitude,
+                        'form_data' => $expense->form_data,
+                        'form_schema_version' => $expense->form_schema_version,
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    $serverId = $response->json('server_id');
+                    if ($response->successful() && $serverId !== null) {
+                        $this->markSynced($expense, [
+                            'server_id' => $serverId,
+                            'synced_at' => now(),
+                        ]);
+                        $pushed++;
+                    } else {
+                        $this->recordItemFailure($expense, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
+                            'stage' => 'expense:portal',
+                            'endpoint' => '/api/sync/push/expense',
+                            'http_status' => $response->status(),
+                        ]);
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordUnexpectedItemFailure($expense, $e, 'expense:unexpected');
+                    $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
+                }
+            }
+
+            $pendingExpenseAttachments = ExpenseAttachment::with('expense')
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingExpenseAttachments as $attachment) {
+                if (! $attachment->expense?->server_id) {
+                    continue; // wait for expense to sync first
+                }
+
+                $result = $this->pushExpenseAttachmentItem($client, $attachment);
+
+                if ($result instanceof SyncResult) {
+                    return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
+                }
+
+                if ($result['success']) {
+                    $pushed++;
+                } else {
+                    $failed++;
+                    $retryable++;
+                    $failureReasons[$result['reason']] = true;
                 }
             }
 
@@ -1046,6 +1367,85 @@ class SyncService
                 'endpoint' => '/api/sync/push/customer-profile-attachment',
                 'local_path' => $attachment->local_path,
                 's3_key' => $attachment->s3_key,
+            ]);
+
+            return ['success' => false, 'reason' => $classification];
+        }
+    }
+
+    /**
+     * @return array{success: bool, reason?: string}|SyncResult
+     */
+    private function pushExpenseAttachmentItem(PendingRequest $client, ExpenseAttachment $attachment): array|SyncResult
+    {
+        try {
+            if (! $this->isReadableLocalFile($attachment->local_path)) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'expense-attachment:local-file',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            $stream = fopen($attachment->local_path, 'r');
+
+            if ($stream === false) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: unable to open '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'expense-attachment:local-open',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            try {
+                $response = $client
+                    ->attach('file', $stream, basename($attachment->local_path))
+                    ->post("{$this->serverUrl}/api/sync/push/expense-attachment", [
+                        'local_uuid' => $attachment->local_uuid,
+                        'expense_server_id' => $attachment->expense->server_id,
+                        'original_name' => $attachment->original_name,
+                    ]);
+            } finally {
+                fclose($stream);
+            }
+
+            if ($response->status() === 401) {
+                return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired');
+            }
+
+            $serverId = $response->json('server_id');
+            if (! $response->successful() || $serverId === null) {
+                $failure = $response->failed() && $response->status() >= 500
+                    ? 'portal_upload_failed'
+                    : 'portal_rejected';
+
+                $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
+                    'stage' => 'expense-attachment:portal',
+                    'endpoint' => '/api/sync/push/expense-attachment',
+                    'http_status' => $response->status(),
+                ]);
+
+                return ['success' => false, 'reason' => $failure];
+            }
+
+            $this->markSynced($attachment, [
+                'server_id' => $serverId,
+                'storage_key' => $response->json('storage_key'),
+                'mime_type' => $response->json('mime_type'),
+                'extension' => $response->json('extension'),
+                'byte_size' => $response->json('byte_size'),
+                'synced_at' => now(),
+            ]);
+
+            return ['success' => true];
+        } catch (Throwable $e) {
+            $classification = $this->classifyBinaryThrowable($e);
+            $this->recordThrowableFailure($attachment, $classification, $e, [
+                'stage' => 'expense-attachment:unexpected',
+                'endpoint' => '/api/sync/push/expense-attachment',
+                'local_path' => $attachment->local_path,
             ]);
 
             return ['success' => false, 'reason' => $classification];

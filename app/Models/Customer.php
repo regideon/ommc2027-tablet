@@ -4,12 +4,62 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Customer extends Model
 {
     use SoftDeletes;
 
     protected $guarded = ['id'];
+
+    protected $casts = [
+        'is_active' => 'boolean',
+        'date_established' => 'date',
+        'server_updated_at' => 'datetime',
+    ];
+
+    public function generalCategory(): BelongsTo
+    {
+        return $this->belongsTo(GeneralCategory::class);
+    }
+
+    public function company(): BelongsTo
+    {
+        return $this->belongsTo(Company::class);
+    }
+
+    public function municipality(): BelongsTo
+    {
+        return $this->belongsTo(Municipality::class);
+    }
+
+    public function personInCharge(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'person_in_charge_id');
+    }
+
+    public function users(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'customer_user');
+    }
+
+    public function tradeProfile(): HasOne
+    {
+        return $this->hasOne(CustomerTradeProfile::class);
+    }
+
+    public function categoryHistories(): HasMany
+    {
+        return $this->hasMany(CustomerCategoryHistory::class)->orderBy('category_year');
+    }
+
+    public function categoryEvents(): HasMany
+    {
+        return $this->hasMany(CustomerCategoryEvent::class)->orderBy('effective_at')->orderBy('id');
+    }
 
     public function salescalls()
     {

@@ -74,46 +74,98 @@ class CustomerPage extends Page
      */
     public function viewCustomer(int $customerId): void
     {
-        $this->selectedCustomerId = $customerId;
-        $this->showPhotos = false;
-        $this->customerPhotos = [];
 
-        $profile = CustomerProfile::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))
-            ->latest('created_at')
-            ->first();
+            $this->selectedCustomerId = $customerId;
+            $this->showPhotos = false;
+            $this->customerPhotos = [];
 
-        $brands = CustomerBrand::where('customer_id', $customerId)
-            ->with(['materialGroup', 'brand'])
-            ->get();
+            $profile = CustomerProfile::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))
+                ->latest('created_at')
+                ->first();
 
-        $category = CustomerCategory::where('customer_id', $customerId)
-            ->with(['category', 'subCategory'])
-            ->first();
+            $brands = CustomerBrand::where('customer_id', $customerId)
+                ->with(['materialGroup', 'brand'])
+                ->get();
 
-        $notes = CustomerNote::where('customer_id', $customerId)
-            ->where('created_by', auth()->id())
-            ->latest('created_at')
-            ->limit(self::RECENT_LIMIT)
-            ->get();
+            $category = CustomerCategory::where('customer_id', $customerId)
+                ->with(['category', 'subCategory'])
+                ->first();
 
-        // DRMs see only their own visits; RSMs see every rep's visits to this
-        // customer (mirrors the "RSM sees all DRMs under them" visibility used
-        // elsewhere in the app — see mountVp()/CustomerPage's commented role logic).
-        $visitsQuery = Salescall::where('customer_id', $customerId)
-            ->with(['salescallStatus', 'createdBy']);
+            $notes = CustomerNote::where('customer_id', $customerId)
+                ->where('created_by', auth()->id())
+                ->latest('created_at')
+                ->limit(self::RECENT_LIMIT)
+                ->get();
 
-        if (! auth()->user()?->hasRole('rsm')) {
-            $visitsQuery->where('created_by', auth()->id());
-        }
+            // DRMs see only their own visits; RSMs see every rep's visits to this
+            // customer (mirrors the "RSM sees all DRMs under them" visibility used
+            // elsewhere in the app — see mountVp()/CustomerPage's commented role logic).
+            $visitsQuery = Salescall::where('customer_id', $customerId)
+                ->with(['salescallStatus', 'createdBy']);
 
-        $visits = $visitsQuery
-            ->orderByRaw('COALESCE(actual_in, visit_date) DESC')
-            ->limit(self::RECENT_LIMIT)
-            ->get();
+            if (! auth()->user()?->hasRole('rsm')) {
+                $visitsQuery->where('created_by', auth()->id());
+            }
 
-        $photoCount = SalescallImage::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))->count();
+            $visits = $visitsQuery
+                ->orderByRaw('COALESCE(actual_in, visit_date) DESC')
+                ->limit(self::RECENT_LIMIT)
+                ->get();
 
-        $this->customerDetail = [
+            $photoCount = SalescallImage::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))->count();
+
+            $customer = Customer::with(['company', 'tradeProfile', 'categoryHistories', 'municipality.region', 'municipality.province'])->findOrFail($customerId);
+            $physicalRegion = $customer->municipality?->region?->name;
+            $province = $customer->municipality?->province?->name;
+            $municipality = $customer->municipality?->name;
+            $specificRegion = $customer->region_specific_id
+                ? DB::table('region_specifics')->where('id', $customer->region_specific_id)->value('name')
+                : null;
+
+            $this->customerDetail = [
+            'customer' => [
+                'unique_id' => $customer->unique_id,
+                'company' => $customer->company?->name,
+                'address' => $customer->address,
+                'contact_person' => $customer->contact_person,
+                'contact_number' => $customer->contact_number,
+                'physical_region' => $physicalRegion,
+                'province' => $province,
+                'municipality' => $municipality,
+                'specific_region' => $specificRegion,
+                'latitude' => $customer->latitude,
+                'longitude' => $customer->longitude,
+                'general_category' => $customer->generalCategory?->name,
+                'competitor_volume' => match ($customer->competitor_volume) { 1 => 'High', 2 => 'Medium', 3 => 'Low', default => null },
+                'is_active' => $customer->is_active,
+                'sync_status' => $customer->sync_status,
+                'sync_error' => $customer->sync_error,
+                'server_id' => $customer->server_id,
+            ],
+            'trade_profile' => $customer->tradeProfile ? [
+                'profile_type' => $customer->tradeProfile->profile_type,
+                'house_number' => $customer->tradeProfile->house_number,
+                'entry_detail' => $customer->tradeProfile->entry_detail,
+                'classifications' => $customer->tradeProfile->classifications,
+                'ommc_brands' => $customer->tradeProfile->ommc_brands,
+                'ommc_mcb_brands' => $customer->tradeProfile->ommc_mcb_brands,
+                'tpl_pollux' => $customer->tradeProfile->tpl_pollux,
+                'other_competitor_brands' => $customer->tradeProfile->other_competitor_brands,
+                'mcb_competitors' => $customer->tradeProfile->mcb_competitors,
+                'other_competitors_note' => $customer->tradeProfile->other_competitors_note,
+                'working_days' => $customer->tradeProfile->working_days,
+                'operating_hours' => $customer->tradeProfile->operating_hours,
+                'motiv_user' => $customer->tradeProfile->motiv_user,
+                'delivery_method' => match ($customer->tradeProfile->delivery_method) { 'resq_hub' => 'ResQ Hub', 'own_delivery' => 'Own Delivery', default => null },
+                'ulab' => $customer->tradeProfile->ulab,
+                'profile_data' => $customer->tradeProfile->profile_data,
+            ] : null,
+            'category_histories' => $customer->categoryHistories->map(fn ($history) => [
+                'year' => $history->category_year,
+                'profile_type' => $history->profile_type,
+                'stream' => $history->stream,
+                'category' => $history->category,
+            ])->all(),
             'profile' => $profile ? [
                 'registered_name' => $profile->registered_name,
                 'owner_name' => $profile->owner_name,
@@ -155,6 +207,7 @@ class CustomerPage extends Page
         $this->customerDetail = [];
         $this->showPhotos = false;
         $this->customerPhotos = [];
+        $this->dispatch('customer-modal-closed');
     }
 
     /**

@@ -298,6 +298,26 @@
             this.noteDeletingId = null;
         },
 
+        expenseTypes: @js($expenseTypes),
+        expenseSupportedTypes: ['communication_expenses', 'emergency_expenses', 'lodging', 'per_diem', 'ancillary_expenses', 'airfare', 'representation', 'staff_meeting', 'repairs_and_maintenance', 'transportation_toll', 'transportation_gas', 'transportation_parking', 'transportation_commute'],
+        expenseCreateUrl: @js(\App\Filament\Pages\ExpenseCreatePage::getUrl()),
+        showExpenseModal: false,
+        openExpenseForm() {
+            if (!this.selectedCall) return;
+            this.showExpenseModal = true;
+        },
+        closeExpenseForm() {
+            this.showExpenseModal = false;
+        },
+        selectExpenseType(type) {
+            if (!this.expenseSupportedTypes.includes(type.code)) {
+                return;
+            }
+            const url = new URL(this.expenseCreateUrl, window.location.origin);
+            url.searchParams.set('salescall', this.selectedCall.id);
+            url.searchParams.set('type', type.code);
+            window.location.assign(url.toString());
+        },
         get inProgressCall() {
             return this.calls.find(c => c.status === 'in_progress') ?? null;
         },
@@ -1762,6 +1782,17 @@
                                 </button>
                                 @endforeach
                                 <button
+                                    @click="openExpenseForm()"
+                                    class="h-18 lg:h-20 bg-white border border-gray-200 rounded-2xl flex items-center px-4 lg:px-5 gap-3 lg:gap-4 hover:border-[#890f00] hover:bg-red-50 group transition-all">
+                                    <div class="w-9 h-9 lg:w-10 lg:h-10 rounded-full bg-[#edeef0] group-hover:bg-[#ffdad3] flex items-center justify-center shrink-0">
+                                        <span class="material-symbols-outlined text-lg text-[#737685] group-hover:text-[#890f00]">request_quote</span>
+                                    </div>
+                                    <div class="text-left min-w-0">
+                                        <p class="font-bold text-sm text-[#191c1e]">Add Expense</p>
+                                        <p class="text-xs text-[#737685] truncate">Record a visit expense locally</p>
+                                    </div>
+                                </button>
+                                <button
                                     :title="atNoteLimit ? `Limit reached — ${noteLimit} notes max for this customer` : 'Add Quick Note — Capture instant feedback'"
                                     @click="openAddNote()"
                                     :disabled="atNoteLimit"
@@ -2599,6 +2630,41 @@
             </div>
 
         </div>{{-- end right panel --}}
+
+        {{-- Expense creation is intentionally owned by the selected Sales Call. --}}
+        <div x-show="showExpenseModal" x-cloak x-transition
+             class="fixed inset-0 z-50 bg-black/40 flex items-end lg:items-center justify-center p-0 lg:p-6"
+             @keydown.escape.window="closeExpenseForm()">
+            <div @click.outside="closeExpenseForm()"
+                 class="w-full lg:max-w-2xl max-h-[80vh] bg-white rounded-t-3xl lg:rounded-3xl shadow-2xl overflow-hidden">
+                <div class="bg-white border-b border-gray-100 px-5 py-4 flex items-center justify-between">
+                    <div>
+                        <p class="text-[10px] font-black text-[#890f00] tracking-widest uppercase">Sales Call Expense</p>
+                        <h2 class="text-lg font-extrabold text-[#191c1e]">Select Expense Type</h2>
+                        <p class="text-xs text-[#737685]" x-text="selectedCall?.name + ' · Salescall #' + (selectedCall?.ref_number ?? selectedCall?.id)"></p>
+                    </div>
+                    <button type="button" @click="closeExpenseForm()" class="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
+                        <span class="material-symbols-outlined text-[#434654]">close</span>
+                    </button>
+                </div>
+
+                <div class="max-h-[calc(80vh-90px)] overflow-y-auto p-5 space-y-3">
+                        <div>
+                            <p class="text-xs text-[#737685] mt-1">The form must be started from this Sales Call.</p>
+                        </div>
+                        <div class="grid gap-2">
+                            <template x-for="type in expenseTypes" :key="type.code">
+                                <button type="button" @click="selectExpenseType(type)"
+                                    class="w-full text-left px-4 py-3 rounded-xl border border-gray-200 hover:border-[#890f00] hover:bg-red-50 transition-colors flex items-center justify-between gap-3">
+                                    <span class="text-sm font-semibold text-[#191c1e]" x-text="type.label"></span>
+                                    <span x-show="!expenseSupportedTypes.includes(type.code)" class="text-[10px] font-bold text-[#737685] uppercase">Unavailable</span>
+                                    <span x-show="expenseSupportedTypes.includes(type.code)" class="material-symbols-outlined text-[#890f00]">chevron_right</span>
+                                </button>
+                            </template>
+                        </div>
+                </div>
+            </div>
+        </div>
 
     </div>{{-- end split view --}}
 

@@ -17,10 +17,16 @@ class CompanySeeder extends Seeder
             ['name' => 'LAST MILE', 'code' => 'LAST_MILE'],
             ['name' => 'CAR CLUBS', 'code' => 'CAR_CLUBS'],
             ['name' => 'FLEET', 'code' => 'FLEET'],
+            ['name' => 'OE', 'code' => 'OE'],
+            ['name' => 'IB', 'code' => 'IB'],
         ];
 
         foreach ($data as $item) {
-            Company::firstOrCreate(['name' => $item['name']], $item);
+            $company = Company::firstOrNew(['name' => $item['name']]);
+            if (blank($company->code)) {
+                $company->code = $item['code'];
+            }
+            $company->save();
         }
     }
 }

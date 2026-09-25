@@ -1,3 +1,13 @@
+Before working on a task, read `docs/agent-workflow.md` and locate the relevant
+note under `docs/work/`. This file remains the Claude bootstrap surface and
+contains the Laravel Boost and Tablet project guidance below. The shared
+lifecycle, authorization boundary, durable state, worktree ownership,
+validation, and terminal-delivery rules live in `docs/agent-workflow.md` and
+must not be duplicated here.
+
+Implementation authorization permits local work and validation only. Do not
+commit or push until separate explicit Human terminal authorization is given.
+
 <laravel-boost-guidelines>
 === foundation rules ===
 
