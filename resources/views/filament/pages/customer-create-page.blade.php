@@ -4,7 +4,7 @@
             <h2 class="font-extrabold">Customer Information</h2>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div class="md:col-span-2"><label class="fi-fo-field-wrp-label">{{ match($this->profileType()) { 'fleet' => 'Fleet Account Name', 'oe' => 'OE Account Name', 'ib' => 'IB Account Name', default => 'Store Name' } }} *</label><x-filament::input wire:model="name" />@error('name')<p class="text-danger-600 text-sm">{{ $message }}</p>@enderror</div>
-                <div><label class="fi-fo-field-wrp-label">Customer Code</label><x-filament::input wire:model="unique_id" /></div>
+                <div><label class="fi-fo-field-wrp-label">Customer Code</label><x-filament::input wire:model="unique_id" readonly /></div>
                 <div><label class="fi-fo-field-wrp-label">Company *</label><select wire:model.live="company_id" class="fi-input w-full"><option value="">Select company</option>@foreach($companies as $company)<option value="{{ $company->id }}">{{ $company->name }}</option>@endforeach</select></div>
                 <div><label class="fi-fo-field-wrp-label">General Category</label><select wire:model="general_category_id" class="fi-input w-full"><option value="">Select category</option>@foreach($generalCategories as $category)<option value="{{ $category->id }}">{{ $category->name }}</option>@endforeach</select></div>
                 @if((int) $general_category_id === 1)<div><label class="fi-fo-field-wrp-label">Competitor Volume</label><select wire:model="competitor_volume" class="fi-input w-full"><option value="">Not specified</option><option value="1">High</option><option value="2">Medium</option><option value="3">Low</option></select></div>@endif
