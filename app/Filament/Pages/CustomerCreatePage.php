@@ -192,10 +192,6 @@ class CustomerCreatePage extends Page
             return;
         }
 
-        if (! $this->validateScopedPortalRules($profileType)) {
-            return;
-        }
-
         foreach (CustomerProfileFormService::categoryStreams($profileType) as $stream) {
             foreach ($this->categories[$stream] ?? [] as $year => $category) {
                 if ($category !== null && $category !== '' && ! array_key_exists($category, $this->categoryOptions($stream))) {
