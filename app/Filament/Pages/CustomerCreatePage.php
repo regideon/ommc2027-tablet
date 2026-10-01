@@ -18,6 +18,7 @@ use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class CustomerCreatePage extends Page
 {
@@ -184,6 +185,7 @@ class CustomerCreatePage extends Page
             'business_landline_number' => 'nullable|string|max:50',
             'business_mobile_number' => 'nullable|string|max:50',
             'date_established' => 'nullable|date',
+            'active.conversion_program' => ['nullable', Rule::in([...array_keys(config('customer_trade_form.conversion_programs', [])), ''])],
         ]);
 
         if (! $this->physicalGeographyIsValid()) {

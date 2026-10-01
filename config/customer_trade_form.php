@@ -10,6 +10,11 @@ return [
         'geocoder' => null, 'barangay_mapping' => null,
         'area_cluster_mapping' => null, 'serving_outlet_mapping' => null,
     ],
+    'conversion_programs' => [
+        'For Conversion' => 'For Conversion',
+        'Increase Share of Wallet' => 'Increase Share of Wallet',
+        'Head On' => 'Head On',
+    ],
     'profile_contract' => [
         'common' => ['company_id', 'access_user_ids', 'name', 'person_in_charge_id', 'rsm', 'region', 'specific_region', 'province', 'municipality', 'barangay', 'area_cluster', 'address', 'latitude', 'longitude', 'contact_person', 'business_landline_number', 'business_mobile_number', 'date_established'],
         'outlet' => ['serving_outlet_id', 'entry_detail', 'annual_categories', 'classifications', 'conversion_program', 'working_days', 'operating_hours', 'motiv_user', 'warehouse_code', 'delivery_type', 'delivery_detail', 'ulab'],
