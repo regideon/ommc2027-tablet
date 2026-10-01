@@ -2,6 +2,8 @@
 
 namespace App\Filament\Pages;
 
+use App\Models\AreaCluster;
+use App\Models\Barangay;
 use App\Models\Company;
 use App\Models\Customer;
 use App\Models\GeneralCategory;
@@ -16,6 +18,7 @@ use BackedEnum;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -173,13 +176,45 @@ class CustomerCreatePage extends Page
 
     public function updatedRegionSpecificId(): void
     {
-        // Commercial geography is independent from physical geography.
+        if ($this->area_cluster_id && ! AreaCluster::query()
+            ->whereKey($this->area_cluster_id)
+            ->where('region_specific_id', $this->region_specific_id)
+            ->exists()) {
+            $this->area_cluster_id = null;
+        }
     }
 
     public function updatedPhysicalRegionId(): void
     {
-        $this->province_id = null;
-        $this->municipality_id = null;
+        if (! $this->physical_region_id) {
+            $this->province_id = null;
+            $this->municipality_id = null;
+            $this->barangay_id = null;
+
+            return;
+        }
+
+        if ($this->province_id && ! Province::query()
+            ->whereKey($this->province_id)
+            ->where('region_id', $this->physical_region_id)
+            ->exists()) {
+            $this->province_id = null;
+            $this->municipality_id = null;
+            $this->barangay_id = null;
+
+            return;
+        }
+
+        if ($this->municipality_id && ! $this->municipalityMatchesSelection()) {
+            $this->municipality_id = null;
+            $this->barangay_id = null;
+
+            return;
+        }
+
+        if ($this->barangay_id && ! $this->barangayMatchesSelection()) {
+            $this->barangay_id = null;
+        }
     }
 
     public function updatedGeneralCategoryId(): void
@@ -191,7 +226,105 @@ class CustomerCreatePage extends Page
 
     public function updatedProvinceId(): void
     {
-        $this->municipality_id = null;
+        if ($this->municipality_id && ! $this->municipalityMatchesSelection()) {
+            $this->municipality_id = null;
+            $this->barangay_id = null;
+        } elseif ($this->barangay_id && ! $this->barangayMatchesSelection()) {
+            $this->barangay_id = null;
+        }
+    }
+
+    public function updatedMunicipalityId(): void
+    {
+        if ($this->barangay_id && ! $this->barangayMatchesSelection()) {
+            $this->barangay_id = null;
+        }
+    }
+
+    public function provinceOptions(): Collection
+    {
+        if (! $this->physical_region_id) {
+            return collect();
+        }
+
+        return Province::query()
+            ->where('region_id', $this->physical_region_id)
+            ->where('enabled', true)
+            ->orderBy('name')
+            ->get();
+    }
+
+    public function municipalityOptions(): Collection
+    {
+        if (! $this->physical_region_id) {
+            return collect();
+        }
+
+        $query = Municipality::query()
+            ->where('region_id', $this->physical_region_id)
+            ->where('enabled', true);
+
+        if ($this->province_id) {
+            $query->where('province_id', $this->province_id);
+        } else {
+            $query->whereNull('province_id');
+        }
+
+        return $query->orderBy('name')->get();
+    }
+
+    public function areaClusterOptions(): Collection
+    {
+        if (! $this->region_specific_id) {
+            return collect();
+        }
+
+        return AreaCluster::query()
+            ->where('region_specific_id', $this->region_specific_id)
+            ->where('enabled', true)
+            ->orderBy('name')
+            ->get();
+    }
+
+    public function barangayOptions(): Collection
+    {
+        if (! $this->municipality_id) {
+            return collect();
+        }
+
+        return Barangay::query()
+            ->where('municipality_id', $this->municipality_id)
+            ->where('enabled', true)
+            ->orderBy('name')
+            ->get();
+    }
+
+    protected function municipalityMatchesSelection(): bool
+    {
+        if (! $this->municipality_id || ! $this->physical_region_id) {
+            return false;
+        }
+
+        $query = Municipality::query()
+            ->whereKey($this->municipality_id)
+            ->where('region_id', $this->physical_region_id);
+
+        if ($this->province_id) {
+            $query->where('province_id', $this->province_id);
+        } else {
+            $query->whereNull('province_id');
+        }
+
+        return $query->exists();
+    }
+
+    protected function barangayMatchesSelection(): bool
+    {
+        return (bool) ($this->barangay_id && $this->municipality_id && Barangay::query()
+            ->whereKey($this->barangay_id)
+            ->where('municipality_id', $this->municipality_id)
+            ->where('enabled', true)
+            ->exists());
     }
 
     public function categoryOptions(string $stream): array
@@ -230,6 +363,10 @@ class CustomerCreatePage extends Page
         ]);
 
         if (! $this->physicalGeographyIsValid()) {
+            return;
+        }
+
+        if (! $this->commercialGeographyIsValid()) {
             return;
         }
 
@@ -294,12 +431,31 @@ class CustomerCreatePage extends Page
 
     protected function physicalGeographyIsValid(): bool
     {
-        if (! $this->municipality_id && ! $this->physical_region_id && ! $this->province_id) {
+        if (! $this->municipality_id && ! $this->physical_region_id && ! $this->province_id && ! $this->barangay_id) {
+            return true;
+        }
+
+        if ($this->province_id && $this->physical_region_id) {
+            $province = Province::find($this->province_id);
+            if (! $province || (int) $province->region_id !== (int) $this->physical_region_id) {
+                $this->addError('province_id', 'The Province does not belong to the selected physical Region.');
+
+                return false;
+            }
+        }
+
+        if (! $this->municipality_id) {
+            if ($this->barangay_id) {
+                $this->addError('barangay_id', 'The Barangay requires a selected City / Municipality.');
+
+                return false;
+            }
+
             return true;
         }
 
         $municipality = Municipality::find($this->municipality_id);
-        if (! $municipality || (int) $municipality->region_id !== (int) $this->physical_region_id) {
+        if (! $municipality || ($this->physical_region_id && (int) $municipality->region_id !== (int) $this->physical_region_id)) {
             $this->addError('municipality_id', 'The City / Municipality does not belong to the selected physical Region.');
 
             return false;
@@ -307,6 +463,32 @@ class CustomerCreatePage extends Page
 
         if ((int) $municipality->province_id !== (int) $this->province_id && ! ($municipality->province_id === null && $this->province_id === null)) {
             $this->addError('municipality_id', 'The City / Municipality does not belong to the selected Province.');
+
+            return false;
+        }
+
+        if ($this->barangay_id && (! Barangay::query()
+            ->whereKey($this->barangay_id)
+            ->where('municipality_id', $this->municipality_id)
+            ->where('enabled', true)
+            ->exists())) {
+            $this->addError('barangay_id', 'The Barangay does not belong to the selected City / Municipality.');
+
+            return false;
+        }
+
+        return true;
+    }
+
+    protected function commercialGeographyIsValid(): bool
+    {
+        if (! $this->area_cluster_id) {
+            return true;
+        }
+
+        $areaCluster = AreaCluster::find($this->area_cluster_id);
+        if (! $areaCluster || ! $this->region_specific_id || (int) $areaCluster->region_specific_id !== (int) $this->region_specific_id) {
+            $this->addError('area_cluster_id', 'The Area Cluster does not belong to the selected Specific Region.');
 
             return false;
         }

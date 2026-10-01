@@ -58,7 +58,7 @@ test('current baseline marker repairs incomplete reference tables', function () 
         ->and(DB::table('provinces')->where('id', 26)->exists())->toBeTrue();
 });
 
-test('customer add page retains the pre-alignment location controls', function () {
+test('customer add page uses canonical dependent location controls', function () {
     $user = User::factory()->create();
     $this->actingAs($user);
     app(LocationReferenceBaselineService::class)->apply();
@@ -66,16 +66,18 @@ test('customer add page retains the pre-alignment location controls', function (
     Livewire::test(CustomerCreatePage::class)
         ->set('physical_region_id', 3)
         ->set('province_id', 4)
-        ->assertSee('Cavite')
-        ->assertSee('Unavailable')
-        ->assertDontSee('Select barangay')
-        ->assertDontSee('Select area cluster');
+        ->assertSee('Abra')
+        ->set('region_specific_id', 52)
+        ->assertSee('GMA - Area 6')
+        ->set('municipality_id', 19)
+        ->assertSee('Agtangao');
 });
 
-test('Add Customer Livewire rendering exposes dependent location options', function () {
+test('Add Customer Livewire rendering keeps commercial geography independent', function () {
     $user = User::factory()->create();
     $this->actingAs($user);
     app(LocationReferenceBaselineService::class)->apply();
+    $areaClusterId = DB::table('area_clusters')->where('region_specific_id', 52)->value('id');
 
     $component = Livewire::test(CustomerCreatePage::class)
         ->set('physical_region_id', 7)
@@ -84,10 +86,16 @@ test('Add Customer Livewire rendering exposes dependent location options', funct
         ->set('province_id', 26)
         ->assertSee('Agoncillo')
         ->set('municipality_id', 444)
-        ->assertSee('Unavailable');
+        ->assertSee('Adia')
+        ->set('region_specific_id', 52)
+        ->assertSee('GMA - Area 6')
+        ->set('area_cluster_id', $areaClusterId)
+        ->set('physical_region_id', 8)
+        ->assertSet('region_specific_id', 52)
+        ->assertSet('area_cluster_id', $areaClusterId);
 
-    expect($component->get('physical_region_id'))->toBe(7)
-        ->and($component->get('province_id'))->toBe(26)
-        ->and($component->get('municipality_id'))->toBe(444)
-        ->and($component->get('region_specific_id'))->toBeNull();
+    expect($component->get('physical_region_id'))->toBe(8)
+        ->and($component->get('province_id'))->toBeNull()
+        ->and($component->get('municipality_id'))->toBeNull()
+        ->and($component->get('region_specific_id'))->toBe(52);
 });

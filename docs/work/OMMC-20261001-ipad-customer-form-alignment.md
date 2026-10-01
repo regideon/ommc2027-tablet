@@ -792,3 +792,79 @@ the existing trusted-session suite passed (14 tests, 54 assertions). The
 remaining three `isReachable` assertions in `FirstLoginPersistenceTest` call a
 missing pre-existing `SyncService::lastError()` method and fail before any
 authentication behavior is evaluated; no source was changed for this Work.
+
+## Browser acceptance reclassification and location completion
+
+Human clarification separates functional acceptance from device integration:
+browser behavior is the acceptance surface for this Work; physical iPad
+login, retained-device authentication, NativePHP networking/packaging, and
+Portal sync integration are deferred to separate Works. The archive branch is
+therefore the active continuation point, not a terminal or accepted release.
+
+The Add Customer location controls were restored from the archived backend
+implementation. Region, Province, Municipality, and Barangay now use the
+canonical local physical hierarchy. Specific Region and Area Cluster use the
+independent commercial hierarchy. Region changes clear only incompatible
+physical descendants and do not mutate Specific Region or Area Cluster.
+Specific Region changes clear only an incompatible Area Cluster; Municipality
+changes clear only an incompatible Barangay. No network call was added to
+populate either selector.
+
+The Portal authority review confirms that Conversion Program is currently a
+nullable free-text `TextInput` at `profile_data.active.conversion_program`,
+with `maxLength(255)` and no authoritative static option set. Tablet retains
+that matching text field and persistence; no invented dropdown values or new
+reference-data mechanism were introduced.
+
+Focused browser-contract component coverage passes 15 tests and 158
+assertions, including active Area Cluster/Barangay options, dependent
+clearing, Region/Specific Region independence, company profile namespaces,
+Customer Code reservation state, Conversion Program persistence, and local
+save behavior. PHP syntax, Pint, Blade cache, and diff checks pass. Actual
+interactive browser acceptance remains pending because the available browser
+automation surface failed to start in this environment; no physical iPad or
+NativePHP acceptance is claimed.
+
+## Browser binding investigation
+
+The requested binding/state review found no shared application-level binding
+defect in the current Add Customer implementation. Company, physical Region,
+Province, Municipality, Specific Region, Area Cluster, and Barangay are native
+`select` controls owned by the page component; dependent controls use
+`wire:model.live`, and the corresponding `updated*` hooks and option-provider
+methods are present. The typed integer properties are the component state
+targets, and the focused Livewire tests exercise the resulting state
+transitions.
+
+The local reference-data evidence is present: Region IV-A (CALABARZON) is
+Region ID 7 with five enabled Provinces (including Batangas, Cavite, Laguna,
+Quezon, and Rizal); Laguna has enabled municipalities; Region IV-A (Laguna,
+Batangas, Quezon) is Specific Region ID 53 with one enabled Area Cluster,
+`SL - Area 1`; selected municipalities have enabled Barangays.
+
+The reproducible browser symptom was traced to the local endpoint rather than
+to the component state contract. This repository serves `/app/login` and
+`/app/customers/create` successfully on port 8001, while the previously tested
+port 8000 returns 404 for those Tablet routes. The browser therefore must be
+retested against the Tablet server/port before any application workaround is
+considered. Customer Code remains Portal-authoritative: selecting Company
+invokes the existing reservation hook, but its browser result still requires a
+reachable Portal reservation endpoint and authenticated sync token. No local
+sequence generation was added.
+
+Interactive browser revalidation is still pending because the CUA browser
+surface cannot start. Work remains ACTIVE; no commit or push was performed.
+
+## Stopped / archived implementation attempt
+
+This Customer Alignment implementation direction is STOPPED / ARCHIVED
+IMPLEMENTATION ATTEMPT and is not terminally accepted. The attempt is being
+preserved on the archive branch for history and reference before returning to
+the original stable Tablet branch.
+
+The unresolved Human-browser issue remains that dependent Customer location
+selectors do not reliably populate in the Human browser even though the local
+reference data, server-side option queries, and captured Livewire responses
+are correct. No further implementation is authorized as part of this archive
+operation. Customer Code, broader Customer Form alignment, iPad login/sync,
+NativePHP packaging, and related work remain outside this archived attempt.
