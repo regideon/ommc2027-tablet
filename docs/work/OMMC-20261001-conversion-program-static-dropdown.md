@@ -2,7 +2,12 @@
 
 ## Status
 
-READY_FOR_TERMINAL_REVIEW
+TERMINAL_DELIVERED
+
+## Authorization
+
+- Implementation authorization: Granted by Human GO.
+- Terminal authorization: Granted by explicit Human TERMINAL: GO in the reconciliation instruction.
 
 ## Objective
 
@@ -27,12 +32,22 @@ Read-only pre-implementation counts:
 
 The migration is intentionally one-way; down() does not restore the legacy value.
 
-## Verification
+## Implementation and validation
 
 - Added focused contract tests for the exact option set and null/invalid validation behavior.
-- git diff --check passed during implementation.
-- Human acceptance of the Portal and Tablet forms remains required.
+- Portal and Tablet PHP syntax checks passed for changed PHP files.
+- Focused Conversion Program tests passed in both repositories.
+- git diff --check passed.
+- Full-suite baseline failures remained unrelated to this bounded Work.
 
-## Terminal handoff
+## Human acceptance
 
-Implementation is complete and ready for separate terminal review. No commit or push was performed under this Work.
+Human acceptance: PASS. The Human confirmed that the Conversion Program functionality works. No additional acceptance evidence is claimed.
+
+## Delivery evidence
+
+- Portal implementation commit: b7ca23a1f78d2f258f2488127667d31c60c9c808, pushed to origin/main.
+- Tablet implementation commit: 6339fe47606f488b43e1bf7ac044e3dd676081ed, pushed to origin/ommc-ipad-v2.
+- This terminal reconciliation updates only this Work note; its independent terminal reconciliation commit and push are recorded in Git history and the delivery report.
+- No application behavior, database contents, migrations, unrelated Work records, or unrelated files were changed during reconciliation.
+- RSM Work was not started.
