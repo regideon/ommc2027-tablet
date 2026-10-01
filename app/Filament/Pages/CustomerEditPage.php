@@ -45,9 +45,11 @@ class CustomerEditPage extends CustomerCreatePage
             'access_user_ids' => 'nullable|array',
             'access_user_ids.*' => 'integer|exists:users,id',
             'region_specific_id' => 'nullable|exists:region_specifics,id',
+            'area_cluster_id' => 'nullable|exists:area_clusters,id',
             'physical_region_id' => 'nullable|exists:regions,id',
             'province_id' => 'nullable|exists:provinces,id',
             'municipality_id' => 'nullable|exists:municipalities,id',
+            'barangay_id' => 'nullable|exists:barangays,id',
             'person_in_charge_id' => 'nullable|integer|exists:users,id',
             'general_category_id' => 'nullable|exists:general_categories,id',
             'competitor_volume' => 'nullable|integer|in:1,2,3',
@@ -70,6 +72,7 @@ class CustomerEditPage extends CustomerCreatePage
             foreach ($this->categories[$stream] ?? [] as $category) {
                 if ($category !== null && $category !== '' && ! array_key_exists($category, $this->categoryOptions($stream))) {
                     $this->addError('categories', "Every {$stream} annual category must be selected from the allowed options.");
+
                     return;
                 }
             }
@@ -86,7 +89,10 @@ class CustomerEditPage extends CustomerCreatePage
                 'unique_id' => $this->unique_id,
                 'company_id' => $this->company_id,
                 'region_specific_id' => $this->region_specific_id,
+                'area_cluster_id' => $this->area_cluster_id,
+                'province_id' => $this->province_id,
                 'municipality_id' => $this->municipality_id,
+                'barangay_id' => $this->barangay_id,
                 'general_category_id' => $this->general_category_id,
                 'competitor_volume' => $this->competitor_volume,
                 'address' => $this->address,

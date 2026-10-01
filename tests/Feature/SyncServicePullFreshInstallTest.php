@@ -12,6 +12,7 @@ use App\Models\SubCategory;
 use App\Models\User;
 use App\Services\SyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
 uses(RefreshDatabase::class);
@@ -179,4 +180,31 @@ test('pull skips a single dangling brand reference instead of aborting the whole
 
     $valid = Salescall::where('local_uuid', 'sc-uuid-valid')->firstOrFail();
     expect(SalescallBrand::where('salescall_id', $valid->id)->count())->toBe(1);
+});
+
+test('pull hydrates access users before inserting customer assignments', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+
+    $user = User::factory()->create(['api_token' => 'test-token']);
+    $this->actingAs($user);
+
+    Http::fake([
+        'portal.test/api/sync/pull' => Http::response([
+            'users' => [
+                ['id' => 77, 'name' => 'Portal Access User', 'email' => 'access@example.test', 'rsm_id' => null],
+            ],
+            'customers' => [
+                ['id' => 501, 'name' => 'Access Customer', 'is_active' => true],
+            ],
+            'customer_user' => [
+                ['customer_id' => 501, 'user_id' => 77],
+            ],
+        ], 200),
+    ]);
+
+    $result = app(SyncService::class)->pull();
+
+    expect($result->success)->toBeTrue($result->message)
+        ->and(DB::table('users')->where('id', 77)->exists())->toBeTrue()
+        ->and(DB::table('customer_user')->where(['customer_id' => 501, 'user_id' => 77])->exists())->toBeTrue();
 });

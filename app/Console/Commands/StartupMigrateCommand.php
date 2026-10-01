@@ -2,10 +2,11 @@
 
 namespace App\Console\Commands;
 
-use App\Services\StartupMigrationService;
+use App\Services\LocationReferenceBaselineService;
 use App\Services\StartupMigrationResult;
-use App\Support\StartupMigrationArtifact;
+use App\Services\StartupMigrationService;
 use App\Support\StartupDiagnosticTrace;
+use App\Support\StartupMigrationArtifact;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -18,7 +19,7 @@ class StartupMigrateCommand extends Command
 
     protected $description = 'Apply pending migrations against the active runtime database before app startup.';
 
-    public function handle(StartupMigrationService $service): int
+    public function handle(StartupMigrationService $service, LocationReferenceBaselineService $baseline): int
     {
         $paths = collect((array) $this->option('path'))
             ->filter(fn (mixed $path): bool => is_string($path) && $path !== '')
@@ -40,6 +41,33 @@ class StartupMigrateCommand extends Command
 
         try {
             $result = $service->run($paths !== [] ? $paths : null);
+
+            if (! $result->isFailed() && $paths === []) {
+                try {
+                    $baselineResult = $baseline->apply();
+                    $baseline->writeStartupDiagnostics($baselineResult);
+                    $this->line('LOCATION_BASELINE_STATUS='.strtoupper($baselineResult['status']));
+                    $this->line('LOCATION_BASELINE_VERSION='.$baselineResult['version']);
+                } catch (Throwable $e) {
+                    $baseline->writeStartupDiagnostics([
+                        'status' => 'failed',
+                        'error_class' => $e::class,
+                        'error_message' => $e->getMessage(),
+                    ]);
+                    Log::error('Location reference baseline application failed', [
+                        'exception_class' => $e::class,
+                        'exception_message' => $e->getMessage(),
+                    ]);
+
+                    $result = StartupMigrationResult::failed(
+                        connection: $result->connection,
+                        databasePath: $result->databasePath,
+                        errorClass: $e::class,
+                        errorMessage: 'Location reference baseline failed: '.$e->getMessage(),
+                        appliedMigrations: $result->appliedMigrations,
+                    );
+                }
+            }
         } catch (Throwable $e) {
             StartupDiagnosticTrace::checkpoint('startup_migrate_handle_exception', [
                 'run_id' => $runId,

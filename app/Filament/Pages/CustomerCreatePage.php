@@ -7,15 +7,17 @@ use App\Models\Customer;
 use App\Models\GeneralCategory;
 use App\Models\Municipality;
 use App\Models\Province;
-use App\Models\RegionSpecific;
 use App\Models\Region;
+use App\Models\RegionSpecific;
 use App\Models\User;
 use App\Services\CustomerProfileFormService;
+use App\Services\SyncService;
 use BackedEnum;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class CustomerCreatePage extends Page
@@ -31,27 +33,55 @@ class CustomerCreatePage extends Page
     protected static ?string $title = 'Add Customer';
 
     public string $name = '';
+
     public ?string $unique_id = null;
+
+    public ?string $customer_code_reservation_token = null;
+
     public ?int $company_id = null;
+
     public ?int $region_specific_id = null;
+
+    public ?int $area_cluster_id = null;
+
     public ?int $physical_region_id = null;
+
     public ?int $province_id = null;
+
     public ?int $municipality_id = null;
+
+    public ?int $barangay_id = null;
+
     public ?int $general_category_id = null;
+
     public ?int $competitor_volume = null;
+
     public string $address = '';
+
     public ?string $latitude = null;
+
     public ?string $longitude = null;
+
     public ?string $contact_person = null;
+
     public ?string $contact_number = null;
+
     public ?string $business_landline_number = null;
+
     public ?string $business_mobile_number = null;
+
     public ?string $date_established = null;
+
     public ?int $person_in_charge_id = null;
+
     public array $access_user_ids = [];
+
     public bool $is_active = true;
+
     public array $trade = [];
+
     public array $active = [];
+
     public array $categories = [];
 
     protected ?string $companyChangeOldProfile = null;
@@ -103,10 +133,34 @@ class CustomerCreatePage extends Page
 
     public function updatedCompanyId(): void
     {
+        $this->unique_id = null;
+        $this->customer_code_reservation_token = null;
+
+        if ($this->company_id) {
+            Log::info('Customer Code reservation requested from Add Customer.', [
+                'company_id' => $this->company_id,
+            ]);
+            $reservation = app(SyncService::class)->reserveCustomerCode($this->company_id);
+            if ($reservation !== null) {
+                $this->unique_id = $reservation['code'];
+                $this->customer_code_reservation_token = $reservation['token'];
+                Log::info('Customer Code reservation applied to Add Customer.', [
+                    'company_id' => $this->company_id,
+                    'code_returned' => true,
+                    'reservation_token_returned' => true,
+                ]);
+            } else {
+                Log::warning('Customer Code reservation was unavailable to Add Customer.', [
+                    'company_id' => $this->company_id,
+                ]);
+            }
+        }
+
         $profile = $this->profileType();
 
         if ($this->companyChangeOldProfile !== null && $this->companyChangeOldProfile === $profile) {
             $this->companyChangeOldProfile = null;
+
             return;
         }
 
@@ -157,9 +211,11 @@ class CustomerCreatePage extends Page
             'access_user_ids' => 'nullable|array',
             'access_user_ids.*' => 'integer|exists:users,id',
             'region_specific_id' => 'nullable|exists:region_specifics,id',
+            'area_cluster_id' => 'nullable|exists:area_clusters,id',
             'physical_region_id' => 'nullable|exists:regions,id',
             'province_id' => 'nullable|exists:provinces,id',
             'municipality_id' => 'nullable|exists:municipalities,id',
+            'barangay_id' => 'nullable|exists:barangays,id',
             'person_in_charge_id' => 'nullable|integer|exists:users,id',
             'general_category_id' => 'nullable|exists:general_categories,id',
             'competitor_volume' => 'nullable|integer|in:1,2,3',
@@ -185,6 +241,7 @@ class CustomerCreatePage extends Page
             foreach ($this->categories[$stream] ?? [] as $year => $category) {
                 if ($category !== null && $category !== '' && ! array_key_exists($category, $this->categoryOptions($stream))) {
                     $this->addError('categories', "Every {$stream} annual category must be selected from the allowed options.");
+
                     return;
                 }
             }
@@ -200,9 +257,13 @@ class CustomerCreatePage extends Page
                 'local_uuid' => (string) Str::uuid(),
                 'name' => $this->name,
                 'unique_id' => $this->unique_id,
+                'customer_code_reservation_token' => $this->customer_code_reservation_token,
                 'company_id' => $this->company_id,
                 'region_specific_id' => $this->region_specific_id,
+                'area_cluster_id' => $this->area_cluster_id,
+                'province_id' => $this->province_id,
                 'municipality_id' => $this->municipality_id,
+                'barangay_id' => $this->barangay_id,
                 'general_category_id' => $this->general_category_id,
                 'competitor_volume' => $this->competitor_volume,
                 'address' => $this->address,
@@ -240,11 +301,13 @@ class CustomerCreatePage extends Page
         $municipality = Municipality::find($this->municipality_id);
         if (! $municipality || (int) $municipality->region_id !== (int) $this->physical_region_id) {
             $this->addError('municipality_id', 'The City / Municipality does not belong to the selected physical Region.');
+
             return false;
         }
 
         if ((int) $municipality->province_id !== (int) $this->province_id && ! ($municipality->province_id === null && $this->province_id === null)) {
             $this->addError('municipality_id', 'The City / Municipality does not belong to the selected Province.');
+
             return false;
         }
 
@@ -256,6 +319,7 @@ class CustomerCreatePage extends Page
         $accessIds = array_filter($this->access_user_ids);
         if (User::whereIn('id', $accessIds)->whereNull('rsm_id')->exists()) {
             $this->addError('access_user_ids', 'Each assigned Access user must have an RSM relationship.');
+
             return false;
         }
 

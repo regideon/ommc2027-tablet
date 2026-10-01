@@ -2,10 +2,9 @@
 
 namespace App\Services;
 
+use App\Models\Customer;
 use App\Models\CustomerBrand;
 use App\Models\CustomerCategory;
-use App\Models\CustomerCategoryEvent;
-use App\Models\Customer;
 use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
 use App\Models\CustomerProfileAttachment;
@@ -21,8 +20,10 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Spatie\Permission\Models\Role;
 use Throwable;
 
@@ -104,6 +105,97 @@ class SyncService
         }
     }
 
+    /**
+     * Reserves a Portal-authoritative Customer Code for the Add Customer form.
+     * Failure is intentionally non-blocking so offline creation remains safe.
+     *
+     * @return array{token: string, code: string}|null
+     */
+    public function reserveCustomerCode(int $companyId): ?array
+    {
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (blank($this->serverUrl)) {
+            Log::warning('Customer Code reservation skipped because SYNC_SERVER_URL is empty.', [
+                'company_id' => $companyId,
+                'endpoint' => '/api/sync/reserve-customer-code',
+            ]);
+
+            return null;
+        }
+
+        if (! $user || blank($user->api_token)) {
+            Log::warning('Customer Code reservation skipped because no authenticated sync token is available.', [
+                'company_id' => $companyId,
+                'endpoint' => '/api/sync/reserve-customer-code',
+            ]);
+
+            return null;
+        }
+
+        try {
+            $response = $this->client($user->api_token)
+                ->post("{$this->serverUrl}/api/sync/reserve-customer-code", ['company_id' => $companyId]);
+
+            if ($response->status() === 401) {
+                Log::warning('Customer Code reservation authentication failed.', [
+                    'company_id' => $companyId,
+                    'endpoint' => '/api/sync/reserve-customer-code',
+                ]);
+
+                return null;
+            }
+
+            if ($response->status() === 404) {
+                Log::warning('Customer Code reservation route is unavailable.', [
+                    'company_id' => $companyId,
+                    'endpoint' => '/api/sync/reserve-customer-code',
+                ]);
+
+                return null;
+            }
+
+            if (! $response->successful()) {
+                Log::warning('Customer Code reservation returned a non-success response.', [
+                    'company_id' => $companyId,
+                    'endpoint' => '/api/sync/reserve-customer-code',
+                    'status' => $response->status(),
+                ]);
+
+                return null;
+            }
+
+            if (! filled($response->json('token')) || ! filled($response->json('code'))) {
+                Log::warning('Customer Code reservation returned an unexpected response.', [
+                    'company_id' => $companyId,
+                    'endpoint' => '/api/sync/reserve-customer-code',
+                ]);
+
+                return null;
+            }
+
+            Log::info('Customer Code reservation succeeded.', [
+                'company_id' => $companyId,
+                'status' => $response->status(),
+                'code_returned' => true,
+                'reservation_token_returned' => true,
+            ]);
+
+            return [
+                'token' => (string) $response->json('token'),
+                'code' => (string) $response->json('code'),
+            ];
+        } catch (Throwable $exception) {
+            Log::warning('Customer Code reservation request could not reach Portal.', [
+                'company_id' => $companyId,
+                'endpoint' => '/api/sync/reserve-customer-code',
+                'exception' => $exception::class,
+            ]);
+
+            return null;
+        }
+    }
+
     public function refreshToken(string $email, string $password): SyncResult
     {
         try {
@@ -163,6 +255,29 @@ class SyncService
             }
 
             $data = $response->json();
+
+            // Customer access assignments reference Portal user IDs. Hydrate
+            // those parent rows before customers/customer_user so SQLite's
+            // foreign-key enforcement cannot reject a valid assignment.
+            foreach ($data['users'] ?? [] as $remoteUser) {
+                $userValues = [
+                    'name' => $remoteUser['name'],
+                    'email' => $remoteUser['email'],
+                    'rsm_id' => $remoteUser['rsm_id'] ?? null,
+                    'updated_at' => now(),
+                ];
+
+                if (DB::table('users')->where('id', $remoteUser['id'])->exists()) {
+                    DB::table('users')->where('id', $remoteUser['id'])->update($userValues);
+                } else {
+                    DB::table('users')->insert([
+                        'id' => $remoteUser['id'],
+                        ...$userValues,
+                        'password' => Hash::make(Str::random(40)),
+                        'created_at' => now(),
+                    ]);
+                }
+            }
 
             // Reference/lookup tables must be populated before anything below that
             // holds a foreign key into them (salescall_brands -> material_groups/brands,
@@ -241,6 +356,30 @@ class SyncService
                 );
             }
 
+            foreach ($data['area_clusters'] ?? [] as $areaCluster) {
+                DB::table('area_clusters')->updateOrInsert(
+                    ['id' => $areaCluster['id']],
+                    [
+                        'region_specific_id' => $areaCluster['region_specific_id'] ?? null,
+                        'name' => $areaCluster['name'],
+                        'enabled' => $areaCluster['enabled'] ?? true,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
+            foreach ($data['barangays'] ?? [] as $barangay) {
+                DB::table('barangays')->updateOrInsert(
+                    ['id' => $barangay['id']],
+                    [
+                        'municipality_id' => $barangay['municipality_id'],
+                        'name' => $barangay['name'],
+                        'enabled' => $barangay['enabled'] ?? true,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
             $protectedStatuses = ['pending', 'failed', 'conflict'];
             $serverToLocalCustomer = [];
             $protectedCustomerIds = DB::table('customers')->whereIn('sync_status', $protectedStatuses)->pluck('id', 'server_id')->filter()->all();
@@ -252,7 +391,9 @@ class SyncService
                     ->first();
                 $localId = $existing?->id ?? $customer['id'];
                 $serverToLocalCustomer[$customer['id']] = $localId;
-                if (isset($protectedCustomerIds[$customer['id']])) continue;
+                if (isset($protectedCustomerIds[$customer['id']])) {
+                    continue;
+                }
 
                 DB::table('customers')->updateOrInsert(
                     ['id' => $localId],
@@ -261,7 +402,10 @@ class SyncService
                         'company_id' => $customer['company_id'] ?? null,
                         'general_category_id' => $customer['general_category_id'] ?? null,
                         'region_specific_id' => $customer['region_specific_id'] ?? null,
+                        'area_cluster_id' => $customer['area_cluster_id'] ?? null,
+                        'province_id' => $customer['province_id'] ?? null,
                         'municipality_id' => $customer['municipality_id'] ?? null,
+                        'barangay_id' => $customer['barangay_id'] ?? null,
                         'name' => $customer['name'],
                         'unique_id' => $customer['unique_id'] ?? null,
                         'contact_person' => $customer['contact_person'] ?? null,
@@ -284,9 +428,33 @@ class SyncService
                 );
             }
 
+            if (array_key_exists('customer_user', $data)) {
+                $reconciledCustomerIds = array_values(array_diff(
+                    array_values($serverToLocalCustomer),
+                    array_values($protectedCustomerIds),
+                ));
+                DB::table('customer_user')->whereIn('customer_id', $reconciledCustomerIds)->delete();
+
+                foreach ($data['customer_user'] as $assignment) {
+                    $localCustomerId = $serverToLocalCustomer[$assignment['customer_id']] ?? $assignment['customer_id'];
+                    if (isset($protectedCustomerIds[$assignment['customer_id']])) {
+                        continue;
+                    }
+
+                    DB::table('customer_user')->insert([
+                        'customer_id' => $localCustomerId,
+                        'user_id' => $assignment['user_id'],
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                }
+            }
+
             foreach ($data['customer_trade_profiles'] ?? [] as $profile) {
                 $localCustomerId = $serverToLocalCustomer[$profile['customer_id']] ?? $profile['customer_id'];
-                if (isset($protectedCustomerIds[$profile['customer_id']])) continue;
+                if (isset($protectedCustomerIds[$profile['customer_id']])) {
+                    continue;
+                }
                 DB::table('customer_trade_profiles')->updateOrInsert(
                     ['customer_id' => $localCustomerId],
                     [
@@ -313,7 +481,9 @@ class SyncService
 
             foreach ($data['customer_category_histories'] ?? [] as $history) {
                 $localCustomerId = $serverToLocalCustomer[$history['customer_id']] ?? $history['customer_id'];
-                if (isset($protectedCustomerIds[$history['customer_id']])) continue;
+                if (isset($protectedCustomerIds[$history['customer_id']])) {
+                    continue;
+                }
                 DB::table('customer_category_histories')->updateOrInsert(
                     ['customer_id' => $localCustomerId, 'profile_type' => $history['profile_type'] ?? null, 'stream' => $history['stream'] ?? null, 'category_year' => $history['category_year']],
                     ['category' => $history['category'], 'updated_at' => now()]
@@ -322,7 +492,9 @@ class SyncService
 
             foreach ($data['customer_category_events'] ?? [] as $event) {
                 $localCustomerId = $serverToLocalCustomer[$event['customer_id']] ?? $event['customer_id'];
-                if (isset($protectedCustomerIds[$event['customer_id']])) continue;
+                if (isset($protectedCustomerIds[$event['customer_id']])) {
+                    continue;
+                }
                 $supersedesId = filled($event['supersedes_event_key'] ?? null)
                     ? DB::table('customer_category_events')->where('event_key', $event['supersedes_event_key'])->value('id')
                     : null;
@@ -660,11 +832,15 @@ class SyncService
                         'sync_intent' => $customer->server_id ? 'update' : 'create',
                         'name' => $customer->name,
                         'unique_id' => $customer->unique_id,
+                        'customer_code_reservation_token' => $customer->customer_code_reservation_token,
                         'company_id' => $customer->company_id,
                         'general_category_id' => $customer->general_category_id,
                         'competitor_volume' => $customer->competitor_volume,
                         'region_specific_id' => $customer->region_specific_id,
+                        'area_cluster_id' => $customer->area_cluster_id,
+                        'province_id' => $customer->province_id,
                         'municipality_id' => $customer->municipality_id,
+                        'barangay_id' => $customer->barangay_id,
                         'address' => $customer->address,
                         'latitude' => $customer->latitude,
                         'longitude' => $customer->longitude,
@@ -676,6 +852,7 @@ class SyncService
                         'is_active' => $customer->is_active,
                         'profile_type' => $customer->tradeProfile?->profile_type,
                         'person_in_charge_id' => $customer->person_in_charge_id,
+                        ...(($accessUserIds = $customer->users->modelKeys()) !== [] ? ['access_user_ids' => $accessUserIds] : []),
                         'trade_profile' => $customer->tradeProfile?->toArray() ?? [],
                         'profile_data' => $customer->tradeProfile?->profile_data ?? [],
                         'category_histories' => $customer->categoryHistories->map(fn ($history) => [
@@ -702,7 +879,7 @@ class SyncService
                     }
 
                     if ($response->successful()) {
-                        $this->markSynced($customer, ['server_id' => $response->json('server_id'), 'server_updated_at' => $response->json('updated_at'), 'synced_at' => now()]);
+                        $this->markSynced($customer, ['server_id' => $response->json('server_id'), 'unique_id' => $response->json('unique_id'), 'customer_code_reservation_token' => null, 'server_updated_at' => $response->json('updated_at'), 'synced_at' => now()]);
                         $pushed++;
                     } elseif ($response->status() === 409 && $response->json('code') === 'customer_conflict') {
                         $customer->update(['sync_status' => 'conflict', 'sync_error' => $response->json('message', 'Customer changed on Portal.')]);

@@ -3,6 +3,7 @@
 use App\Filament\Pages\CustomerCreatePage;
 use App\Filament\Pages\CustomerPage;
 use App\Models\User;
+use App\Services\SyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -17,9 +18,17 @@ function seedCustomerCreateFixtures(): User
 
     DB::table('companies')->insert(['id' => 1, 'name' => 'OMMC', 'code' => 'OMMC', 'created_at' => $now, 'updated_at' => $now]);
     DB::table('regions')->insert(['id' => 1, 'code' => 'MM', 'name' => 'Metro Manila', 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('regions')->insert(['id' => 2, 'code' => 'R2', 'name' => 'Region II', 'created_at' => $now, 'updated_at' => $now]);
     DB::table('region_specifics')->insert(['id' => 1, 'region_id' => 1, 'name' => 'NCR', 'sort' => 1, 'created_at' => $now, 'updated_at' => $now]);
-    DB::table('provinces')->insert(['id' => 1, 'region_specific_id' => 1, 'name' => 'Metro Manila', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('region_specifics')->insert(['id' => 2, 'region_id' => 2, 'name' => 'Other Specific Region', 'sort' => 2, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('provinces')->insert(['id' => 1, 'region_id' => 1, 'region_specific_id' => 1, 'name' => 'Metro Manila', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('provinces')->insert(['id' => 2, 'region_id' => 2, 'region_specific_id' => 2, 'name' => 'Unrelated Province', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
     DB::table('municipalities')->insert(['id' => 1, 'region_id' => 1, 'province_id' => 1, 'name' => 'Quezon City', 'sort' => 1, 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('municipalities')->insert(['id' => 2, 'region_id' => 2, 'province_id' => 2, 'name' => 'Unrelated Municipality', 'sort' => 1, 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('barangays')->insert(['id' => 1, 'municipality_id' => 1, 'name' => 'Barangay Central', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('barangays')->insert(['id' => 2, 'municipality_id' => 2, 'name' => 'Unrelated Barangay', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('area_clusters')->insert(['id' => 1, 'region_specific_id' => 1, 'name' => 'NCR Cluster', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('area_clusters')->insert(['id' => 2, 'region_specific_id' => 2, 'name' => 'Other Cluster', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
     DB::table('general_categories')->insert(['id' => 1, 'name' => 'Mixed Outlet', 'priority_visit' => null, 'duration_per_visit' => null, 'sort' => 1, 'created_at' => $now, 'updated_at' => $now]);
 
     return User::factory()->create();
@@ -33,6 +42,7 @@ function validCustomerCreateState(): array
         'name' => 'Diagnostic Customer',
         'unique_id' => 'DIAG-001',
         'company_id' => 1,
+        'physical_region_id' => 1,
         'region_specific_id' => 1,
         'province_id' => 1,
         'municipality_id' => 1,
@@ -83,6 +93,8 @@ test('customer add page renders against the complete migrated sqlite schema', fu
         ->and(Schema::hasTable('region_specifics'))->toBeTrue()
         ->and(Schema::hasTable('provinces'))->toBeTrue()
         ->and(Schema::hasTable('municipalities'))->toBeTrue()
+        ->and(Schema::hasTable('barangays'))->toBeTrue()
+        ->and(Schema::hasTable('area_clusters'))->toBeTrue()
         ->and(Schema::hasTable('general_categories'))->toBeTrue()
         ->and(Schema::hasColumns('customers', ['local_uuid', 'server_id', 'sync_status', 'sync_attempts', 'sync_error', 'synced_at']))->toBeTrue();
 
@@ -91,7 +103,6 @@ test('customer add page renders against the complete migrated sqlite schema', fu
         ->set('trade.entry_detail', 'AB')
         ->assertOk()
         ->assertSee('OMMC')
-        ->assertSee('NCR')
         ->assertSee('Mixed Outlet')
         ->assertSee('Store Name')
         ->assertSee('Customer Code')
@@ -112,17 +123,36 @@ test('customer add page renders against the complete migrated sqlite schema', fu
         ->assertSee('ULAB')
         ->assertSee('AB Annual Categories')
         ->assertSee('Owner Profile')
-        ->assertSee('2018 *')
-        ->assertSee('2026 *')
+        ->assertSee('2018')
+        ->assertSee('2026')
         ->assertSee('wire:model="latitude"', false)
         ->assertSee('wire:model.live="trade.entry_detail"', false)
         ->assertSee('wire:model="trade.classifications"', false)
         ->assertSee('wire:model="categories.ab.2018"', false);
 
-    $component->set('region_specific_id', 1)
-        ->set('province_id', 1)
+    $component->set('physical_region_id', 1)
         ->assertSee('Metro Manila')
-        ->assertSee('Quezon City');
+        ->assertDontSee('Unrelated Province')
+        ->assertSee('NCR')
+        ->assertSee('Other Specific Region')
+        ->set('region_specific_id', 1)
+        ->assertSee('Unavailable')
+        ->set('province_id', 1)
+        ->assertSee('Quezon City')
+        ->assertDontSee('Unrelated Municipality')
+        ->set('municipality_id', 1)
+        ->assertSet('province_id', 1)
+        ->assertSet('municipality_id', 1)
+        ->assertSet('region_specific_id', 1)
+        ->set('physical_region_id', 1);
+
+    $component
+        ->set('region_specific_id', 2)
+        ->assertSet('region_specific_id', 2)
+        ->set('physical_region_id', 2)
+        ->assertSet('province_id', null)
+        ->assertSet('municipality_id', null)
+        ->assertSee('customer-form-multi-select', false);
 
     $state = $component->get('categories.ab');
     expect(array_keys($state))->toBe(range(2018, 2026));
@@ -151,7 +181,10 @@ test('customer add page saves the complete local aggregate without network acces
         ->and($customer->sync_attempts)->toBe(0)
         ->and($customer->company_id)->toBe(1)
         ->and($customer->region_specific_id)->toBe(1)
-        ->and($customer->municipality_id)->toBe(1);
+        ->and($customer->province_id)->toBe(1)
+        ->and($customer->municipality_id)->toBe(1)
+        ->and($customer->area_cluster_id)->toBeNull()
+        ->and($customer->barangay_id)->toBeNull();
 
     $profile = DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->first();
     expect($profile)->not->toBeNull()
@@ -168,4 +201,80 @@ test('customer add page saves the complete local aggregate without network acces
         ->and($histories->pluck('category')->unique()->all())->toBe(['AB Loyal']);
 
     Http::assertNothingSent();
+});
+
+test('customer code reservation uses the configured authenticated Portal endpoint', function () {
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    config()->set('sync.server_url', 'https://portal.test');
+    Http::fake([
+        'https://portal.test/api/sync/reserve-customer-code' => Http::response([
+            'token' => '3b241101-e2bb-4255-8caf-4136c566a962',
+            'code' => 'FLEET3728',
+        ]),
+    ]);
+
+    $reservation = app(SyncService::class)->reserveCustomerCode(6);
+
+    expect($reservation)->toBe([
+        'token' => '3b241101-e2bb-4255-8caf-4136c566a962',
+        'code' => 'FLEET3728',
+    ]);
+
+    Http::assertSent(fn ($request): bool => $request->url() === 'https://portal.test/api/sync/reserve-customer-code'
+        && $request->header('Authorization') === ['Bearer tablet-token']
+        && $request['company_id'] === 6);
+});
+
+test('company selection displays an online reservation and retains its token', function () {
+    $user = seedCustomerCreateFixtures();
+    $user->update(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    config()->set('sync.server_url', 'https://portal.test');
+    Http::fake([
+        'https://portal.test/api/sync/reserve-customer-code' => Http::response([
+            'token' => '3b241101-e2bb-4255-8caf-4136c566a962',
+            'code' => 'OMMC08739',
+        ]),
+    ]);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('company_id', 1)
+        ->assertSet('unique_id', 'OMMC08739')
+        ->assertSet('customer_code_reservation_token', '3b241101-e2bb-4255-8caf-4136c566a962');
+});
+
+test('failed online reservation leaves Customer Code blank without inventing a local code', function () {
+    $user = seedCustomerCreateFixtures();
+    $user->update(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    config()->set('sync.server_url', 'https://portal.test');
+    Http::fake([
+        'https://portal.test/api/sync/reserve-customer-code' => Http::response(['error' => 'Unauthorized'], 401),
+    ]);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('company_id', 1)
+        ->assertSet('unique_id', null)
+        ->assertSet('customer_code_reservation_token', null);
+});
+
+test('changing Company clears the prior reservation before requesting a new one', function () {
+    $user = seedCustomerCreateFixtures();
+    $user->update(['api_token' => 'tablet-token']);
+    DB::table('companies')->insert(['id' => 6, 'name' => 'FLEET', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+    config()->set('sync.server_url', 'https://portal.test');
+    Http::fake([
+        'https://portal.test/api/sync/reserve-customer-code' => Http::sequence()
+            ->push(['token' => '3b241101-e2bb-4255-8caf-4136c566a962', 'code' => 'OMMC08739'])
+            ->push(['token' => '4c352212-f3cc-5366-9b0d-5247d677b073', 'code' => 'FLEET3728']),
+    ]);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('company_id', 1)
+        ->assertSet('unique_id', 'OMMC08739')
+        ->set('company_id', 6)
+        ->assertSet('unique_id', 'FLEET3728')
+        ->assertSet('customer_code_reservation_token', '4c352212-f3cc-5366-9b0d-5247d677b073');
 });

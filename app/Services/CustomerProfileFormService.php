@@ -65,7 +65,7 @@ class CustomerProfileFormService
             }
             if (! $stream && $profileType === 'outlet') {
                 $stream = match ($profile?->entry_detail) {
-                    'AB' => 'ab', 'MCB' => 'mcb', default => null,
+                    'AB' => 'ab', 'MCB' => 'mcb', 'AB/MCB', 'AB and MCB' => null, default => null,
                 };
                 $stream ??= str_starts_with((string) $history->category, 'AB ') ? 'ab' : null;
                 $stream ??= str_starts_with((string) $history->category, 'MCB ') ? 'mcb' : null;
@@ -80,8 +80,11 @@ class CustomerProfileFormService
             'unique_id' => $customer->unique_id,
             'company_id' => $customer->company_id,
             'region_specific_id' => $customer->region_specific_id,
-            'province_id' => $customer->municipality?->province_id,
+            'area_cluster_id' => $customer->area_cluster_id,
+            'physical_region_id' => $customer->municipality?->region_id ?? $customer->province?->region_id,
+            'province_id' => $customer->province_id ?? $customer->municipality?->province_id,
             'municipality_id' => $customer->municipality_id,
+            'barangay_id' => $customer->barangay_id,
             'general_category_id' => $customer->general_category_id,
             'competitor_volume' => $customer->competitor_volume,
             'address' => $customer->address,
@@ -131,6 +134,7 @@ class CustomerProfileFormService
     {
         $customer->fill(Arr::only($state, [
             'name', 'unique_id', 'company_id', 'region_specific_id', 'municipality_id',
+            'province_id', 'barangay_id', 'area_cluster_id',
             'general_category_id', 'competitor_volume', 'address', 'latitude', 'longitude',
             'contact_person', 'contact_number', 'business_landline_number',
             'business_mobile_number', 'date_established', 'is_active', 'person_in_charge_id',
@@ -159,9 +163,13 @@ class CustomerProfileFormService
         }
 
         foreach ($state['categories'] ?? [] as $stream => $years) {
-            if (! in_array($stream, self::categoryStreams($profileType), true)) continue;
+            if (! in_array($stream, self::categoryStreams($profileType), true)) {
+                continue;
+            }
             foreach ($years as $year => $category) {
-                if (blank($category)) continue;
+                if (blank($category)) {
+                    continue;
+                }
                 CustomerCategoryHistory::updateOrCreate(
                     ['customer_id' => $customer->id, 'profile_type' => $profileType, 'stream' => $stream, 'category_year' => (int) $year],
                     ['category' => $category]
