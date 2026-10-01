@@ -79,6 +79,10 @@ class CustomerCreatePage extends Page
         ];
 
         $this->categories = CustomerProfileFormService::defaultCategories('outlet');
+
+        if (auth()->check()) {
+            $this->access_user_ids = [auth()->id()];
+        }
     }
 
     protected function getViewData(): array

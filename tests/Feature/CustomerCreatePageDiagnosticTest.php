@@ -171,14 +171,17 @@ test('customer add page saves the complete local aggregate without network acces
     Http::assertNothingSent();
 });
 
-test('customer add page accepts an access user without an rsm relationship', function () {
+test('customer add page defaults the current local user into access without requiring an rsm', function () {
     $user = seedCustomerCreateFixtures();
     $this->actingAs($user);
     Http::fake();
 
-    $component = Livewire::test(CustomerCreatePage::class)
-        ->set(validCustomerCreateState())
-        ->set('access_user_ids', [$user->id]);
+    $component = Livewire::test(CustomerCreatePage::class);
+
+    expect($component->get('access_user_ids'))->toBe([$user->id])
+        ->and($component->html())->toContain('selected');
+
+    $component->set(validCustomerCreateState());
 
     $component->call('saveCustomer')
         ->assertRedirect(CustomerPage::getUrl());
@@ -192,6 +195,25 @@ test('customer add page accepts an access user without an rsm relationship', fun
             ->where('user_id', $user->id)
             ->exists())->toBeTrue()
         ->and(DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->exists())->toBeTrue();
+});
+
+test('customer add page preserves the default current user when adding another access user', function () {
+    $user = seedCustomerCreateFixtures();
+    $otherUser = User::factory()->create();
+    $this->actingAs($user);
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set(validCustomerCreateState())
+        ->set('access_user_ids', [$user->id, $otherUser->id]);
+
+    expect($component->get('access_user_ids'))->toBe([$user->id, $otherUser->id]);
+
+    $component->call('saveCustomer')->assertRedirect(CustomerPage::getUrl());
+
+    $customer = DB::table('customers')->where('name', 'Diagnostic Customer')->first();
+
+    expect(DB::table('customer_user')->where('customer_id', $customer->id)->pluck('user_id')->sort()->values()->all())
+        ->toBe([$user->id, $otherUser->id]);
 });
 
 test('customer add page still rejects an invalid access user id', function () {
