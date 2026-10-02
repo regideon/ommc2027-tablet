@@ -1,0 +1,38 @@
+# OMMC-20261002-tablet-base-location-profile
+
+- **Title:** Set and push the rep itinerary base location from the tablet Profile (modal)
+- **Objective:** Let a signed-in rep view and edit their itinerary base start/end coordinates on the tablet Profile page (Leaflet map modal), keep the edit locally while offline, and push it to the portal so the portal agrees with the tablet for that rep's own base.
+- **Repositories:** Tablet `ommc2027-tablet`; Portal `ommc2027` (cross-repository Work, same ID in both).
+- **State:** READY_FOR_TERMINAL_REVIEW
+- **Implementation authorization:** Granted by explicit Human "yes kindly follow the existing pattern" approval of the bounded in-chat design, then "implement" for the modal change and "aprove" for the admin-side parity change. Local implementation and validation only.
+- **Terminal authorization:** None.
+- **Human-authorized scope:** Add a Base Location section to the tablet account Profile page with the four base coordinates and a Leaflet map picker; mark a locally edited base pending, push it to the portal through a new sync endpoint, and skip the pull overwrite while pending. No other columns, no Google Maps, no portal admin UI changes beyond the shared modal.
+- **Accepted decisions:**
+  - The four coordinates reuse the existing `users` base columns; only `base_location_pending` (boolean, default false) is added.
+  - The tablet is authoritative for the rep's own base once saved; the portal admin User form still flows down while nothing is pending.
+  - The map reuses the panel-wide Leaflet asset and the customer location picker's modal pattern: a full-screen modal opened from a "Pick on Map" button, with a Start/End toggle for the two points. No reverse geocoding, since a base location is coordinates only.
+  - The admin (portal) and tablet pickers behave identically; the admin one uses Filament's native modal so it matches the admin panel styling.
+  - `SyncService::push()` sends the pending base after the other pending items; a 401 aborts, other failures stay pending for retry, matching the existing push conventions.
+- **Implementation constraints:** No commit/push. Preserve unrelated worktree changes in both repositories.
+- **Task-owned files/components:**
+  - Tablet `ommc2027-tablet`: `database/migrations/2026_10_02_025911_add_base_location_pending_to_users_table.php`, `app/Models/User.php`, `app/Services/SyncService.php`, `app/Filament/Pages/Auth/Profile.php`, `resources/views/filament/pages/partials/base-location-picker.blade.php`, `app/Providers/Filament/SaleshubPanelProvider.php`, `tests/Feature/TabletBaseLocationProfileTest.php`, this Work note.
+  - Portal `ommc2027`: `routes/api.php`, `app/Http/Controllers/Api/SyncController.php`, `resources/views/filament/schemas/components/route-base-location-map.blade.php`, `tests/Feature/TabletBaseLocationPushTest.php`, `tests/Feature/RouteBaseLocationModalTest.php`, the equivalent Work note.
+- **Unrelated/pre-existing worktree changes to preserve:** None in the tablet. Portal: `storage/framework/lsp-1eef5fa479f6242d.php`.
+- **Implementation decisions:**
+  - The custom `App\Filament\Pages\Auth\Profile` extends Filament's `EditProfile` and appends the Base Location section instead of duplicating the account fields.
+  - The picker is a full-screen modal mirroring the customer location picker: built on open (after a paint, for Leaflet sizing) and removed on close; the four coordinate fields stay inline and editable.
+  - `handleRecordUpdate()` compares the submitted coordinates with the stored ones and sets `base_location_pending` only when they actually change.
+  - `pull()` overwrites the base only when `base_location_pending` is false, so an unsynced local edit survives until `push()` delivers it.
+  - The map scopes the coordinate inputs through `this.$root.closest('form')`; the partial's `x-data` div does not contain the sibling Filament fields, so a `$root`-only query found nothing and the map could not write them.
+- **Validation:**
+  - Tablet: `php artisan test --compact tests/Feature/TabletBaseLocationProfileTest.php tests/Feature/TabletBaseLocationSyncTest.php` → 8 passed (38 assertions).
+  - Portal: `php artisan test --compact tests/Feature/RouteBaseLocationModalTest.php tests/Feature/TabletBaseLocationPushTest.php tests/Feature/TabletBaseLocationSyncTest.php tests/Feature/RepBaseLocationTest.php` → 11 passed (43 assertions).
+  - `vendor/bin/pint` on the changed/new PHP files in both repositories; `php artisan view:cache` in both.
+  - Migration `2026_10_02_025911_add_base_location_pending_to_users_table` applied to the local tablet database.
+  - Full suites: tablet 118 passed / 12 failed / 3 skipped; portal 91 passed / 3 failed. All failures pre-exist and are outside this Work:
+    - Tablet: `CustomerCreatePageDiagnosticTest` (known drift), `FirstLoginPersistenceTest` ×3 (missing `SyncService::lastError()`), `IosNativeRegenerationArtifactsTest` ×2 (missing `nativephp/ios` project files), `SalescallPhotoUploadTest` ×4 (preview mirror files on this machine), `StartupMigrationClassicDiagnosticsTest` (checkpoint drift), `ExampleTest` (root returns 302, no app key).
+    - Portal: `ExampleTest` (`MissingAppKeyException`), `SyncPullCustomerScopeTest` and `SyncPushSalescallAuditTest` (`users.deleted_at` schema gap — neither test carries the SoftDeletes workaround the base-location tests use).
+- **Manual acceptance:** pending — needs a browser/tablet check that the Profile modal sets the base coordinates and that a sync pushes them to the portal, plus the admin Users modal.
+- **Blockers:** None.
+- **Remaining work:** Human manual verification; then terminal authorization. Per `docs/agent-workflow.md`, both repositories must be delivered together or neither.
+- **Delivery evidence status:** Not committed; local implementation and validation only.

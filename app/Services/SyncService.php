@@ -203,7 +203,10 @@ class SyncService
             // unique email instead of the numeric id.
             $portalUser = collect($data['users'] ?? [])->firstWhere('email', $user->email);
 
-            if ($portalUser) {
+            // A base location the rep edited on the tablet and has not pushed yet
+            // wins over the portal value; overwriting it here would discard the
+            // local edit before the push loop could deliver it.
+            if ($portalUser && ! $user->base_location_pending) {
                 $user->update([
                     'base_start_latitude' => $portalUser['base_start_latitude'] ?? null,
                     'base_start_longitude' => $portalUser['base_start_longitude'] ?? null,
@@ -1202,6 +1205,40 @@ class SyncService
                     }
                 } catch (Throwable $e) {
                     $this->recordUnexpectedItemFailure($note, $e, 'customer-note:unexpected');
+                    $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
+                }
+            }
+
+            $user->refresh();
+
+            if ($user->base_location_pending) {
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/push/base-location", [
+                        'base_start_latitude' => $user->base_start_latitude,
+                        'base_start_longitude' => $user->base_start_longitude,
+                        'base_end_latitude' => $user->base_end_latitude,
+                        'base_end_longitude' => $user->base_end_longitude,
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    if ($response->successful()) {
+                        $user->update(['base_location_pending' => false]);
+                        $pushed++;
+                    } else {
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    Log::error('sync:push:base-location', [
+                        'exception_class' => $e::class,
+                        'exception_message' => $e->getMessage(),
+                    ]);
                     $failed++;
                     $retryable++;
                     $failureReasons['unexpected_sync_error'] = true;
