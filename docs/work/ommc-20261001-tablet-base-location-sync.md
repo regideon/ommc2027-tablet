@@ -1,0 +1,32 @@
+# OMMC-20261001-tablet-base-location-sync
+
+- **Title:** Sync the rep itinerary base location from the portal to the tablet
+- **Objective:** Let the tablet's local `users` record hold the same itinerary base location as the portal, synced on login and refreshed on pull, so the tablet schema matches `ommc2027` users.
+- **Repositories:** Portal `ommc2027`; Tablet `ommc2027-tablet` (cross-repository Work, same ID in both).
+- **State:** TERMINAL_DELIVERED
+- **Implementation authorization:** Granted by explicit Human selection of "Yes — migration + sync the values". Local implementation and validation only.
+- **Terminal authorization:** None.
+- **Human-authorized scope:** Add the missing base-location columns to the tablet `users` table and carry `base_start_latitude`, `base_start_longitude`, `base_end_latitude`, `base_end_longitude` through the login, seed, and pull payloads. No other columns, no Google Maps.
+- **Accepted decisions:**
+  - Columns mirror the portal: `decimal(10,6)` nullable.
+  - The tablet's `pull()` never consumed the portal `users` payload before; the logged-in rep's base is now refreshed by matching the pulled user row on the unique email (portal ids ≠ tablet ids).
+  - Login/refresh and the CLI `sync:login` persist the base fields via the existing `updateOrCreate`.
+- **Implementation constraints:** No commit/push. Preserve unrelated worktree changes in both repositories.
+- **Task-owned files/components:**
+  - Tablet `ommc2027-tablet`: `database/migrations/2026_10_01_140000_add_base_location_to_users_table.php`, `app/Models/User.php`, `app/Services/SyncService.php`, `app/Console/Commands/SyncLoginCommand.php`, `tests/Feature/TabletBaseLocationSyncTest.php`, this Work note.
+  - Portal `ommc2027`: `app/Http/Controllers/Api/SyncController.php`, `tests/Feature/TabletBaseLocationSyncTest.php`, the equivalent Work note.
+- **Unrelated/pre-existing worktree changes to preserve:**
+  - Tablet: `nativephp/.gitignore`, `package-lock.json`, and the separate uncommitted Work `ommc-20261001-tablet-customer-location-picker` (`resources/views/filament/pages/customer-create-page.blade.php`).
+  - Portal: `composer.json`, `app/Providers/Filament/OmmcpanelPanelProvider.php`, `resources/views/filament/schemas/components/customer-location-map.blade.php`, `resources/views/filament/schemas/components/route-base-location-map.blade.php`, `storage/framework/lsp-1eef5fa479f6242d.php`.
+- **Implementation decisions:**
+  - The tablet `User` model uses a `#[Fillable]` attribute (not `$guarded`), which silently discarded the new columns; they were added to the fillable list. `rsm_id` is also silently discarded by the same mechanism today — pre-existing, not changed here.
+  - The migration guards on `Schema::hasColumn('users', 'base_start_latitude')` so repeated/partial runs are safe.
+- **Validation:**
+  - Tablet: `php artisan test --compact tests/Feature/TabletBaseLocationSyncTest.php` → 2 passed (10 assertions).
+  - Portal: `php artisan test --compact tests/Feature/TabletBaseLocationSyncTest.php` → 2 passed (9 assertions).
+  - `vendor/bin/pint` on the new files → passed. `--dirty` was not run on the pre-existing dirty files because it reformatted unrelated code; my added lines follow the surrounding style.
+  - Known pre-existing failures unaffected: `FirstLoginPersistenceTest` (missing `SyncService::lastError()`) and the two `CustomerCreatePageDiagnosticTest` drifts.
+- **Manual acceptance:** pending — confirm a tablet re-login/re-sync shows the rep base location locally.
+- **Blockers:** None.
+- **Remaining work:** Human manual verification; then terminal authorization. Per `docs/agent-workflow.md`, both repositories must be delivered together or neither.
+- **Delivery evidence status:** Committed locally on branch `1-be-tablet-users-map` under the Human `commit i'll push` authorization; push is performed separately by the Human.

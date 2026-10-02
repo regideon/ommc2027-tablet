@@ -157,6 +157,10 @@ class SyncService
                     'password' => $data['password'],
                     'api_token' => $data['api_token'],
                     'rsm_id' => $data['rsm_id'] ?? null,
+                    'base_start_latitude' => $data['base_start_latitude'] ?? null,
+                    'base_start_longitude' => $data['base_start_longitude'] ?? null,
+                    'base_end_latitude' => $data['base_end_latitude'] ?? null,
+                    'base_end_longitude' => $data['base_end_longitude'] ?? null,
                 ]
             );
 
@@ -193,6 +197,20 @@ class SyncService
             }
 
             $data = $response->json();
+
+            // Refresh the logged-in rep's itinerary base location from the pulled
+            // users list. Portal user ids differ from tablet ids, so match on the
+            // unique email instead of the numeric id.
+            $portalUser = collect($data['users'] ?? [])->firstWhere('email', $user->email);
+
+            if ($portalUser) {
+                $user->update([
+                    'base_start_latitude' => $portalUser['base_start_latitude'] ?? null,
+                    'base_start_longitude' => $portalUser['base_start_longitude'] ?? null,
+                    'base_end_latitude' => $portalUser['base_end_latitude'] ?? null,
+                    'base_end_longitude' => $portalUser['base_end_longitude'] ?? null,
+                ]);
+            }
 
             // Reference/lookup tables must be populated before anything below that
             // holds a foreign key into them (salescall_brands -> material_groups/brands,
