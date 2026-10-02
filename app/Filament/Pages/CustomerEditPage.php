@@ -6,6 +6,7 @@ use App\Models\Customer;
 use App\Services\CustomerProfileFormService;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class CustomerEditPage extends CustomerCreatePage
 {
@@ -56,6 +57,7 @@ class CustomerEditPage extends CustomerCreatePage
             'longitude' => 'nullable|numeric',
             'contact_person' => 'nullable|string|max:255',
             'date_established' => 'nullable|date',
+            'active.conversion_program' => ['nullable', Rule::in([...array_keys(config('customer_trade_form.conversion_programs', [])), ''])],
         ]);
 
         if (! $this->physicalGeographyIsValid()) {

@@ -36,3 +36,29 @@
 .scrollbar-hide::-webkit-scrollbar { display: none; }
 .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
 .fi-page-content { padding: 0 !important; }
+
+.customer-create-form :is(.fi-input, select, textarea, input:not([type='checkbox']):not([type='radio'])) {
+    border: 1px solid #d1d5db;
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background-color: #fbfcfd;
+}
+
+.customer-create-form :is(.fi-input, select, textarea, input:not([type='checkbox']):not([type='radio'])):focus {
+    border-color: #aeb6c2;
+    background-color: #ffffff;
+}
+
+.customer-create-form :is(.fi-input, select, textarea, input:not([type='checkbox']):not([type='radio']))::placeholder {
+    color: #8a9099;
+}
+
+.customer-create-form :is(.fi-input, select, textarea, input:not([type='checkbox']):not([type='radio'])):disabled {
+    border-color: #d9dde3;
+    background-color: #f1f3f5;
+}
+
+.customer-create-form .fi-fo-field-wrp-label {
+    display: block;
+    margin-bottom: 0.375rem;
+}

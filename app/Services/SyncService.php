@@ -104,6 +104,36 @@ class SyncService
         }
     }
 
+    /** @return array{token: string, code: string}|null */
+    public function reserveCustomerCode(int $companyId): ?array
+    {
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (! $user || blank($user->api_token) || blank($this->serverUrl)) {
+            return null;
+        }
+
+        try {
+            $response = $this->client($user->api_token)->post(
+                "{$this->serverUrl}/api/sync/reserve-customer-code",
+                ['company_id' => $companyId],
+            );
+
+            if (! $response->successful()) {
+                return null;
+            }
+
+            $token = $response->json('token');
+            $code = $response->json('code');
+
+            return is_string($token) && $token !== '' && is_string($code) && $code !== ''
+                ? ['token' => $token, 'code' => $code]
+                : null;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
     public function refreshToken(string $email, string $password): SyncResult
     {
         try {
@@ -678,6 +708,7 @@ class SyncService
                         'sync_intent' => $customer->server_id ? 'update' : 'create',
                         'name' => $customer->name,
                         'unique_id' => $customer->unique_id,
+                        'customer_code_reservation_token' => $customer->customer_code_reservation_token,
                         'company_id' => $customer->company_id,
                         'general_category_id' => $customer->general_category_id,
                         'competitor_volume' => $customer->competitor_volume,
@@ -720,7 +751,13 @@ class SyncService
                     }
 
                     if ($response->successful()) {
-                        $this->markSynced($customer, ['server_id' => $response->json('server_id'), 'server_updated_at' => $response->json('updated_at'), 'synced_at' => now()]);
+                        $this->markSynced($customer, [
+                            'server_id' => $response->json('server_id'),
+                            'server_updated_at' => $response->json('updated_at'),
+                            'unique_id' => $response->json('unique_id') ?: $customer->unique_id,
+                            'customer_code_reservation_token' => null,
+                            'synced_at' => now(),
+                        ]);
                         $pushed++;
                     } elseif ($response->status() === 409 && $response->json('code') === 'customer_conflict') {
                         $customer->update(['sync_status' => 'conflict', 'sync_error' => $response->json('message', 'Customer changed on Portal.')]);

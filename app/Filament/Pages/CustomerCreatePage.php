@@ -11,12 +11,14 @@ use App\Models\RegionSpecific;
 use App\Models\Region;
 use App\Models\User;
 use App\Services\CustomerProfileFormService;
+use App\Services\SyncService;
 use BackedEnum;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class CustomerCreatePage extends Page
 {
@@ -32,6 +34,7 @@ class CustomerCreatePage extends Page
 
     public string $name = '';
     public ?string $unique_id = null;
+    public ?string $customer_code_reservation_token = null;
     public ?int $company_id = null;
     public ?int $region_specific_id = null;
     public ?int $physical_region_id = null;
@@ -76,6 +79,10 @@ class CustomerCreatePage extends Page
         ];
 
         $this->categories = CustomerProfileFormService::defaultCategories('outlet');
+
+        if (auth()->check()) {
+            $this->access_user_ids = [auth()->id()];
+        }
     }
 
     protected function getViewData(): array
@@ -103,6 +110,17 @@ class CustomerCreatePage extends Page
 
     public function updatedCompanyId(): void
     {
+        $this->unique_id = null;
+        $this->customer_code_reservation_token = null;
+
+        if ($this->company_id) {
+            $reservation = app(SyncService::class)->reserveCustomerCode($this->company_id);
+            if ($reservation !== null) {
+                $this->unique_id = $reservation['code'];
+                $this->customer_code_reservation_token = $reservation['token'];
+            }
+        }
+
         $profile = $this->profileType();
 
         if ($this->companyChangeOldProfile !== null && $this->companyChangeOldProfile === $profile) {
@@ -171,13 +189,10 @@ class CustomerCreatePage extends Page
             'business_landline_number' => 'nullable|string|max:50',
             'business_mobile_number' => 'nullable|string|max:50',
             'date_established' => 'nullable|date',
+            'active.conversion_program' => ['nullable', Rule::in([...array_keys(config('customer_trade_form.conversion_programs', [])), ''])],
         ]);
 
         if (! $this->physicalGeographyIsValid()) {
-            return;
-        }
-
-        if (! $this->validateScopedPortalRules($profileType)) {
             return;
         }
 
@@ -200,6 +215,7 @@ class CustomerCreatePage extends Page
                 'local_uuid' => (string) Str::uuid(),
                 'name' => $this->name,
                 'unique_id' => $this->unique_id,
+                'customer_code_reservation_token' => $this->customer_code_reservation_token,
                 'company_id' => $this->company_id,
                 'region_specific_id' => $this->region_specific_id,
                 'municipality_id' => $this->municipality_id,
