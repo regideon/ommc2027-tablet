@@ -228,3 +228,12 @@ test('customer add page still rejects an invalid access user id', function () {
 
     expect(DB::table('customers')->where('name', 'Diagnostic Customer')->exists())->toBeFalse();
 });
+
+test('customer add page renders the scoped customer-create-form styling hook', function () {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->assertOk()
+        ->assertSee('customer-create-form', false);
+});

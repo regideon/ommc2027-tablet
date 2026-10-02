@@ -2,6 +2,8 @@
 
 namespace App\Filament\Pages;
 
+use App\Models\AreaCluster;
+use App\Models\Barangay;
 use App\Models\Company;
 use App\Models\Customer;
 use App\Models\GeneralCategory;
@@ -11,6 +13,7 @@ use App\Models\RegionSpecific;
 use App\Models\Region;
 use App\Models\User;
 use App\Services\CustomerProfileFormService;
+use App\Services\PhilippineAddressResolver;
 use App\Services\SyncService;
 use BackedEnum;
 use Filament\Notifications\Notification;
@@ -40,6 +43,9 @@ class CustomerCreatePage extends Page
     public ?int $physical_region_id = null;
     public ?int $province_id = null;
     public ?int $municipality_id = null;
+    public ?int $barangay_id = null;
+    public ?int $area_cluster_id = null;
+    public ?string $locationError = null;
     public ?int $general_category_id = null;
     public ?int $competitor_volume = null;
     public string $address = '';
@@ -158,6 +164,75 @@ class CustomerCreatePage extends Page
         $this->municipality_id = null;
     }
 
+    public function resolveLocation(?float $latitude = null, ?float $longitude = null): void
+    {
+        $latitude ??= is_numeric($this->latitude) ? (float) $this->latitude : null;
+        $longitude ??= is_numeric($this->longitude) ? (float) $this->longitude : null;
+
+        if ($latitude === null || $longitude === null) {
+            return;
+        }
+
+        $this->latitude = (string) $latitude;
+        $this->longitude = (string) $longitude;
+
+        $result = app(PhilippineAddressResolver::class)->resolve($latitude, $longitude);
+
+        if (! $result['ok']) {
+            $this->locationError = 'Internet connection required for location.';
+
+            return;
+        }
+
+        $this->locationError = null;
+
+        foreach (['region_specific_id', 'province_id', 'municipality_id', 'barangay_id', 'area_cluster_id', 'address'] as $field) {
+            if ($result[$field] !== null) {
+                $this->{$field} = $result[$field];
+            }
+        }
+
+        $this->physical_region_id = $this->municipality_id
+            ? Municipality::find($this->municipality_id)?->region_id
+            : null;
+    }
+
+    public function resolvedRegionName(): ?string
+    {
+        return $this->municipality_id
+            ? Municipality::find($this->municipality_id)?->region?->name
+            : null;
+    }
+
+    public function resolvedRegionSpecificName(): ?string
+    {
+        return $this->region_specific_id
+            ? DB::table('region_specifics')->where('id', $this->region_specific_id)->value('name')
+            : null;
+    }
+
+    public function resolvedAreaClusterName(): ?string
+    {
+        return $this->area_cluster_id
+            ? AreaCluster::whereKey($this->area_cluster_id)->value('name')
+            : null;
+    }
+
+    public function resolvedProvinceName(): ?string
+    {
+        return $this->province_id ? Province::whereKey($this->province_id)->value('name') : null;
+    }
+
+    public function resolvedMunicipalityName(): ?string
+    {
+        return $this->municipality_id ? Municipality::whereKey($this->municipality_id)->value('name') : null;
+    }
+
+    public function resolvedBarangayName(): ?string
+    {
+        return $this->barangay_id ? Barangay::whereKey($this->barangay_id)->value('name') : null;
+    }
+
     public function categoryOptions(string $stream): array
     {
         return CustomerProfileFormService::categoryOptions($this->profileType() ?: 'outlet', $stream);
@@ -178,6 +253,8 @@ class CustomerCreatePage extends Page
             'physical_region_id' => 'nullable|exists:regions,id',
             'province_id' => 'nullable|exists:provinces,id',
             'municipality_id' => 'nullable|exists:municipalities,id',
+            'barangay_id' => 'nullable|exists:barangays,id',
+            'area_cluster_id' => 'nullable|exists:area_clusters,id',
             'person_in_charge_id' => 'nullable|integer|exists:users,id',
             'general_category_id' => 'nullable|exists:general_categories,id',
             'competitor_volume' => 'nullable|integer|in:1,2,3',
@@ -219,6 +296,9 @@ class CustomerCreatePage extends Page
                 'company_id' => $this->company_id,
                 'region_specific_id' => $this->region_specific_id,
                 'municipality_id' => $this->municipality_id,
+                'province_id' => $this->province_id,
+                'barangay_id' => $this->barangay_id,
+                'area_cluster_id' => $this->area_cluster_id,
                 'general_category_id' => $this->general_category_id,
                 'competitor_volume' => $this->competitor_volume,
                 'address' => $this->address,
@@ -249,18 +329,25 @@ class CustomerCreatePage extends Page
 
     protected function physicalGeographyIsValid(): bool
     {
-        if (! $this->municipality_id && ! $this->physical_region_id && ! $this->province_id) {
+        if (! $this->municipality_id) {
             return true;
         }
 
         $municipality = Municipality::find($this->municipality_id);
-        if (! $municipality || (int) $municipality->region_id !== (int) $this->physical_region_id) {
+
+        if (! $municipality) {
+            return true;
+        }
+
+        if ($this->physical_region_id && (int) $municipality->region_id !== (int) $this->physical_region_id) {
             $this->addError('municipality_id', 'The City / Municipality does not belong to the selected physical Region.');
+
             return false;
         }
 
-        if ((int) $municipality->province_id !== (int) $this->province_id && ! ($municipality->province_id === null && $this->province_id === null)) {
+        if ($this->province_id && (int) $municipality->province_id !== (int) $this->province_id) {
             $this->addError('municipality_id', 'The City / Municipality does not belong to the selected Province.');
+
             return false;
         }
 

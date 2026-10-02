@@ -292,6 +292,33 @@ class SyncService
                 );
             }
 
+            foreach ($data['barangays'] ?? [] as $barangay) {
+                DB::table('barangays')->updateOrInsert(
+                    ['id' => $barangay['id']],
+                    [
+                        'municipality_id' => $barangay['municipality_id'],
+                        'psgc_code' => $barangay['psgc_code'] ?? null,
+                        'code' => $barangay['code'] ?? null,
+                        'name' => $barangay['name'],
+                        'enabled' => $barangay['enabled'] ?? true,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
+            foreach ($data['area_clusters'] ?? [] as $areaCluster) {
+                DB::table('area_clusters')->updateOrInsert(
+                    ['id' => $areaCluster['id']],
+                    [
+                        'region_specific_id' => $areaCluster['region_specific_id'],
+                        'code' => $areaCluster['code'] ?? null,
+                        'name' => $areaCluster['name'],
+                        'enabled' => $areaCluster['enabled'] ?? true,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
             $protectedStatuses = ['pending', 'failed', 'conflict'];
             $serverToLocalCustomer = [];
             $protectedCustomerIds = DB::table('customers')->whereIn('sync_status', $protectedStatuses)->pluck('id', 'server_id')->filter()->all();
@@ -313,6 +340,9 @@ class SyncService
                         'general_category_id' => $customer['general_category_id'] ?? null,
                         'region_specific_id' => $customer['region_specific_id'] ?? null,
                         'municipality_id' => $customer['municipality_id'] ?? null,
+                        'province_id' => $customer['province_id'] ?? null,
+                        'barangay_id' => $customer['barangay_id'] ?? null,
+                        'area_cluster_id' => $customer['area_cluster_id'] ?? null,
                         'name' => $customer['name'],
                         'unique_id' => $customer['unique_id'] ?? null,
                         'contact_person' => $customer['contact_person'] ?? null,
@@ -704,7 +734,7 @@ class SyncService
 
             foreach ($pendingCustomers as $customer) {
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/push/customer", [
+                    $payload = [
                         'local_uuid' => $customer->local_uuid,
                         'server_id' => $customer->server_id,
                         'base_updated_at' => $customer->server_updated_at,
@@ -747,7 +777,21 @@ class SyncService
                             'source' => $event->source,
                             'supersedes_event_key' => $event->supersedes_event_key,
                         ])->values()->all(),
-                    ]);
+                    ];
+
+                    if ($customer->province_id !== null) {
+                        $payload['province_id'] = $customer->province_id;
+                    }
+
+                    if ($customer->barangay_id !== null) {
+                        $payload['barangay_id'] = $customer->barangay_id;
+                    }
+
+                    if ($customer->area_cluster_id !== null) {
+                        $payload['area_cluster_id'] = $customer->area_cluster_id;
+                    }
+
+                    $response = $client->post("{$this->serverUrl}/api/sync/push/customer", $payload);
 
                     if ($response->status() === 401) {
                         return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
