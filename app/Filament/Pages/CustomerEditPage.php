@@ -6,6 +6,7 @@ use App\Models\Customer;
 use App\Services\CustomerProfileFormService;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class CustomerEditPage extends CustomerCreatePage
 {
@@ -48,6 +49,8 @@ class CustomerEditPage extends CustomerCreatePage
             'physical_region_id' => 'nullable|exists:regions,id',
             'province_id' => 'nullable|exists:provinces,id',
             'municipality_id' => 'nullable|exists:municipalities,id',
+            'barangay_id' => 'nullable|exists:barangays,id',
+            'area_cluster_id' => 'nullable|exists:area_clusters,id',
             'person_in_charge_id' => 'nullable|integer|exists:users,id',
             'general_category_id' => 'nullable|exists:general_categories,id',
             'competitor_volume' => 'nullable|integer|in:1,2,3',
@@ -56,6 +59,7 @@ class CustomerEditPage extends CustomerCreatePage
             'longitude' => 'nullable|numeric',
             'contact_person' => 'nullable|string|max:255',
             'date_established' => 'nullable|date',
+            'active.conversion_program' => ['nullable', Rule::in([...array_keys(config('customer_trade_form.conversion_programs', [])), ''])],
         ]);
 
         if (! $this->physicalGeographyIsValid()) {
@@ -87,6 +91,9 @@ class CustomerEditPage extends CustomerCreatePage
                 'company_id' => $this->company_id,
                 'region_specific_id' => $this->region_specific_id,
                 'municipality_id' => $this->municipality_id,
+                'province_id' => $this->province_id,
+                'barangay_id' => $this->barangay_id,
+                'area_cluster_id' => $this->area_cluster_id,
                 'general_category_id' => $this->general_category_id,
                 'competitor_volume' => $this->competitor_volume,
                 'address' => $this->address,

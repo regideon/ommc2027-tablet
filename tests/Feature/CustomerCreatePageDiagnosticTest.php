@@ -34,6 +34,7 @@ function validCustomerCreateState(): array
         'unique_id' => 'DIAG-001',
         'company_id' => 1,
         'region_specific_id' => 1,
+        'physical_region_id' => 1,
         'province_id' => 1,
         'municipality_id' => 1,
         'general_category_id' => 1,
@@ -168,4 +169,71 @@ test('customer add page saves the complete local aggregate without network acces
         ->and($histories->pluck('category')->unique()->all())->toBe(['AB Loyal']);
 
     Http::assertNothingSent();
+});
+
+test('customer add page defaults the current local user into access without requiring an rsm', function () {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    $component = Livewire::test(CustomerCreatePage::class);
+
+    expect($component->get('access_user_ids'))->toBe([$user->id])
+        ->and($component->html())->toContain('selected');
+
+    $component->set(validCustomerCreateState());
+
+    $component->call('saveCustomer')
+        ->assertRedirect(CustomerPage::getUrl());
+
+    $customer = DB::table('customers')->where('name', 'Diagnostic Customer')->first();
+
+    expect($customer)->not->toBeNull()
+        ->and($user->fresh()->rsm_id)->toBeNull()
+        ->and(DB::table('customer_user')
+            ->where('customer_id', $customer->id)
+            ->where('user_id', $user->id)
+            ->exists())->toBeTrue()
+        ->and(DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->exists())->toBeTrue();
+});
+
+test('customer add page preserves the default current user when adding another access user', function () {
+    $user = seedCustomerCreateFixtures();
+    $otherUser = User::factory()->create();
+    $this->actingAs($user);
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set(validCustomerCreateState())
+        ->set('access_user_ids', [$user->id, $otherUser->id]);
+
+    expect($component->get('access_user_ids'))->toBe([$user->id, $otherUser->id]);
+
+    $component->call('saveCustomer')->assertRedirect(CustomerPage::getUrl());
+
+    $customer = DB::table('customers')->where('name', 'Diagnostic Customer')->first();
+
+    expect(DB::table('customer_user')->where('customer_id', $customer->id)->pluck('user_id')->sort()->values()->all())
+        ->toBe([$user->id, $otherUser->id]);
+});
+
+test('customer add page still rejects an invalid access user id', function () {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set(validCustomerCreateState())
+        ->set('access_user_ids', [999999])
+        ->call('saveCustomer')
+        ->assertHasErrors(['access_user_ids.0']);
+
+    expect(DB::table('customers')->where('name', 'Diagnostic Customer')->exists())->toBeFalse();
+});
+
+test('customer add page renders the scoped customer-create-form styling hook', function () {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->assertOk()
+        ->assertSee('customer-create-form', false);
 });

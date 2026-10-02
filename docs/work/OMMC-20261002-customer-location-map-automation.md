@@ -1,0 +1,72 @@
+# OMMC-20261002-customer-location-map-automation
+
+- **Title:** Map-driven Customer location (remove manual location controls in portal admin and tablet)
+- **Objective:** Make the Leaflet map the only Customer location input in both the portal admin and the tablet. Pinning/dragging the marker sets latitude, longitude, and address; the physical/commercial hierarchy is resolved best-effort from the coordinates and synced, but is not user-editable anywhere.
+- **Repositories:** Portal `ommc2027` (Filament admin); Tablet `ommc2027-tablet` (cross-repository Work, same ID in both).
+- **State:** READY_FOR_TERMINAL_REVIEW
+- **Implementation authorization:** Granted by explicit Human approval of the bounded/architectural design and selection of subagent-driven execution; local implementation and validation only.
+- **Terminal authorization:** None.
+- **Human-authorized scope:** Remove the manual Region / Specific Region / Province / City-Municipality / Barangay / Area Cluster controls and the Address textarea in the portal admin and the tablet; the map becomes the only location input; resolved values persist and sync. Only latitude, longitude, and address materially matter; the rest may be null.
+- **Accepted decisions:**
+  - Map pin click/drag and "Use Current Location" set latitude/longitude.
+  - Reverse-geocode with OpenStreetMap Nominatim; auto-fill address and best-effort hierarchy.
+  - Offline or geocode failure shows exactly `Internet connection required for location.` and never erases existing values.
+  - Area Cluster stays scoped by Specific Region; auto-selected only when unambiguous, otherwise null. No manual fallback.
+  - Tablet mirrors the portal schema; the portal `pushCustomer` is defensive so an omitted location field cannot null reconciled data.
+- **Design/spec:** `docs/superpowers/specs/2026-10-02-customer-location-map-automation-design.md`
+- **Plan:** `docs/superpowers/plans/2026-10-02-customer-location-map-automation.md`
+- **Implementation constraints:** No commit/push (separate terminal authorization required). Preserve unrelated worktree changes.
+- **Task-owned files/components:**
+  - **Tablet `ommc2027-tablet`** (branch `1-tablet-customer-module-location`, base commit `5cade44`, changes uncommitted):
+    - `database/migrations/2026_10_02_120000_create_barangays_table.php`
+    - `database/migrations/2026_10_02_120001_create_area_clusters_table.php`
+    - `database/migrations/2026_10_02_120002_add_location_reference_ids_to_customers_table.php`
+    - `app/Models/Barangay.php`, `app/Models/AreaCluster.php`, `app/Models/Customer.php`
+    - `app/Services/PhilippineAddressResolver.php`, `app/Services/SyncService.php`, `app/Services/CustomerProfileFormService.php`
+    - `app/Filament/Pages/CustomerCreatePage.php`, `app/Filament/Pages/CustomerEditPage.php`, `app/Filament/Pages/CustomerPage.php`
+    - `resources/views/filament/pages/customer-create-page.blade.php`, `resources/views/filament/pages/customer-page.blade.php`
+    - Tests: `CustomerLocationReferenceSchemaTest`, `PhilippineAddressResolverTest`, `CustomerLocationMapTest`, `CustomerLocationSaveTest`, `CustomerLocationPickerTest`, `CustomerLocationSyncTest`, `CustomerLocationPushTest`, `CustomerLocationPersistenceTest`
+  - **Portal `ommc2027`** (worktree `C:\Users\RyanLVillanueva\Herd\ommc2027-wt\customer-location-map-automation`, branch `1-tablet-customer-module-location`, base `main` @ `1b8d208`, changes uncommitted):
+    - `app/Services/PhilippineAddressResolver.php`, `app/Services/CustomerLocationPayloadService.php`
+    - `app/Http/Controllers/Api/SyncController.php`
+    - `app/Filament/Resources/Customers/Concerns/ResolvesCustomerLocation.php`
+    - `app/Filament/Resources/Customers/Pages/CreateCustomer.php`, `.../Pages/EditCustomer.php`
+    - `app/Filament/Resources/Customers/Schemas/CustomerForm.php`
+    - `resources/views/filament/schemas/components/customer-location-map.blade.php`
+    - Tests: `PhilippineAddressResolverTest`, `CustomerLocationPayloadServiceTest`, `CustomerLocationMapFormTest`
+- **Unrelated/pre-existing worktree changes to preserve:** Portal main checkout `ommc2027` is on branch `4-be-ai-schedule-policy` with unrelated uncommitted work; it was NOT touched. All portal changes live in the isolated worktree.
+- **Implementation decisions:**
+  - The resolver is byte-identical in both repos; it fails closed (exactly one normalized match, else null) and maps Nominatim components to local region/province/municipality/barangay plus a political-name match to region_specifics and a single-cluster Area Cluster.
+  - Failure detection distinguishes offline/HTTP errors (`reason='unreachable'`); both forms keep last-saved values and show the offline message.
+  - Portal form persists via Hidden dehydratable fields (including `address`) with read-only placeholders; Create/Edit share the `ResolvesCustomerLocation` trait.
+  - Tablet form persists via Livewire properties; `resolveLocation()` also sets `physical_region_id` from the resolved municipality and `physicalGeographyIsValid()` only validates present values.
+  - Tablet push sends `province_id`/`barangay_id`/`area_cluster_id` only when non-null; portal push preserves omitted location fields.
+- **Validation:**
+  - Tablet focused suites (schema, resolver, map form, resolve→save, picker, sync pull, push, persistence): **19 passed (84 assertions)**.
+  - Portal focused suites (resolver, payload service, map form): **10 passed (43 assertions)**.
+  - `php artisan view:cache` passed in both repositories.
+  - Final whole-branch review (fresh reviewer, most capable available model) found one Critical (tablet resolve→save blocked by the removed `physical_region_id` writer) and one Important (unconditional push could null the portal); both fixed and verified by a scoped re-review; a trivial stale-copy Minor was also fixed. No new breakage.
+  - Known pre-existing failures (documented in prior Work notes, unrelated): tablet `CustomerCreatePageDiagnosticTest` drift; portal `main` test-schema drift (`users.username`, `users.deleted_at`).
+- **Manual acceptance:** pending — browser/tablet check that the pin resolves and saves in both admin and tablet, and that a tablet-created/edited customer syncs the resolved fields without nulling portal values.
+- **Parked / deferred findings (with rulings):**
+  - Stale assertions (`Address`, `NCR`) in tablet `CustomerCreatePageDiagnosticTest`: pre-existing red (an earlier assertion fails first), so pass/fail is unchanged; out of scope. Ruling: park; update or quarantine that diagnostic separately.
+  - `barangays.code`/`area_clusters.code` non-nullable with `?? null` in the tablet pull: latent only (portal always sends `code`). Ruling: park, tighten later.
+  - Dead code after control removal (portal `municipalityOptions()`/`Region` import; tablet `updatedPhysicalRegionId()` remnants): cosmetic. Ruling: park as cleanup.
+  - Unused test variable; double geocoding per pin (client preview + server resolver); portal form lacks an explicit "controls absent" assertion. Ruling: park; minor.
+- **Blockers:** None for local completion. Terminal delivery requires separate explicit Human authorization.
+- **Remaining work:** Human manual acceptance; then terminal authorization. Per `docs/agent-workflow.md`, both repositories must be delivered together or neither.
+- **Delivery evidence status:** Not committed; local implementation and validation only. Subagent-driven workspace/reports at `.superpowers/sdd/customer-location-map-automation/` (git-excluded).
+
+## Post-review fix — picking did not populate the location fields
+
+- **Reported:** on the tablet, clicking on the map / "Use This Location" updated only latitude/longitude; address and hierarchy stayed empty.
+- **Root cause:** resolution was triggered only from the map's `setCoordinates()` (map click / drag-end / current location) and relied on deferred Livewire property state for the coordinates. The "Use This Location" button (`confirmLocation()`) only closed the modal and never resolved, and the resolved `address` was not rendered anywhere on the tablet form.
+- **Evidence:** the resolver returns real data against the tablet DB (`resolve(15.1456, 120.5887)` → region 6, municipality 442, address "Jake Gonzales Boulevard"); a rendered-HTML test confirmed the read-only display updates after `resolveLocation()`. The gap was the client trigger and the missing address display.
+- **Fix:**
+  - `CustomerCreatePage::resolveLocation(?float $latitude = null, ?float $longitude = null)` now accepts the picked coordinates directly (and writes them to `latitude`/`longitude`), so resolution no longer depends on deferred state ordering.
+  - The map JS passes the coordinates (`$wire.resolveLocation(lat, lng)`) and `confirmLocation()` resolves the current marker coordinates before closing.
+  - Added a read-only **Address** field to the tablet Location card.
+  - Added a regression test proving `resolveLocation(15.1456, 120.5887)` fills coordinates, address, municipality, and barangay with no prior `set()`.
+- **Validation:** tablet focused suites **20 passed (89 assertions)**; `php artisan view:cache` clean.
+- **Note:** Region/City/Address populate from the pin; Barangay and Area Cluster additionally require a `sync:pull` to populate the tablet reference tables (currently 0 rows), and Province can legitimately be null for independent/highly-urbanized cities.
+

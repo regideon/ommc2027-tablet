@@ -3,6 +3,7 @@
 namespace App\Providers\Filament;
 
 use App\Filament\Pages\Auth\Login;
+use App\Filament\Pages\Auth\Profile;
 use App\Filament\Widgets\DashboardSalesrepWidget;
 use App\Http\Middleware\RestoreTrustedSession;
 use Filament\Http\Middleware\Authenticate;
@@ -33,7 +34,7 @@ class SaleshubPanelProvider extends PanelProvider
             ->path('app')
 
             ->unsavedChangesAlerts()
-            ->profile(isSimple: false)
+            ->profile(Profile::class, isSimple: false)
             ->assets([
                 Css::make('custom-stylesheet-saleshub', public_path('css/app/custom-stylesheet-saleshub.css')),
                 Css::make('custom-stylesheet-fontawesome-all.min', public_path('css/app/custom-stylesheet-fontawesome-all.min.css')),

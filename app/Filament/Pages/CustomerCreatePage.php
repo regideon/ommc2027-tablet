@@ -2,6 +2,8 @@
 
 namespace App\Filament\Pages;
 
+use App\Models\AreaCluster;
+use App\Models\Barangay;
 use App\Models\Company;
 use App\Models\Customer;
 use App\Models\GeneralCategory;
@@ -11,12 +13,15 @@ use App\Models\RegionSpecific;
 use App\Models\Region;
 use App\Models\User;
 use App\Services\CustomerProfileFormService;
+use App\Services\PhilippineAddressResolver;
+use App\Services\SyncService;
 use BackedEnum;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class CustomerCreatePage extends Page
 {
@@ -32,11 +37,15 @@ class CustomerCreatePage extends Page
 
     public string $name = '';
     public ?string $unique_id = null;
+    public ?string $customer_code_reservation_token = null;
     public ?int $company_id = null;
     public ?int $region_specific_id = null;
     public ?int $physical_region_id = null;
     public ?int $province_id = null;
     public ?int $municipality_id = null;
+    public ?int $barangay_id = null;
+    public ?int $area_cluster_id = null;
+    public ?string $locationError = null;
     public ?int $general_category_id = null;
     public ?int $competitor_volume = null;
     public string $address = '';
@@ -76,6 +85,10 @@ class CustomerCreatePage extends Page
         ];
 
         $this->categories = CustomerProfileFormService::defaultCategories('outlet');
+
+        if (auth()->check()) {
+            $this->access_user_ids = [auth()->id()];
+        }
     }
 
     protected function getViewData(): array
@@ -103,6 +116,17 @@ class CustomerCreatePage extends Page
 
     public function updatedCompanyId(): void
     {
+        $this->unique_id = null;
+        $this->customer_code_reservation_token = null;
+
+        if ($this->company_id) {
+            $reservation = app(SyncService::class)->reserveCustomerCode($this->company_id);
+            if ($reservation !== null) {
+                $this->unique_id = $reservation['code'];
+                $this->customer_code_reservation_token = $reservation['token'];
+            }
+        }
+
         $profile = $this->profileType();
 
         if ($this->companyChangeOldProfile !== null && $this->companyChangeOldProfile === $profile) {
@@ -140,6 +164,75 @@ class CustomerCreatePage extends Page
         $this->municipality_id = null;
     }
 
+    public function resolveLocation(?float $latitude = null, ?float $longitude = null): void
+    {
+        $latitude ??= is_numeric($this->latitude) ? (float) $this->latitude : null;
+        $longitude ??= is_numeric($this->longitude) ? (float) $this->longitude : null;
+
+        if ($latitude === null || $longitude === null) {
+            return;
+        }
+
+        $this->latitude = (string) $latitude;
+        $this->longitude = (string) $longitude;
+
+        $result = app(PhilippineAddressResolver::class)->resolve($latitude, $longitude);
+
+        if (! $result['ok']) {
+            $this->locationError = 'Internet connection required for location.';
+
+            return;
+        }
+
+        $this->locationError = null;
+
+        foreach (['region_specific_id', 'province_id', 'municipality_id', 'barangay_id', 'area_cluster_id', 'address'] as $field) {
+            if ($result[$field] !== null) {
+                $this->{$field} = $result[$field];
+            }
+        }
+
+        $this->physical_region_id = $this->municipality_id
+            ? Municipality::find($this->municipality_id)?->region_id
+            : null;
+    }
+
+    public function resolvedRegionName(): ?string
+    {
+        return $this->municipality_id
+            ? Municipality::find($this->municipality_id)?->region?->name
+            : null;
+    }
+
+    public function resolvedRegionSpecificName(): ?string
+    {
+        return $this->region_specific_id
+            ? DB::table('region_specifics')->where('id', $this->region_specific_id)->value('name')
+            : null;
+    }
+
+    public function resolvedAreaClusterName(): ?string
+    {
+        return $this->area_cluster_id
+            ? AreaCluster::whereKey($this->area_cluster_id)->value('name')
+            : null;
+    }
+
+    public function resolvedProvinceName(): ?string
+    {
+        return $this->province_id ? Province::whereKey($this->province_id)->value('name') : null;
+    }
+
+    public function resolvedMunicipalityName(): ?string
+    {
+        return $this->municipality_id ? Municipality::whereKey($this->municipality_id)->value('name') : null;
+    }
+
+    public function resolvedBarangayName(): ?string
+    {
+        return $this->barangay_id ? Barangay::whereKey($this->barangay_id)->value('name') : null;
+    }
+
     public function categoryOptions(string $stream): array
     {
         return CustomerProfileFormService::categoryOptions($this->profileType() ?: 'outlet', $stream);
@@ -160,6 +253,8 @@ class CustomerCreatePage extends Page
             'physical_region_id' => 'nullable|exists:regions,id',
             'province_id' => 'nullable|exists:provinces,id',
             'municipality_id' => 'nullable|exists:municipalities,id',
+            'barangay_id' => 'nullable|exists:barangays,id',
+            'area_cluster_id' => 'nullable|exists:area_clusters,id',
             'person_in_charge_id' => 'nullable|integer|exists:users,id',
             'general_category_id' => 'nullable|exists:general_categories,id',
             'competitor_volume' => 'nullable|integer|in:1,2,3',
@@ -171,13 +266,10 @@ class CustomerCreatePage extends Page
             'business_landline_number' => 'nullable|string|max:50',
             'business_mobile_number' => 'nullable|string|max:50',
             'date_established' => 'nullable|date',
+            'active.conversion_program' => ['nullable', Rule::in([...array_keys(config('customer_trade_form.conversion_programs', [])), ''])],
         ]);
 
         if (! $this->physicalGeographyIsValid()) {
-            return;
-        }
-
-        if (! $this->validateScopedPortalRules($profileType)) {
             return;
         }
 
@@ -200,9 +292,13 @@ class CustomerCreatePage extends Page
                 'local_uuid' => (string) Str::uuid(),
                 'name' => $this->name,
                 'unique_id' => $this->unique_id,
+                'customer_code_reservation_token' => $this->customer_code_reservation_token,
                 'company_id' => $this->company_id,
                 'region_specific_id' => $this->region_specific_id,
                 'municipality_id' => $this->municipality_id,
+                'province_id' => $this->province_id,
+                'barangay_id' => $this->barangay_id,
+                'area_cluster_id' => $this->area_cluster_id,
                 'general_category_id' => $this->general_category_id,
                 'competitor_volume' => $this->competitor_volume,
                 'address' => $this->address,
@@ -233,18 +329,25 @@ class CustomerCreatePage extends Page
 
     protected function physicalGeographyIsValid(): bool
     {
-        if (! $this->municipality_id && ! $this->physical_region_id && ! $this->province_id) {
+        if (! $this->municipality_id) {
             return true;
         }
 
         $municipality = Municipality::find($this->municipality_id);
-        if (! $municipality || (int) $municipality->region_id !== (int) $this->physical_region_id) {
+
+        if (! $municipality) {
+            return true;
+        }
+
+        if ($this->physical_region_id && (int) $municipality->region_id !== (int) $this->physical_region_id) {
             $this->addError('municipality_id', 'The City / Municipality does not belong to the selected physical Region.');
+
             return false;
         }
 
-        if ((int) $municipality->province_id !== (int) $this->province_id && ! ($municipality->province_id === null && $this->province_id === null)) {
+        if ($this->province_id && (int) $municipality->province_id !== (int) $this->province_id) {
             $this->addError('municipality_id', 'The City / Municipality does not belong to the selected Province.');
+
             return false;
         }
 

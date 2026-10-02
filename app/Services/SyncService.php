@@ -104,6 +104,36 @@ class SyncService
         }
     }
 
+    /** @return array{token: string, code: string}|null */
+    public function reserveCustomerCode(int $companyId): ?array
+    {
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (! $user || blank($user->api_token) || blank($this->serverUrl)) {
+            return null;
+        }
+
+        try {
+            $response = $this->client($user->api_token)->post(
+                "{$this->serverUrl}/api/sync/reserve-customer-code",
+                ['company_id' => $companyId],
+            );
+
+            if (! $response->successful()) {
+                return null;
+            }
+
+            $token = $response->json('token');
+            $code = $response->json('code');
+
+            return is_string($token) && $token !== '' && is_string($code) && $code !== ''
+                ? ['token' => $token, 'code' => $code]
+                : null;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
     public function refreshToken(string $email, string $password): SyncResult
     {
         try {
@@ -127,6 +157,10 @@ class SyncService
                     'password' => $data['password'],
                     'api_token' => $data['api_token'],
                     'rsm_id' => $data['rsm_id'] ?? null,
+                    'base_start_latitude' => $data['base_start_latitude'] ?? null,
+                    'base_start_longitude' => $data['base_start_longitude'] ?? null,
+                    'base_end_latitude' => $data['base_end_latitude'] ?? null,
+                    'base_end_longitude' => $data['base_end_longitude'] ?? null,
                 ]
             );
 
@@ -163,6 +197,23 @@ class SyncService
             }
 
             $data = $response->json();
+
+            // Refresh the logged-in rep's itinerary base location from the pulled
+            // users list. Portal user ids differ from tablet ids, so match on the
+            // unique email instead of the numeric id.
+            $portalUser = collect($data['users'] ?? [])->firstWhere('email', $user->email);
+
+            // A base location the rep edited on the tablet and has not pushed yet
+            // wins over the portal value; overwriting it here would discard the
+            // local edit before the push loop could deliver it.
+            if ($portalUser && ! $user->base_location_pending) {
+                $user->update([
+                    'base_start_latitude' => $portalUser['base_start_latitude'] ?? null,
+                    'base_start_longitude' => $portalUser['base_start_longitude'] ?? null,
+                    'base_end_latitude' => $portalUser['base_end_latitude'] ?? null,
+                    'base_end_longitude' => $portalUser['base_end_longitude'] ?? null,
+                ]);
+            }
 
             // Reference/lookup tables must be populated before anything below that
             // holds a foreign key into them (salescall_brands -> material_groups/brands,
@@ -241,6 +292,33 @@ class SyncService
                 );
             }
 
+            foreach ($data['barangays'] ?? [] as $barangay) {
+                DB::table('barangays')->updateOrInsert(
+                    ['id' => $barangay['id']],
+                    [
+                        'municipality_id' => $barangay['municipality_id'],
+                        'psgc_code' => $barangay['psgc_code'] ?? null,
+                        'code' => $barangay['code'] ?? null,
+                        'name' => $barangay['name'],
+                        'enabled' => $barangay['enabled'] ?? true,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
+            foreach ($data['area_clusters'] ?? [] as $areaCluster) {
+                DB::table('area_clusters')->updateOrInsert(
+                    ['id' => $areaCluster['id']],
+                    [
+                        'region_specific_id' => $areaCluster['region_specific_id'],
+                        'code' => $areaCluster['code'] ?? null,
+                        'name' => $areaCluster['name'],
+                        'enabled' => $areaCluster['enabled'] ?? true,
+                        'updated_at' => now(),
+                    ]
+                );
+            }
+
             $protectedStatuses = ['pending', 'failed', 'conflict'];
             $serverToLocalCustomer = [];
             $protectedCustomerIds = DB::table('customers')->whereIn('sync_status', $protectedStatuses)->pluck('id', 'server_id')->filter()->all();
@@ -262,6 +340,9 @@ class SyncService
                         'general_category_id' => $customer['general_category_id'] ?? null,
                         'region_specific_id' => $customer['region_specific_id'] ?? null,
                         'municipality_id' => $customer['municipality_id'] ?? null,
+                        'province_id' => $customer['province_id'] ?? null,
+                        'barangay_id' => $customer['barangay_id'] ?? null,
+                        'area_cluster_id' => $customer['area_cluster_id'] ?? null,
                         'name' => $customer['name'],
                         'unique_id' => $customer['unique_id'] ?? null,
                         'contact_person' => $customer['contact_person'] ?? null,
@@ -653,13 +734,14 @@ class SyncService
 
             foreach ($pendingCustomers as $customer) {
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/push/customer", [
+                    $payload = [
                         'local_uuid' => $customer->local_uuid,
                         'server_id' => $customer->server_id,
                         'base_updated_at' => $customer->server_updated_at,
                         'sync_intent' => $customer->server_id ? 'update' : 'create',
                         'name' => $customer->name,
                         'unique_id' => $customer->unique_id,
+                        'customer_code_reservation_token' => $customer->customer_code_reservation_token,
                         'company_id' => $customer->company_id,
                         'general_category_id' => $customer->general_category_id,
                         'competitor_volume' => $customer->competitor_volume,
@@ -695,14 +777,34 @@ class SyncService
                             'source' => $event->source,
                             'supersedes_event_key' => $event->supersedes_event_key,
                         ])->values()->all(),
-                    ]);
+                    ];
+
+                    if ($customer->province_id !== null) {
+                        $payload['province_id'] = $customer->province_id;
+                    }
+
+                    if ($customer->barangay_id !== null) {
+                        $payload['barangay_id'] = $customer->barangay_id;
+                    }
+
+                    if ($customer->area_cluster_id !== null) {
+                        $payload['area_cluster_id'] = $customer->area_cluster_id;
+                    }
+
+                    $response = $client->post("{$this->serverUrl}/api/sync/push/customer", $payload);
 
                     if ($response->status() === 401) {
                         return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
                     }
 
                     if ($response->successful()) {
-                        $this->markSynced($customer, ['server_id' => $response->json('server_id'), 'server_updated_at' => $response->json('updated_at'), 'synced_at' => now()]);
+                        $this->markSynced($customer, [
+                            'server_id' => $response->json('server_id'),
+                            'server_updated_at' => $response->json('updated_at'),
+                            'unique_id' => $response->json('unique_id') ?: $customer->unique_id,
+                            'customer_code_reservation_token' => null,
+                            'synced_at' => now(),
+                        ]);
                         $pushed++;
                     } elseif ($response->status() === 409 && $response->json('code') === 'customer_conflict') {
                         $customer->update(['sync_status' => 'conflict', 'sync_error' => $response->json('message', 'Customer changed on Portal.')]);
@@ -1147,6 +1249,40 @@ class SyncService
                     }
                 } catch (Throwable $e) {
                     $this->recordUnexpectedItemFailure($note, $e, 'customer-note:unexpected');
+                    $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
+                }
+            }
+
+            $user->refresh();
+
+            if ($user->base_location_pending) {
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/push/base-location", [
+                        'base_start_latitude' => $user->base_start_latitude,
+                        'base_start_longitude' => $user->base_start_longitude,
+                        'base_end_latitude' => $user->base_end_latitude,
+                        'base_end_longitude' => $user->base_end_longitude,
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    if ($response->successful()) {
+                        $user->update(['base_location_pending' => false]);
+                        $pushed++;
+                    } else {
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    Log::error('sync:push:base-location', [
+                        'exception_class' => $e::class,
+                        'exception_message' => $e->getMessage(),
+                    ]);
                     $failed++;
                     $retryable++;
                     $failureReasons['unexpected_sync_error'] = true;
