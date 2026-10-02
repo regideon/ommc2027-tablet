@@ -1,5 +1,5 @@
 <x-filament-panels::page>
-    <form wire:submit="saveCustomer" x-data="customerLocationPicker()" class="space-y-5 pb-8">
+    <form wire:submit="saveCustomer" x-data="customerLocationPicker()" class="customer-create-form space-y-5 pb-8">
         <div class="bg-white rounded-2xl shadow-sm p-5 space-y-4">
             <h2 class="font-extrabold">Customer Information</h2>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
