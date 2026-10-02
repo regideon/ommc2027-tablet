@@ -13,6 +13,7 @@ use Spatie\Permission\Traits\HasRoles;
 #[Fillable([
     'name', 'email', 'password', 'api_token',
     'base_start_latitude', 'base_start_longitude', 'base_end_latitude', 'base_end_longitude',
+    'base_location_pending',
 ])]
 #[Hidden(['password', 'remember_token', 'api_token'])]
 class User extends Authenticatable
@@ -27,6 +28,7 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'base_location_pending' => 'boolean',
         ];
     }
 }
