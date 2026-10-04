@@ -2,10 +2,9 @@
 
 namespace App\Services;
 
+use App\Models\Customer;
 use App\Models\CustomerBrand;
 use App\Models\CustomerCategory;
-use App\Models\CustomerCategoryEvent;
-use App\Models\Customer;
 use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
 use App\Models\CustomerProfileAttachment;
@@ -17,6 +16,7 @@ use App\Models\SalescallBrand;
 use App\Models\SalescallCategory;
 use App\Models\SalescallImage;
 use App\Models\User;
+use App\Support\ExpensePaymentType;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Collection;
@@ -104,6 +104,36 @@ class SyncService
         }
     }
 
+    /** @return array{token: string, code: string}|null */
+    public function reserveCustomerCode(int $companyId): ?array
+    {
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (! $user || blank($user->api_token) || blank($this->serverUrl)) {
+            return null;
+        }
+
+        try {
+            $response = $this->client($user->api_token)->post(
+                "{$this->serverUrl}/api/sync/reserve-customer-code",
+                ['company_id' => $companyId],
+            );
+
+            if (! $response->successful()) {
+                return null;
+            }
+
+            $token = $response->json('token');
+            $code = $response->json('code');
+
+            return is_string($token) && $token !== '' && is_string($code) && $code !== ''
+                ? ['token' => $token, 'code' => $code]
+                : null;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
     public function refreshToken(string $email, string $password): SyncResult
     {
         try {
@@ -127,6 +157,10 @@ class SyncService
                     'password' => $data['password'],
                     'api_token' => $data['api_token'],
                     'rsm_id' => $data['rsm_id'] ?? null,
+                    'base_start_latitude' => $data['base_start_latitude'] ?? null,
+                    'base_start_longitude' => $data['base_start_longitude'] ?? null,
+                    'base_end_latitude' => $data['base_end_latitude'] ?? null,
+                    'base_end_longitude' => $data['base_end_longitude'] ?? null,
                 ]
             );
 
@@ -163,6 +197,23 @@ class SyncService
             }
 
             $data = $response->json();
+
+            // Refresh the logged-in rep's itinerary base location from the pulled
+            // users list. Portal user ids differ from tablet ids, so match on the
+            // unique email instead of the numeric id.
+            $portalUser = collect($data['users'] ?? [])->firstWhere('email', $user->email);
+
+            // A base location the rep edited on the tablet and has not pushed yet
+            // wins over the portal value; overwriting it here would discard the
+            // local edit before the push loop could deliver it.
+            if ($portalUser && ! $user->base_location_pending) {
+                $user->update([
+                    'base_start_latitude' => $portalUser['base_start_latitude'] ?? null,
+                    'base_start_longitude' => $portalUser['base_start_longitude'] ?? null,
+                    'base_end_latitude' => $portalUser['base_end_latitude'] ?? null,
+                    'base_end_longitude' => $portalUser['base_end_longitude'] ?? null,
+                ]);
+            }
 
             // Reference/lookup tables must be populated before anything below that
             // holds a foreign key into them (salescall_brands -> material_groups/brands,
@@ -252,7 +303,9 @@ class SyncService
                     ->first();
                 $localId = $existing?->id ?? $customer['id'];
                 $serverToLocalCustomer[$customer['id']] = $localId;
-                if (isset($protectedCustomerIds[$customer['id']])) continue;
+                if (isset($protectedCustomerIds[$customer['id']])) {
+                    continue;
+                }
 
                 DB::table('customers')->updateOrInsert(
                     ['id' => $localId],
@@ -286,7 +339,9 @@ class SyncService
 
             foreach ($data['customer_trade_profiles'] ?? [] as $profile) {
                 $localCustomerId = $serverToLocalCustomer[$profile['customer_id']] ?? $profile['customer_id'];
-                if (isset($protectedCustomerIds[$profile['customer_id']])) continue;
+                if (isset($protectedCustomerIds[$profile['customer_id']])) {
+                    continue;
+                }
                 DB::table('customer_trade_profiles')->updateOrInsert(
                     ['customer_id' => $localCustomerId],
                     [
@@ -313,7 +368,9 @@ class SyncService
 
             foreach ($data['customer_category_histories'] ?? [] as $history) {
                 $localCustomerId = $serverToLocalCustomer[$history['customer_id']] ?? $history['customer_id'];
-                if (isset($protectedCustomerIds[$history['customer_id']])) continue;
+                if (isset($protectedCustomerIds[$history['customer_id']])) {
+                    continue;
+                }
                 DB::table('customer_category_histories')->updateOrInsert(
                     ['customer_id' => $localCustomerId, 'profile_type' => $history['profile_type'] ?? null, 'stream' => $history['stream'] ?? null, 'category_year' => $history['category_year']],
                     ['category' => $history['category'], 'updated_at' => now()]
@@ -322,7 +379,9 @@ class SyncService
 
             foreach ($data['customer_category_events'] ?? [] as $event) {
                 $localCustomerId = $serverToLocalCustomer[$event['customer_id']] ?? $event['customer_id'];
-                if (isset($protectedCustomerIds[$event['customer_id']])) continue;
+                if (isset($protectedCustomerIds[$event['customer_id']])) {
+                    continue;
+                }
                 $supersedesId = filled($event['supersedes_event_key'] ?? null)
                     ? DB::table('customer_category_events')->where('event_key', $event['supersedes_event_key'])->value('id')
                     : null;
@@ -630,6 +689,66 @@ class SyncService
         }
     }
 
+    /** @return array<int, array<string, mixed>> */
+    public function readExpensesForSalescall(int $serverSalescallId): array
+    {
+        return $this->readExpenseRows("/api/sync/salescalls/{$serverSalescallId}/expenses");
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public function readExpenses(): array
+    {
+        return $this->readExpensesWithStatus()['expenses'];
+    }
+
+    /** @return array{expenses: array<int, array<string, mixed>>, failed: bool} */
+    public function readExpensesWithStatus(): array
+    {
+        return $this->requestExpenseRows('/api/sync/expenses');
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function readExpenseRows(string $path): array
+    {
+        return $this->requestExpenseRows($path)['expenses'];
+    }
+
+    /** @return array{expenses: array<int, array<string, mixed>>, failed: bool} */
+    private function requestExpenseRows(string $path): array
+    {
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (! $user || blank($user->api_token) || blank($this->serverUrl)) {
+            return ['expenses' => [], 'failed' => true];
+        }
+
+        try {
+            $response = $this->client($user->api_token)
+                ->get("{$this->serverUrl}{$path}");
+
+            if (! $response->successful()) {
+                Log::warning('Expense read failed.', ['path' => $path, 'status' => $response->status()]);
+
+                return ['expenses' => [], 'failed' => true];
+            }
+
+            $expenses = $response->json('expenses');
+
+            if (! is_array($expenses)) {
+                return ['expenses' => [], 'failed' => true];
+            }
+
+            return ['expenses' => array_values(array_filter($expenses, 'is_array')), 'failed' => false];
+        } catch (Throwable $exception) {
+            Log::warning('Expense read request failed.', [
+                'path' => $path,
+                'message' => $exception->getMessage(),
+            ]);
+
+            return ['expenses' => [], 'failed' => true];
+        }
+    }
+
     public function push(): SyncResult
     {
         $user = auth()->user() ?? User::whereNotNull('api_token')->first();
@@ -660,6 +779,7 @@ class SyncService
                         'sync_intent' => $customer->server_id ? 'update' : 'create',
                         'name' => $customer->name,
                         'unique_id' => $customer->unique_id,
+                        'customer_code_reservation_token' => $customer->customer_code_reservation_token,
                         'company_id' => $customer->company_id,
                         'general_category_id' => $customer->general_category_id,
                         'competitor_volume' => $customer->competitor_volume,
@@ -702,7 +822,13 @@ class SyncService
                     }
 
                     if ($response->successful()) {
-                        $this->markSynced($customer, ['server_id' => $response->json('server_id'), 'server_updated_at' => $response->json('updated_at'), 'synced_at' => now()]);
+                        $this->markSynced($customer, [
+                            'server_id' => $response->json('server_id'),
+                            'server_updated_at' => $response->json('updated_at'),
+                            'unique_id' => $response->json('unique_id') ?: $customer->unique_id,
+                            'customer_code_reservation_token' => null,
+                            'synced_at' => now(),
+                        ]);
                         $pushed++;
                     } elseif ($response->status() === 409 && $response->json('code') === 'customer_conflict') {
                         $customer->update(['sync_status' => 'conflict', 'sync_error' => $response->json('message', 'Customer changed on Portal.')]);
@@ -859,7 +985,7 @@ class SyncService
                         'expense_type_code' => $expense->expenseType?->code,
                         'amount' => $expense->amount,
                         'date_filed' => $expense->date_filed?->format('Y-m-d'),
-                        'payment_type' => $expense->payment_type,
+                        'payment_type' => ExpensePaymentType::forSync($expense->payment_type),
                         'payment_remarks' => $expense->payment_remarks,
                         'invoice_number' => $expense->invoice_number,
                         'with_invoice' => $expense->with_invoice,
@@ -1147,6 +1273,40 @@ class SyncService
                     }
                 } catch (Throwable $e) {
                     $this->recordUnexpectedItemFailure($note, $e, 'customer-note:unexpected');
+                    $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
+                }
+            }
+
+            $user->refresh();
+
+            if ($user->base_location_pending) {
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/push/base-location", [
+                        'base_start_latitude' => $user->base_start_latitude,
+                        'base_start_longitude' => $user->base_start_longitude,
+                        'base_end_latitude' => $user->base_end_latitude,
+                        'base_end_longitude' => $user->base_end_longitude,
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    if ($response->successful()) {
+                        $user->update(['base_location_pending' => false]);
+                        $pushed++;
+                    } else {
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    Log::error('sync:push:base-location', [
+                        'exception_class' => $e::class,
+                        'exception_message' => $e->getMessage(),
+                    ]);
                     $failed++;
                     $retryable++;
                     $failureReasons['unexpected_sync_error'] = true;

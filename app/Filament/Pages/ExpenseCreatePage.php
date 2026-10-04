@@ -5,6 +5,7 @@ namespace App\Filament\Pages;
 use App\Models\ExpenseType;
 use App\Models\Salescall;
 use App\Services\LocalExpenseCreationService;
+use App\Support\ExpensePaymentType;
 use App\Support\NativeMediaPath;
 use BackedEnum;
 use Filament\Notifications\Notification;
@@ -59,6 +60,7 @@ class ExpenseCreatePage extends Page
     protected function getViewData(): array
     {
         return [
+            'paymentTypes' => ExpensePaymentType::newEntryValues(),
             'salescallContext' => [
                 'id' => $this->salescall->id,
                 'name' => $this->salescall->customer?->name ?? '—',
@@ -77,7 +79,7 @@ class ExpenseCreatePage extends Page
     /**
      * Persist a supported Expense locally from the authorized originating Sales Call.
      *
-     * @param array<string, mixed> $form
+     * @param  array<string, mixed>  $form
      * @return array{ok: bool, errors?: array<string, array<int, string>>}
      */
     public function saveExpense(array $form, array $attachments = []): array

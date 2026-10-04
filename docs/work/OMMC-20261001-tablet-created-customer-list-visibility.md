@@ -1,0 +1,22 @@
+# OMMC-20261001-tablet-created-customer-list-visibility
+
+- **Title:** Tablet-created Customer remains visible after creation and sync
+- **Objective:** Keep a Customer created by the authenticated Tablet user visible on the Tablet Customers page when no optional Access user is selected.
+- **Repositories:** Portal ommc2027 (authority inspection and equivalent Work record); Tablet ommc2027-tablet (bounded implementation).
+- **State:** TERMINAL_DELIVERED
+- **Implementation authorization:** Granted by explicit Human GO to apply the bounded Access-default correction.
+- **Terminal authorization:** Explicit Human `TERMINAL: GO` granted after browser acceptance PASS.
+- **Accepted root cause:** Human testing confirmed that the existing `customer_user` Access relationship controls CustomerPage visibility. Customer `Test4` appeared once the appropriate Access relationship existed.
+- **Accepted behavior:** Add Customer defaults the authenticated Tablet user's local `users.id` into `access_user_ids`, keeps the Access field editable for additional users, and reuses the existing `CustomerProfileFormService::saveAggregate()` pivot persistence. No separate creator visibility model is used.
+- **Constraints:** Preserve negative local Customer IDs, existing CustomerPage Access filtering, additional Access selection, the OMMC no-RSM requirement, Customer Code, Conversion Program, RSM behavior, geography, sync boundaries, and unrelated work.
+- **Implementation:** CustomerCreatePage initializes `access_user_ids` with `auth()->id()` when authenticated. Existing Access persistence remains responsible for `customer_user`; CustomerPage remains local `customer_user`-based. Provisional `users.server_id`/`customers.created_by` ownership migrations, mappings, fallback predicate, and related tests were removed because Human evidence established Access as the actual contract.
+- **RSM safety:** The defaulted current user may have `rsm_id=NULL`; no RSM relationship is required or manufactured.
+- **Temporary-ID verification:** The correction leaves negative local Customer IDs unchanged; the existing pivot is created against that same local Customer ID.
+- **Task-owned Tablet files:** CustomerCreatePage and focused Add Customer/Access lifecycle tests. No Portal application files changed.
+- **Portal changes:** No Portal application files changed; Portal was inspected only to confirm the authoritative sync contract.
+- **Validation:** Add Customer lifecycle tests passed: default current local user, no-RSM save, negative-ID pivot persistence, and additional Access-user persistence. CustomerPage Access, Customer Code, and operational sync regression tests passed: 6 tests, 27 assertions. One known unrelated diagnostic render assertion remains for `2018 *`; PHP syntax and `git diff --check` pass. Human browser acceptance PASS confirmed the default Access selection, save without manual selection, persisted `customer_user`, Customer visibility, existing list behavior, negative-ID safety, no-RSM behavior, Customer Code, and Conversion Program.
+- **Regression status:** CustomerPage remains Access-based; unrelated users remain excluded. No RSM relationship is manufactured. Customer Code and Conversion Program application code remain untouched. Automatic synchronization was not expanded.
+- **Human acceptance:** PASS. The authenticated user is selected by default; Customer creation without manual Access selection persists the expected relationship and displays the Customer. Existing list behavior, negative local IDs, no-RSM behavior, Customer Code, and Conversion Program remain functional. Additional Access selection remains supported.
+- **Blockers:** None.
+- **Remaining work:** None for this Work. Build 53/version-bump/release packaging is explicitly separate.
+- **Delivery evidence:** Terminal reconciliation commit and pushed `ommc-ipad-v2` ref recorded in repository history after delivery; no application behavior beyond the accepted Access default is included.

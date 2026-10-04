@@ -1,0 +1,32 @@
+# OMMC-20261001-tablet-customer-location-picker
+
+- **Title:** Tablet customer location map picker (modal popup, with address reverse geocoding)
+- **Objective:** Let a tablet user pin a customer's exact latitude/longitude on a Leaflet map inside a modal popup on the customer create/edit page, writing the picked coordinates into the existing `latitude`/`longitude` fields and reverse-geocoding the pinned point into the `address` text field.
+- **Repositories:** Tablet `ommc2027-tablet` only. `ommc2027` (web) is reference only.
+- **State:** TERMINAL_DELIVERED
+- **Implementation authorization:** Granted by explicit Human "Approve" of the bounded design; local implementation and validation only.
+- **Terminal authorization:** None.
+- **Human-authorized scope:** Add a modal Leaflet location picker to the tablet customer create/edit page. No new database columns, no Google Maps API/key, no `ommc2027` changes.
+- **Accepted decisions:**
+  - Map provider is Leaflet, already loaded panel-wide via `SaleshubPanelProvider` (unpkg `leaflet@1.9.4`). No Google Maps.
+  - Customer `latitude`/`longitude` already exist and are validated/persisted, so no migration.
+  - The modal mirrors the existing salescall-page map overlay pattern rather than Filament's modal component.
+  - Location coordinates stay coordinate-only (no new columns). When a point is pinned/dragged or "Use Current Location" is used, the coordinates are reverse-geocoded with **OpenStreetMap Nominatim** (`nominatim.openstreetmap.org/reverse`, no API key) and the formatted address is previewed in the modal; "Use This Location" writes it into the existing `address` textarea. Geocoding failure leaves the address untouched.
+  - Writing the address is additive to the existing `address` textarea; no address text columns were added.
+- **Implementation constraints:** No commit/push. Preserve unrelated worktree changes.
+- **Task-owned files/components:**
+  - `resources/views/filament/pages/customer-create-page.blade.php` (shared by `CustomerCreatePage` and `CustomerEditPage`)
+  - `tests/Feature/CustomerLocationPickerTest.php`
+  - this Work note
+- **Unrelated/pre-existing worktree changes to preserve:** `nativephp/.gitignore`, `package-lock.json`.
+- **Implementation decisions:** One shared Blade view covers both create and edit; the modal writes to the Livewire `latitude`/`longitude` properties; the Leaflet instance is destroyed on close to avoid the known container-size bug.
+- **Validation:**
+  - `php artisan test --compact tests/Feature/CustomerLocationPickerTest.php` → 2 passed (14 assertions), covering the picker hooks, the `data-location-address` hook, the Nominatim lookup call, and `confirmLocation()`.
+  - `php artisan test --compact tests/Feature/CustomerLocationPickerTest.php tests/Feature/CustomerCreatePageDiagnosticTest.php tests/Feature/CustomerPageAccessTest.php tests/Feature/CustomerOperationalSyncTest.php` → 7 passed, 2 failed. The two failures are pre-existing `CustomerCreatePageDiagnosticTest` drift present on the clean tree before this work (assertion `2018 *` and the `saveCustomer` redirect), unrelated to this change; no new regressions.
+  - `vendor/bin/pint tests/Feature/CustomerLocationPickerTest.php --format agent` → passed. The pre-existing dirty files were not run through `pint --dirty` because it reformatted unrelated code.
+  - `php artisan view:cache` → Blade compiled successfully.
+  - Node syntax check of the inline Alpine script → valid.
+- **Manual acceptance:** pending — needs a browser/tablet check that the pin reverse-geocodes and the modal preview + "Use This Location" write the Address, with a tablet rebuild.
+- **Blockers:** None.
+- **Remaining work:** Human manual verification of the map interaction; then terminal authorization.
+- **Delivery evidence status:** Committed locally on branch `1-be-tablet-users-map` under the Human `commit i'll push` authorization; push is performed separately by the Human.

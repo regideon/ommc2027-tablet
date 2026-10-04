@@ -7,9 +7,10 @@ use App\Models\ExpenseAttachment;
 use App\Models\ExpenseType;
 use App\Models\Salescall;
 use App\Models\User;
+use App\Support\ExpensePaymentType;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
@@ -64,10 +65,9 @@ class LocalExpenseCreationService
 
         $validator = Validator::make($input, [
             'expense_type_code' => ['required', 'string', 'in:'.implode(',', self::SUPPORTED_TYPES)],
-            'amount' => ['required', 'numeric', 'min:0.01'],
+            'amount' => ['required', 'numeric', 'gt:0', 'decimal:0,2'],
             'date_filed' => ['required', 'date'],
-            'payment_type' => ['required', 'string', 'in:Revolving Fund,Petty Cash Voucher (PCV),SBC Credit Card,Cash Advance,Fleet Card'],
-            'payment_remarks' => ['required', 'string', 'max:5000'],
+            'payment_type' => ['required', 'string', 'in:'.implode(',', ExpensePaymentType::newEntryValues())],
             'invoice_number' => ['required', 'string', 'max:255'],
             'establishment' => ['required', 'string', 'max:255'],
             'location' => ['required', 'string', 'max:2000'],
@@ -103,32 +103,32 @@ class LocalExpenseCreationService
         try {
             return DB::transaction(function () use ($salescall, $creator, $expenseType, $validated, $formData, $attachments, &$storedPaths): Expense {
                 $expense = Expense::create([
-                'local_uuid' => (string) \Str::uuid(),
-                'server_id' => null,
-                'salescall_id' => $salescall->id,
-                'customer_id' => $salescall->customer_id,
-                'expense_type_id' => $expenseType->id,
-                'created_by' => $creator->id,
-                'amount' => $validated['amount'],
-                'date_filed' => $validated['date_filed'],
-                'payment_type' => $validated['payment_type'],
-                'payment_remarks' => $validated['payment_remarks'],
-                'invoice_number' => $validated['invoice_number'],
-                'with_invoice' => true,
-                'establishment' => $validated['establishment'],
-                'location' => $validated['location'],
-                'purpose' => $validated['purpose'],
-                'tin' => $validated['tin'],
-                'latitude' => $validated['latitude'] ?? null,
-                'longitude' => $validated['longitude'] ?? null,
-                'form_data' => $formData,
-                'form_schema_version' => 1,
-                'approved' => null,
-                'approver_remarks' => null,
-                'sync_status' => 'pending',
-                'sync_attempts' => 0,
-                'sync_error' => null,
-                'synced_at' => null,
+                    'local_uuid' => (string) \Str::uuid(),
+                    'server_id' => null,
+                    'salescall_id' => $salescall->id,
+                    'customer_id' => $salescall->customer_id,
+                    'expense_type_id' => $expenseType->id,
+                    'created_by' => $creator->id,
+                    'amount' => $validated['amount'],
+                    'date_filed' => $validated['date_filed'],
+                    'payment_type' => $validated['payment_type'],
+                    'payment_remarks' => null,
+                    'invoice_number' => $validated['invoice_number'],
+                    'with_invoice' => true,
+                    'establishment' => $validated['establishment'],
+                    'location' => $validated['location'],
+                    'purpose' => $validated['purpose'],
+                    'tin' => $validated['tin'],
+                    'latitude' => $validated['latitude'] ?? null,
+                    'longitude' => $validated['longitude'] ?? null,
+                    'form_data' => $formData,
+                    'form_schema_version' => 1,
+                    'approved' => null,
+                    'approver_remarks' => null,
+                    'sync_status' => 'pending',
+                    'sync_attempts' => 0,
+                    'sync_error' => null,
+                    'synced_at' => null,
                 ]);
 
                 foreach ($attachments as $attachment) {
