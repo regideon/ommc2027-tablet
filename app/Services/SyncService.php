@@ -16,6 +16,7 @@ use App\Models\SalescallBrand;
 use App\Models\SalescallCategory;
 use App\Models\SalescallImage;
 use App\Models\User;
+use App\Support\ExpensePaymentType;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Collection;
@@ -984,7 +985,7 @@ class SyncService
                         'expense_type_code' => $expense->expenseType?->code,
                         'amount' => $expense->amount,
                         'date_filed' => $expense->date_filed?->format('Y-m-d'),
-                        'payment_type' => $expense->payment_type,
+                        'payment_type' => ExpensePaymentType::forSync($expense->payment_type),
                         'payment_remarks' => $expense->payment_remarks,
                         'invoice_number' => $expense->invoice_number,
                         'with_invoice' => $expense->with_invoice,

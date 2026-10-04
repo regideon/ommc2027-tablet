@@ -6,6 +6,7 @@ use App\Models\Expense;
 use App\Models\ExpenseAttachment;
 use App\Models\Salescall;
 use App\Models\User;
+use App\Support\ExpensePaymentType;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\File;
@@ -117,7 +118,7 @@ class ExpenseReadService
             'expense_type' => $expense->expenseType?->label ?? '—',
             'amount' => (string) $expense->amount,
             'date_filed' => $expense->date_filed?->toDateString(),
-            'payment_type' => $expense->payment_type,
+            'payment_type' => ExpensePaymentType::forDisplay($expense->payment_type),
             'payment_remarks' => $expense->payment_remarks,
             'invoice_number' => $expense->invoice_number,
             'with_invoice' => $expense->with_invoice,

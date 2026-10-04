@@ -8,8 +8,12 @@ use App\Models\ExpenseType;
 use App\Models\Salescall;
 use App\Models\User;
 use App\Services\ExpenseReadService;
+use App\Services\LocalExpenseCreationService;
+use App\Services\SyncService;
+use App\Support\ExpensePaymentType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role;
 use Symfony\Component\HttpKernel\Exception\HttpException;
@@ -74,6 +78,78 @@ test('expense reads remain scoped to the selected sales call and retain local V2
         ->call('loadExpenses', $secondCall->id)
         ->assertSet('callExpenses.0.salescall_id', $secondCall->id)
         ->assertCount('callExpenses', 1);
+});
+
+test('Expense read aliases historical Petty Cash and keeps other legacy values raw', function () {
+    $salescall = omExpenseReadCreateSalescall($this->customer, $this->user);
+    $legacy = omExpenseReadCreateExpense($salescall, $this->customer, $this->expenseType, $this->user, [
+        'payment_type' => 'Petty Cash',
+    ]);
+    omExpenseReadCreateExpense($salescall, $this->customer, $this->expenseType, $this->user, [
+        'payment_type' => 'Other Credit Card',
+    ]);
+
+    expect(app(ExpenseReadService::class)->forSalescall($salescall->id)->pluck('payment_type')->sort()->values()->all())
+        ->toBe(['Other Credit Card', 'Petty Cash Voucher (PCV)'])
+        ->and($legacy->fresh()->payment_type)->toBe('Petty Cash')
+        ->and(ExpensePaymentType::newEntryValues())->toBe([
+            'Cash', 'SBC Credit Card', 'Other Payment Type', 'Fleet Card',
+            'Petty Cash Voucher (PCV)', 'Revolving Fund', 'Cash Advance',
+        ]);
+});
+
+test('new Expense form omits Payment Remarks and requests two-decimal Amount input', function () {
+    $view = file_get_contents(resource_path('views/filament/pages/expense-create-page.blade.php'));
+
+    expect($view)->toContain('step="0.01"')
+        ->and($view)->toContain('@foreach ($paymentTypes as $paymentType)')
+        ->and($view)->not->toContain('payment_remarks')
+        ->and($view)->not->toContain('Payment Remarks');
+});
+
+test('new Expense creation accepts positive amounts with at most two decimals and stores no remarks', function () {
+    $salescall = omExpenseReadCreateSalescall($this->customer, $this->user);
+    $type = ExpenseType::query()->where('code', 'communication_expenses')->firstOrFail();
+    $service = app(LocalExpenseCreationService::class);
+    $base = [
+        'expense_type_code' => $type->code,
+        'date_filed' => '2026-10-04',
+        'payment_type' => 'Other Payment Type',
+        'invoice_number' => 'INV-1',
+        'establishment' => 'Shop',
+        'location' => 'Manila',
+        'purpose' => 'Business expense',
+        'tin' => 'TIN-1',
+        'payment_remarks' => 'must be ignored on new entry',
+    ];
+
+    foreach (['1', '1.5', '1.50', '100', '100.01'] as $amount) {
+        $expense = $service->createFromSalescall($salescall, $this->user, $base + ['amount' => $amount]);
+        expect($expense->payment_remarks)->toBeNull();
+    }
+
+    foreach (['0', '0.00', '-1', 'abc', '1.001', '100.999'] as $amount) {
+        expect(fn () => $service->createFromSalescall($salescall, $this->user, $base + ['amount' => $amount]))
+            ->toThrow(ValidationException::class);
+    }
+});
+
+test('pending historical Petty Cash syncs as PCV while retaining its old remarks and raw local value', function () {
+    config(['sync.server_url' => 'https://portal.example.test']);
+    $salescall = omExpenseReadCreateSalescall($this->customer, $this->user, 901);
+    $expense = omExpenseReadCreateExpense($salescall, $this->customer, $this->expenseType, $this->user, [
+        'payment_type' => 'Petty Cash',
+        'payment_remarks' => 'Legacy pending remarks',
+    ]);
+    Http::fake(['portal.example.test/api/sync/push/expense' => Http::response(['server_id' => 701])]);
+
+    app(SyncService::class)->push();
+
+    Http::assertSent(fn ($request): bool => $request->url() === 'https://portal.example.test/api/sync/push/expense'
+        && $request['payment_type'] === 'Petty Cash Voucher (PCV)'
+        && $request['payment_remarks'] === 'Legacy pending remarks');
+    expect($expense->fresh()->payment_type)->toBe('Petty Cash')
+        ->and($expense->fresh()->payment_remarks)->toBe('Legacy pending remarks');
 });
 
 test('server expense replaces its synced local copy by server identity', function () {
