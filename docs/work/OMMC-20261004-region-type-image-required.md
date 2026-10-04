@@ -1,0 +1,38 @@
+# OMMC-20261004-region-type-image-required
+
+- **Title:** Require a salescall image for selected region types (IB Team, OE Team)
+- **Objective:** The Portal owns a per-`RegionType` flag `is_image_required` (true only for IB Team and OE Team, set by a re-runnable seeder). The tablet syncs `region_types` and links the logged-in user via `users.region_type_id`; a salescall cannot be marked Completed without at least one photo when the user's region type requires it.
+- **Repositories:** Portal `ommc2027`; Tablet `ommc2027-tablet` (cross-repository Work, same ID in both).
+- **State:** READY_FOR_TERMINAL_REVIEW
+- **Implementation authorization:** Granted by explicit Human reply "implement then". Local implementation and validation only.
+- **Terminal authorization:** None.
+- **Human-authorized scope:** Add `region_types.is_image_required`; forbid duplicating that boolean onto `users` (tablet links via `region_type_id` only); enforce "at least one image" on Completed only; schema + seeder only (no admin UI).
+- **Accepted decisions:**
+  - The flag is defined only in `region_types`. The tablet stores the reference (`users.region_type_id`), not a copy.
+  - Requirement is "at least one salescall image" (not a specific type, not all types).
+  - Validation applies to the Completed outcome only; Partially Completed / Cancel-Void unchanged.
+  - Tablet gets a synced `region_types` reference table and `users.region_type_id` (no FK constraint, mirroring other reference columns).
+- **Implementation constraints:** No commit/push. Preserve unrelated worktree changes.
+- **Task-owned files/components (Tablet `ommc2027-tablet`):**
+  - `database/migrations/2026_10_04_000001_create_region_types_table.php` (new)
+  - `database/migrations/2026_10_04_000002_add_region_type_id_to_users_table.php` (new)
+  - `app/Models/RegionType.php` (new)
+  - `app/Models/User.php`
+  - `app/Services/SyncService.php` (additive only)
+  - `app/Console/Commands/SyncLoginCommand.php`
+  - `app/Filament/Pages/SalescallPage.php`
+  - `tests/Feature/RegionTypeImageRequiredTest.php` (new)
+  - this Work note
+- **Unrelated/pre-existing worktree changes to preserve (Tablet):** the separate, in-progress Work `OMMC-20261004-tablet-sync-pull-reliability` owns uncommitted changes in `app/Services/SyncService.php` (file sink + `upsertRows`), `tests/Feature/SyncPullResponseSinkTest.php`, `tests/Feature/SyncPullReferenceBulkUpsertTest.php`, and its own Work note. They were preserved, not reverted or entangled.
+- **Implementation decisions:**
+  - `region_types` is ingested through the existing `upsertRows()` bulk helper (from `OMMC-20261004-tablet-sync-pull-reliability`), so the whole reference table is a handful of statements.
+  - The logged-in user's `region_type_id` is applied outside the `base_location_pending` guard, because region type is portal-authoritative and not locally editable.
+  - `SalescallPage` replaces the boolean `canSubmitSalescall()` with `salescallSubmitBlocker()` returning `brands` / `image` / `null`, so the blocked-action notification names the actual missing requirement. Brands remain required regardless of region type.
+- **Validation:**
+  - New: `php artisan test --compact tests/Feature/RegionTypeImageRequiredTest.php` → 4 passed (12 assertions): pull syncs region types + links the user; login stores the link; flagged user blocked from Completed without a photo and allowed with one; unflagged user allowed without one.
+  - Full suite: `php artisan test --compact` → 145 passed, 3 skipped, 12 failed. The same 12 pre-existing/environmental failures reproduce on clean `HEAD` (`CustomerCreatePageDiagnosticTest`, `ExampleTest`, `FirstLoginPersistenceTest` ×3, `IosNativeRegenerationArtifactsTest` ×2, `SalescallPhotoUploadTest` ×4, `StartupMigrationClassicDiagnosticsTest`); no regressions.
+  - `vendor/bin/pint` on the new/small files → clean.
+- **Manual acceptance:** Pending — after both repos are built, confirm a rep in IB Team/OE Team cannot Complete a visit without a photo.
+- **Blockers:** None.
+- **Remaining work:** Human manual verification on device; then terminal authorization (both repos must be ready and delivered together).
+- **Delivery evidence status:** Not delivered.
