@@ -22,6 +22,7 @@ use App\Models\SalescallImageType;
 use App\Models\SalescallStatus;
 use App\Models\SalescallType;
 use App\Models\SubCategory;
+use App\Services\ExpenseReadService;
 use App\Services\SyncResult;
 use App\Services\SyncService;
 use App\Support\NativeMediaPath;
@@ -79,6 +80,8 @@ class SalescallPage extends Page
 
     public array $profileAttachments = [];
 
+    public array $callExpenses = [];
+
     public bool $hasSavedBrands = false;
 
     public bool $photosComplete = false;
@@ -127,6 +130,17 @@ class SalescallPage extends Page
         ])->all();
 
         $this->photosComplete = $this->allPhotoTypesCovered($images->pluck('salescall_image_type_id'));
+    }
+
+    public function loadExpenses(?int $salescallId, ExpenseReadService $expenseReadService): void
+    {
+        if (! $salescallId) {
+            $this->callExpenses = [];
+
+            return;
+        }
+
+        $this->callExpenses = $expenseReadService->forSalescall($salescallId)->all();
     }
 
     private function allPhotoTypesCovered(Collection $coveredTypeIds): bool
@@ -1556,6 +1570,7 @@ class SalescallPage extends Page
                     'ref_number' => $call->ref_number,
                     'seq' => $call->id,
                     'local_uuid' => $call->local_uuid,
+                    'server_id' => $call->server_id,
                     'customer_id' => $call->customer_id,
                     'name' => $call->customer->name ?? '—',
                     'unique_id' => $call->customer->unique_id ?? '',
