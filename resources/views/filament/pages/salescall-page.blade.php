@@ -370,6 +370,7 @@
         get selectedCall() { return this.calls.find(c => c.id === this.selected); },
         selectCall(id) {
             if (!id) return;
+            this.$dispatch('expense-context-reset');
             this.selected = id;
             this.tab = 'overview';
 
@@ -388,6 +389,7 @@
             $wire.loadPhotos(id);
             $wire.loadBrands(id);
             $wire.loadCategories(id);
+            $wire.loadExpenses(id);
             const call = this.calls.find(c => c.id === id);
             if (call?.customer_id) { $wire.loadCustomerNotes(call.customer_id); }
             this.resetPhotoWizard();
@@ -506,7 +508,7 @@
             }[s] ?? '';
         },
         tabLabel(t) {
-            return { overview: 'Overview', brands: 'Brands', ccr: 'CCR', mrf: 'MRF', photos: 'Photos', profile: 'Change Profile', activity: 'Activity Log' }[t] ?? t;
+            return { overview: 'Overview', brands: 'Brands', ccr: 'CCR', mrf: 'MRF', photos: 'Photos', profile: 'Change Profile', expenses: 'Expenses', activity: 'Activity Log' }[t] ?? t;
         },
 
         miniMap: null,
@@ -716,6 +718,7 @@
         });
         $watch('tab', (value) => {
             if (value === 'profile' && selected) { $wire.loadProfile(selected); $wire.loadCategories(selected); }
+            if (value === 'expenses' && selected) { $wire.loadExpenses(selected); }
             if (value === 'overview') initMiniMap();
             // Defensive reset: don't let a half-finished cancel-reason panel or photo
             // modal from a previous tab silently hide the finish-action buttons.
@@ -1722,7 +1725,7 @@
                     {{-- Tabs --}}
                     {{-- CCR, MRF, and Activity Log are hidden for now — phase 2. Content blocks below are commented out, not deleted. --}}
                     <div class="flex gap-4 lg:gap-6 border-b border-gray-100 overflow-x-auto scrollbar-hide">
-                        <template x-for="t in ['overview','brands','profile','photos']">
+                        <template x-for="t in ['overview','brands','profile','photos','expenses']">
                             <button
                                 @click="tab = t"
                                 :class="tab === t
@@ -1858,6 +1861,9 @@
                         </div>
 
                     </div>
+
+                    {{-- EXPENSES TAB --}}
+                    @include('filament.pages.expense-reader', ['context' => 'salescall'])
 
                     {{-- BRANDS TAB --}}
                     <div x-show="tab === 'brands'" class="space-y-4">

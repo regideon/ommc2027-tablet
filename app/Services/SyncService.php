@@ -2,10 +2,9 @@
 
 namespace App\Services;
 
+use App\Models\Customer;
 use App\Models\CustomerBrand;
 use App\Models\CustomerCategory;
-use App\Models\CustomerCategoryEvent;
-use App\Models\Customer;
 use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
 use App\Models\CustomerProfileAttachment;
@@ -17,6 +16,7 @@ use App\Models\SalescallBrand;
 use App\Models\SalescallCategory;
 use App\Models\SalescallImage;
 use App\Models\User;
+use App\Support\ExpensePaymentType;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Collection;
@@ -324,7 +324,9 @@ class SyncService
                     ->first();
                 $localId = $existing?->id ?? $customer['id'];
                 $serverToLocalCustomer[$customer['id']] = $localId;
-                if (isset($protectedCustomerIds[$customer['id']])) continue;
+                if (isset($protectedCustomerIds[$customer['id']])) {
+                    continue;
+                }
 
                 DB::table('customers')->updateOrInsert(
                     ['id' => $localId],
@@ -361,7 +363,9 @@ class SyncService
 
             foreach ($data['customer_trade_profiles'] ?? [] as $profile) {
                 $localCustomerId = $serverToLocalCustomer[$profile['customer_id']] ?? $profile['customer_id'];
-                if (isset($protectedCustomerIds[$profile['customer_id']])) continue;
+                if (isset($protectedCustomerIds[$profile['customer_id']])) {
+                    continue;
+                }
                 DB::table('customer_trade_profiles')->updateOrInsert(
                     ['customer_id' => $localCustomerId],
                     [
@@ -388,7 +392,9 @@ class SyncService
 
             foreach ($data['customer_category_histories'] ?? [] as $history) {
                 $localCustomerId = $serverToLocalCustomer[$history['customer_id']] ?? $history['customer_id'];
-                if (isset($protectedCustomerIds[$history['customer_id']])) continue;
+                if (isset($protectedCustomerIds[$history['customer_id']])) {
+                    continue;
+                }
                 DB::table('customer_category_histories')->updateOrInsert(
                     ['customer_id' => $localCustomerId, 'profile_type' => $history['profile_type'] ?? null, 'stream' => $history['stream'] ?? null, 'category_year' => $history['category_year']],
                     ['category' => $history['category'], 'updated_at' => now()]
@@ -397,7 +403,9 @@ class SyncService
 
             foreach ($data['customer_category_events'] ?? [] as $event) {
                 $localCustomerId = $serverToLocalCustomer[$event['customer_id']] ?? $event['customer_id'];
-                if (isset($protectedCustomerIds[$event['customer_id']])) continue;
+                if (isset($protectedCustomerIds[$event['customer_id']])) {
+                    continue;
+                }
                 $supersedesId = filled($event['supersedes_event_key'] ?? null)
                     ? DB::table('customer_category_events')->where('event_key', $event['supersedes_event_key'])->value('id')
                     : null;
@@ -680,6 +688,66 @@ class SyncService
         }
     }
 
+    /** @return array<int, array<string, mixed>> */
+    public function readExpensesForSalescall(int $serverSalescallId): array
+    {
+        return $this->readExpenseRows("/api/sync/salescalls/{$serverSalescallId}/expenses");
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public function readExpenses(): array
+    {
+        return $this->readExpensesWithStatus()['expenses'];
+    }
+
+    /** @return array{expenses: array<int, array<string, mixed>>, failed: bool} */
+    public function readExpensesWithStatus(): array
+    {
+        return $this->requestExpenseRows('/api/sync/expenses');
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function readExpenseRows(string $path): array
+    {
+        return $this->requestExpenseRows($path)['expenses'];
+    }
+
+    /** @return array{expenses: array<int, array<string, mixed>>, failed: bool} */
+    private function requestExpenseRows(string $path): array
+    {
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (! $user || blank($user->api_token) || blank($this->serverUrl)) {
+            return ['expenses' => [], 'failed' => true];
+        }
+
+        try {
+            $response = $this->client($user->api_token)
+                ->get("{$this->serverUrl}{$path}");
+
+            if (! $response->successful()) {
+                Log::warning('Expense read failed.', ['path' => $path, 'status' => $response->status()]);
+
+                return ['expenses' => [], 'failed' => true];
+            }
+
+            $expenses = $response->json('expenses');
+
+            if (! is_array($expenses)) {
+                return ['expenses' => [], 'failed' => true];
+            }
+
+            return ['expenses' => array_values(array_filter($expenses, 'is_array')), 'failed' => false];
+        } catch (Throwable $exception) {
+            Log::warning('Expense read request failed.', [
+                'path' => $path,
+                'message' => $exception->getMessage(),
+            ]);
+
+            return ['expenses' => [], 'failed' => true];
+        }
+    }
+
     public function push(): SyncResult
     {
         $user = auth()->user() ?? User::whereNotNull('api_token')->first();
@@ -930,7 +998,7 @@ class SyncService
                         'expense_type_code' => $expense->expenseType?->code,
                         'amount' => $expense->amount,
                         'date_filed' => $expense->date_filed?->format('Y-m-d'),
-                        'payment_type' => $expense->payment_type,
+                        'payment_type' => ExpensePaymentType::forSync($expense->payment_type),
                         'payment_remarks' => $expense->payment_remarks,
                         'invoice_number' => $expense->invoice_number,
                         'with_invoice' => $expense->with_invoice,

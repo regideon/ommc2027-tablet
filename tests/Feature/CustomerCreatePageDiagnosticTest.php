@@ -1,6 +1,7 @@
 <?php
 
 use App\Filament\Pages\CustomerCreatePage;
+use App\Filament\Pages\CustomerEditPage;
 use App\Filament\Pages\CustomerPage;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -16,7 +17,7 @@ function seedCustomerCreateFixtures(): User
     $now = now();
 
     DB::table('companies')->insert(['id' => 1, 'name' => 'OMMC', 'code' => 'OMMC', 'created_at' => $now, 'updated_at' => $now]);
-    DB::table('regions')->insert(['id' => 1, 'code' => 'MM', 'name' => 'Metro Manila', 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('regions')->insert(['id' => 1, 'code' => 'MM', 'psgc_code' => '130000000', 'name' => 'Metro Manila', 'created_at' => $now, 'updated_at' => $now]);
     DB::table('region_specifics')->insert(['id' => 1, 'region_id' => 1, 'name' => 'NCR', 'sort' => 1, 'created_at' => $now, 'updated_at' => $now]);
     DB::table('provinces')->insert(['id' => 1, 'region_specific_id' => 1, 'name' => 'Metro Manila', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
     DB::table('municipalities')->insert(['id' => 1, 'region_id' => 1, 'province_id' => 1, 'name' => 'Quezon City', 'sort' => 1, 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
@@ -113,17 +114,37 @@ test('customer add page renders against the complete migrated sqlite schema', fu
         ->assertSee('ULAB')
         ->assertSee('AB Annual Categories')
         ->assertSee('Owner Profile')
-        ->assertSee('2018 *')
-        ->assertSee('2026 *')
+        ->assertSee('2018')
+        ->assertSee('2026')
         ->assertSee('wire:model="latitude"', false)
-        ->assertSee('wire:model.live="trade.entry_detail"', false)
+        ->assertSee('x-model="$wire.trade.entry_detail"', false)
+        ->assertSee('x-on:change="$wire.$set(\'trade.entry_detail\', $event.target.value, true)"', false)
+        ->assertSee('x-model="$wire.company_id"', false)
+        ->assertSee('x-on:change="$wire.$set(\'company_id\', $event.target.value, true)"', false)
+        ->assertSee('x-model="$wire.physical_region_id"', false)
+        ->assertSee('x-on:change="$wire.$set(\'physical_region_id\', $event.target.value, true)"', false)
+        ->assertSee('x-model="$wire.region_specific_id"', false)
+        ->assertSee('x-model="$wire.province_id"', false)
+        ->assertSee('x-on:change="$wire.$set(\'province_id\', $event.target.value, true)"', false)
+        ->assertSee('x-model="$wire.municipality_id"', false)
+        ->assertDontSee('wire:model.live="trade.entry_detail"', false)
+        ->assertDontSee('wire:model.live="physical_region_id"', false)
         ->assertSee('wire:model="trade.classifications"', false)
-        ->assertSee('wire:model="categories.ab.2018"', false);
+        ->assertSee('x-model="$wire.categories.ab.2018"', false)
+        ->assertSee('OMMC')
+        ->assertSee('NCR')
+        ->assertSee('Metro Manila');
 
-    $component->set('region_specific_id', 1)
+    $component->set('physical_region_id', 1)
+        ->set('region_specific_id', 1)
         ->set('province_id', 1)
         ->assertSee('Metro Manila')
         ->assertSee('Quezon City');
+
+    $component->set('physical_region_id', null)
+        ->assertSet('region_specific_id', 1)
+        ->assertSet('province_id', null)
+        ->assertSet('municipality_id', null);
 
     $state = $component->get('categories.ab');
     expect(array_keys($state))->toBe(range(2018, 2026));
@@ -169,6 +190,20 @@ test('customer add page saves the complete local aggregate without network acces
         ->and($histories->pluck('category')->unique()->all())->toBe(['AB Loyal']);
 
     Http::assertNothingSent();
+
+    $edit = Livewire::test(CustomerEditPage::class, ['customerId' => $customer->id])
+        ->assertOk()
+        ->assertSee('x-model="$wire.company_id"', false)
+        ->assertSee('x-model="$wire.physical_region_id"', false)
+        ->assertSee('OMMC')
+        ->assertSee('NCR')
+        ->assertSee('Quezon City');
+
+    expect($edit->get('company_id'))->toBe(1)
+        ->and($edit->get('region_specific_id'))->toBe(1)
+        ->and($edit->get('physical_region_id'))->toBe(1)
+        ->and($edit->get('province_id'))->toBe(1)
+        ->and($edit->get('municipality_id'))->toBe(1);
 });
 
 test('customer add page defaults the current local user into access without requiring an rsm', function () {
