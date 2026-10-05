@@ -30,7 +30,7 @@ test('pull bulk-upserts a large reference table instead of one query per row', f
     });
 
     Http::fake([
-        'portal.test/api/sync/pull' => Http::response(['barangays' => $barangays], 200),
+        'portal.test/api/sync/pull/*' => Http::response(['barangays' => $barangays], 200),
     ]);
 
     $result = app(SyncService::class)->pull();
@@ -55,7 +55,7 @@ test('pull updates existing reference rows in place', function () {
     ]);
 
     Http::fake([
-        'portal.test/api/sync/pull' => Http::response(['barangays' => [[
+        'portal.test/api/sync/pull/*' => Http::response(['barangays' => [[
             'id' => 1,
             'municipality_id' => 1,
             'psgc_code' => null,

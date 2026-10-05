@@ -23,7 +23,7 @@ test('pull persists customer category and competitor volume without affecting se
     $this->actingAs($user);
 
     Http::fake([
-        'portal.test/api/sync/pull' => Http::response([
+        'portal.test/api/sync/pull/*' => Http::response([
             'companies' => [['id' => 7, 'name' => 'OMMC', 'code' => 'OMMC']],
             'general_categories' => [['id' => 1, 'name' => 'Mixed Outlet', 'sort' => 1]],
             'regions' => [['id' => 1, 'code' => 'R1', 'name' => 'Region 1']],

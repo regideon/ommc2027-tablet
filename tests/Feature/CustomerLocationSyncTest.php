@@ -16,7 +16,7 @@ test('pull stores location reference tables and customer location foreign keys',
     $this->actingAs($user);
 
     Http::fake([
-        'portal.test/api/sync/pull' => Http::response([
+        'portal.test/api/sync/pull/*' => Http::response([
             'companies' => [],
             'general_categories' => [],
             'regions' => [['id' => 1, 'code' => 'R3', 'psgc_code' => '0300000000', 'name' => 'Region III (Central Luzon)']],

@@ -25,7 +25,7 @@ test('pull succeeds when the salescall_statuses table exists but is empty', func
     expect(DB::table('salescall_statuses')->count())->toBe(0);
 
     Http::fake([
-        'portal.test/api/sync/pull' => Http::response([
+        'portal.test/api/sync/pull/*' => Http::response([
             'customers' => [],
             'salescall_statuses' => [],
             'salescall_types' => [],
@@ -59,7 +59,8 @@ test('pull inserts and updates salescall_statuses from the payload', function ()
     $this->actingAs($user);
 
     Http::fake([
-        'portal.test/api/sync/pull' => Http::sequence()
+        'portal.test/api/sync/pull/locations' => Http::response([], 200),
+        'portal.test/api/sync/pull/schedule' => Http::sequence()
             ->push([
                 'customers' => [],
                 'salescall_statuses' => [['id' => 1, 'name' => 'Pending']],

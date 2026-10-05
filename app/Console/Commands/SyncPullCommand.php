@@ -9,20 +9,32 @@ class SyncPullCommand extends Command
 {
     protected $signature = 'sync:pull';
 
-    protected $description = 'Pull itineraries and salescalls from the server.';
+    protected $description = 'Pull the schedule, then customers page by page, from the server.';
 
     public function handle(SyncService $sync): int
     {
         $result = $sync->pull();
 
-        if ($result->success) {
-            $this->info($result->message);
+        if (! $result->success) {
+            $this->error($result->message);
 
-            return self::SUCCESS;
+            return self::FAILURE;
         }
 
-        $this->error($result->message);
+        $this->info($result->message);
 
-        return self::FAILURE;
+        do {
+            $step = $sync->pullCustomersStep();
+
+            if (! $step['success']) {
+                $this->error($step['message']);
+
+                return self::FAILURE;
+            }
+        } while (! $step['done']);
+
+        $this->info($step['message']);
+
+        return self::SUCCESS;
     }
 }

@@ -1,5 +1,11 @@
 <x-filament-panels::page>
 
+{{-- First customer pull after login (or resuming an interrupted one); the
+     Customers page has the manual "Pull Customers" button. --}}
+@if($this->customerPullPending())
+    <x-customer-pull auto class="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 w-[90%] max-w-sm" />
+@endif
+
 <div
     id="salescall-page-root"
     x-data="{
@@ -12,10 +18,10 @@
                 const map = L.map('salescall-map');
                 // Street:    'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
                 // Satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-                // Light:     'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
-                // Dark:      'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-                L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                    attribution: '&copy; OpenStreetMap &copy; CartoDB', maxZoom: 18
+                // Light (needs CARTO API key):     'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
+                // Dark (needs CARTO API key):      'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+                L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; OpenStreetMap contributors', maxZoom: 18
                 }).addTo(map);
                 const valid = this.filteredCalls.filter(c => c.lat && c.lng);
                 const grouped = {};
@@ -406,10 +412,14 @@
             this.showDetail = true;
             this.initMiniMap();
         },
-        doCheckIn() {
+        async doCheckIn() {
             if (this.anyOtherInProgress) return;
-            $wire.initiateCheckIn(this.selected);
-            const call = this.calls.find(c => c.id === this.selected);
+            const id = this.selected;
+            // Wait for the server: it refuses while another visit is still open,
+            // and showing in-progress anyway is lost on the next page load.
+            if (!(await $wire.initiateCheckIn(id))) return;
+            if (this.selected !== id) return;
+            const call = this.calls.find(c => c.id === id);
             if (call) { call.status = 'in_progress'; call.sync_status = 'pending'; }
             this.checkedIn = true;
         },
@@ -532,7 +542,7 @@
                     touchZoom: false,
                     attributionControl: false,
                 });
-                L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 18 }).addTo(map);
+                L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors', maxZoom: 18 }).addTo(map);
                 map.setView([lat, lng], 17);
                 L.marker([lat, lng]).addTo(map);
                 this.miniMap = map;
@@ -688,8 +698,10 @@
     }"
     
     x-init="
-        // Shared wizard step for list visibility outside the wire:ignore island.
         if (!Alpine.store('salescallPhotoWizard')) {
+            // Shared wizard step for list visibility outside the wire:ignore island.
+            // (Kept inside the block: Alpine only treats x-init as statements when
+            // it starts with if/let/const, so a leading comment breaks the parse.)
             Alpine.store('salescallPhotoWizard', { photoStep: 0, photoCategory: null, photoType: null });
         }
 

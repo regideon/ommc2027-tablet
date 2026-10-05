@@ -32,11 +32,26 @@ class SyncService
 
     private int $timeout;
 
+    private int $pullTimeout;
+
+    /** Local customer edits in these states must not be overwritten by a pull. */
+    private const PROTECTED_CUSTOMER_STATUSES = ['pending', 'failed', 'conflict'];
+
+    private const CUSTOMER_PULL_PAGE_SIZE = 500;
+
+    private const CUSTOMER_PULL_IDS_PER_REQUEST = 200;
+
+    /** Per-user sync_states key prefixes; a shared tablet keeps one run and watermark per rep. */
+    private const CUSTOMER_PULL_RUN = 'customers.pull_run.';
+
+    private const CUSTOMER_PULL_WATERMARK = 'customers.pulled_through.';
+
     public function __construct(
         private readonly TabletS3UploadService $tabletS3UploadService,
     ) {
         $this->serverUrl = rtrim(config('sync.server_url', ''), '/');
         $this->timeout = (int) config('sync.timeout', 15);
+        $this->pullTimeout = (int) config('sync.pull_timeout', 60);
     }
 
     public function hasPendingChanges(): bool
@@ -178,6 +193,11 @@ class SyncService
         }
     }
 
+    /**
+     * Salescall pull: the approved schedule, the customers on it and the small
+     * lookup tables. Location references are fetched once when the tablet has
+     * none; the full customer list comes from pullCustomersStep().
+     */
     public function pull(): SyncResult
     {
         $user = auth()->user() ?? User::whereNotNull('api_token')->first();
@@ -186,18 +206,315 @@ class SyncService
             return SyncResult::fail('No API token found. Please log in first.', 'no_token');
         }
 
+        $data = $this->fetchPullPayload($user, '/api/sync/pull/schedule');
+
+        if ($data instanceof SyncResult) {
+            return $data;
+        }
+
+        try {
+            DB::transaction(fn () => $this->applyPullPayload($data, $user));
+        } catch (\Exception $e) {
+            return SyncResult::fail('Pull error: '.$e->getMessage(), 'exception');
+        }
+
+        if (DB::table('municipalities')->doesntExist()) {
+            $locations = $this->pullLocations();
+
+            if (! $locations->success) {
+                return $locations;
+            }
+        }
+
+        $itineraryCount = count($data['itineraries'] ?? []);
+        $salescallCount = array_sum(
+            array_map(fn ($i) => count($i['salescalls'] ?? []), $data['itineraries'] ?? [])
+        );
+
+        return SyncResult::ok("Pulled {$itineraryCount} itineraries, {$salescallCount} salescalls.");
+    }
+
+    /**
+     * Location reference tables (regions down to barangays).
+     */
+    public function pullLocations(): SyncResult
+    {
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (! $user || blank($user->api_token)) {
+            return SyncResult::fail('No API token found. Please log in first.', 'no_token');
+        }
+
+        $data = $this->fetchPullPayload($user, '/api/sync/pull/locations');
+
+        if ($data instanceof SyncResult) {
+            return $data;
+        }
+
+        try {
+            DB::transaction(fn () => $this->applyPullPayload($data, $user));
+        } catch (\Exception $e) {
+            return SyncResult::fail('Pull error: '.$e->getMessage(), 'exception');
+        }
+
+        return SyncResult::ok('Pulled location references.');
+    }
+
+    /**
+     * Whether the Customers list still needs a pull: none has ever completed,
+     * or one was interrupted and can resume.
+     */
+    public function customerPullPending(): bool
+    {
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (! $user) {
+            return false;
+        }
+
+        return $this->syncState(self::CUSTOMER_PULL_WATERMARK.$user->id) === null
+            || $this->syncState(self::CUSTOMER_PULL_RUN.$user->id) !== null;
+    }
+
+    /**
+     * Runs one step of the customer pull and returns its progress. The caller
+     * repeats until `done` (or a failure), so each request does at most one
+     * portal round trip and stays inside the device's execution time limit.
+     *
+     * A run with no watermark pulls every customer in scope (plus location
+     * references); later runs ask only for customers changed since the last
+     * completed run. The last page reconciles scope: customers that left it are
+     * deactivated locally and customers that came back into it are re-fetched.
+     * Progress is checkpointed after every step, so an interrupted run resumes.
+     *
+     * @return array{success: bool, done: bool, pulled: int, total: ?int, message: string}
+     */
+    public function pullCustomersStep(): array
+    {
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (! $user || blank($user->api_token)) {
+            return $this->customerPullProgress([], false, false, 'No API token found. Please log in first.');
+        }
+
+        $runKey = self::CUSTOMER_PULL_RUN.$user->id;
+        $run = $this->syncState($runKey) ?? $this->startCustomerPullRun($user);
+
+        // A failed step checkpoints the run as it was before the step, so the
+        // retry repeats the whole step rather than resuming half-applied state.
+        $runBeforeStep = $run;
+
+        try {
+            if ($run['phase'] === 'locations') {
+                $result = $this->pullLocations();
+
+                if (! $result->success) {
+                    $this->putSyncState($runKey, $run);
+
+                    return $this->customerPullProgress($run, false, false, $result->message);
+                }
+
+                $run['phase'] = 'pages';
+                $this->putSyncState($runKey, $run);
+
+                return $this->customerPullProgress($run, true, false, 'Location references updated.');
+            }
+
+            $query = $run['phase'] === 'missing'
+                ? ['ids' => implode(',', array_slice($run['missing'], 0, self::CUSTOMER_PULL_IDS_PER_REQUEST))]
+                : array_filter([
+                    'after_id' => $run['after_id'],
+                    'limit' => self::CUSTOMER_PULL_PAGE_SIZE,
+                    'updated_since' => $run['since'],
+                ], fn ($value) => $value !== null);
+
+            $data = $this->fetchPullPayload($user, '/api/sync/pull/customers', $query);
+
+            if ($data instanceof SyncResult) {
+                $this->putSyncState($runKey, $run);
+
+                return $this->customerPullProgress($run, false, false, $data->message);
+            }
+
+            DB::transaction(fn () => $this->applyPullPayload($data, $user));
+
+            $run['pulled'] += count($data['customers'] ?? []);
+
+            if ($run['phase'] === 'missing') {
+                $this->addToCustomerScope($user, array_column($data['customers'] ?? [], 'id'));
+                $run['missing'] = array_values(array_slice($run['missing'], self::CUSTOMER_PULL_IDS_PER_REQUEST));
+            } else {
+                if ($run['after_id'] === 0) {
+                    $run['total'] = $data['total'] ?? null;
+                    $run['server_time'] = $data['server_time'] ?? null;
+                }
+
+                $run['after_id'] = $data['next_after_id'] ?? null;
+
+                if ($run['after_id'] === null) {
+                    $run['missing'] = $this->recordCustomerScope($user, $data['scope_ids'] ?? null);
+                    $run['phase'] = 'missing';
+                }
+            }
+
+            if ($run['phase'] === 'missing' && $run['missing'] === []) {
+                $this->putSyncState(self::CUSTOMER_PULL_WATERMARK.$user->id, $run['server_time']);
+                $this->forgetSyncState($runKey);
+
+                $message = $run['since'] === null
+                    ? "Pulled {$run['pulled']} customers."
+                    : "Customers up to date ({$run['pulled']} updated).";
+
+                return $this->customerPullProgress($run, true, true, $message);
+            }
+
+            $this->putSyncState($runKey, $run);
+
+            return $this->customerPullProgress($run, true, false, "Pulled {$run['pulled']} customers…");
+        } catch (Throwable $e) {
+            report($e);
+            $this->putSyncState($runKey, $runBeforeStep);
+
+            return $this->customerPullProgress($run, false, false, 'Customer pull error: '.$e->getMessage());
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function startCustomerPullRun(User $user): array
+    {
+        $since = $this->syncState(self::CUSTOMER_PULL_WATERMARK.$user->id);
+
+        return [
+            'phase' => $since === null || DB::table('municipalities')->doesntExist() ? 'locations' : 'pages',
+            'since' => $since,
+            'after_id' => 0,
+            'server_time' => null,
+            'total' => null,
+            'pulled' => 0,
+            'missing' => [],
+        ];
+    }
+
+    /**
+     * Replaces the user's customer_scopes rows with the portal's full list of
+     * customer ids this user may see, and returns the in-scope ids the tablet
+     * lacks (no local row, or one marked inactive) so they can be fetched by
+     * id. Nothing is deactivated or deleted: other reps sharing the tablet may
+     * still need those customers, and expenses cascade from customers.
+     *
+     * @param  list<int>|null  $scopeIds
+     * @return list<int>
+     */
+    private function recordCustomerScope(User $user, ?array $scopeIds): array
+    {
+        if ($scopeIds === null) {
+            return [];
+        }
+
+        $localIds = [];
+        $present = [];
+
+        foreach (array_chunk($scopeIds, 500) as $chunk) {
+            $rows = DB::table('customers')->whereIn('server_id', $chunk)->get(['id', 'server_id', 'is_active', 'sync_status']);
+
+            foreach ($rows as $row) {
+                $localIds[$row->server_id] = $row->id;
+
+                if ($row->is_active || in_array($row->sync_status, self::PROTECTED_CUSTOMER_STATUSES, true)) {
+                    $present[$row->server_id] = true;
+                }
+            }
+        }
+
+        DB::transaction(function () use ($user, $localIds): void {
+            DB::table('customer_scopes')->where('user_id', $user->id)->delete();
+
+            foreach (array_chunk(array_values(array_unique($localIds)), 400) as $chunk) {
+                DB::table('customer_scopes')->insert(array_map(
+                    fn (int $customerId): array => ['user_id' => $user->id, 'customer_id' => $customerId],
+                    $chunk,
+                ));
+            }
+        });
+
+        return array_values(array_filter($scopeIds, fn (int $id): bool => ! isset($present[$id])));
+    }
+
+    /**
+     * Adds customers fetched by id after the scope was recorded.
+     *
+     * @param  list<int>  $serverIds
+     */
+    private function addToCustomerScope(User $user, array $serverIds): void
+    {
+        if ($serverIds === []) {
+            return;
+        }
+
+        $rows = DB::table('customers')->whereIn('server_id', $serverIds)->pluck('id')
+            ->map(fn (int $customerId): array => ['user_id' => $user->id, 'customer_id' => $customerId])
+            ->all();
+
+        DB::table('customer_scopes')->insertOrIgnore($rows);
+    }
+
+    /**
+     * @param  array<string, mixed>  $run
+     * @return array{success: bool, done: bool, pulled: int, total: ?int, message: string}
+     */
+    private function customerPullProgress(array $run, bool $success, bool $done, string $message): array
+    {
+        return [
+            'success' => $success,
+            'done' => $done,
+            'pulled' => (int) ($run['pulled'] ?? 0),
+            'total' => isset($run['total']) ? (int) $run['total'] : null,
+            'message' => $message,
+        ];
+    }
+
+    private function syncState(string $key): mixed
+    {
+        $value = DB::table('sync_states')->where('key', $key)->value('value');
+
+        return $value === null ? null : json_decode($value, true);
+    }
+
+    private function putSyncState(string $key, mixed $value): void
+    {
+        DB::table('sync_states')->updateOrInsert(
+            ['key' => $key],
+            ['value' => json_encode($value), 'updated_at' => now(), 'created_at' => now()],
+        );
+    }
+
+    private function forgetSyncState(string $key): void
+    {
+        DB::table('sync_states')->where('key', $key)->delete();
+    }
+
+    /**
+     * GETs a pull endpoint, streaming the body to a file, and decodes it.
+     *
+     * The response is streamed to a file instead of letting Guzzle buffer it in
+     * php://temp: the embedded runtime has no usable PHP temporary directory,
+     * and a payload past php://temp's 2 MB memory threshold spills to disk and
+     * fails with "Unable to create temporary file".
+     *
+     * @param  array<string, mixed>  $query
+     * @return array<string, mixed>|SyncResult
+     */
+    private function fetchPullPayload(User $user, string $path, array $query = []): array|SyncResult
+    {
         $sinkPath = $this->pullSinkPath();
 
         try {
-            // Stream the response to a file instead of letting Guzzle buffer it in
-            // php://temp: the embedded runtime has no usable PHP temporary
-            // directory, and the pull payload (which now includes barangays and
-            // area_clusters) exceeds php://temp's 2 MB memory threshold, so the
-            // buffered body spills to disk and fails with "Unable to create
-            // temporary file".
             $response = $this->client($user->api_token)
+                ->timeout($this->pullTimeout)
                 ->sink($sinkPath)
-                ->get("{$this->serverUrl}/api/sync/pull");
+                ->get("{$this->serverUrl}{$path}", $query);
 
             if ($response->status() === 401) {
                 return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
@@ -207,484 +524,492 @@ class SyncService
                 return SyncResult::fail("Pull failed ({$response->status()}).", 'server_error');
             }
 
-            $data = $this->decodePullResponse($sinkPath);
+            return $this->decodePullResponse($sinkPath);
+        } catch (\Exception $e) {
+            return SyncResult::fail('Pull error: '.$e->getMessage(), 'exception');
+        } finally {
+            @unlink($sinkPath);
+        }
+    }
 
-            // Refresh the logged-in rep's itinerary base location from the pulled
-            // users list. Portal user ids differ from tablet ids, so match on the
-            // unique email instead of the numeric id.
-            $portalUser = collect($data['users'] ?? [])->firstWhere('email', $user->email);
+    /**
+     * Writes whichever pull sections the payload carries. Reference/lookup
+     * tables are written before anything that holds a foreign key into them.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function applyPullPayload(array $data, User $user): void
+    {
+        // Refresh the logged-in rep's itinerary base location from the pulled
+        // users list. Portal user ids differ from tablet ids, so match on the
+        // unique email instead of the numeric id.
+        $portalUser = collect($data['users'] ?? [])->firstWhere('email', $user->email);
 
-            // A base location the rep edited on the tablet and has not pushed yet
-            // wins over the portal value; overwriting it here would discard the
-            // local edit before the push loop could deliver it.
-            if ($portalUser && ! $user->base_location_pending) {
-                $user->update([
-                    'base_start_latitude' => $portalUser['base_start_latitude'] ?? null,
-                    'base_start_longitude' => $portalUser['base_start_longitude'] ?? null,
-                    'base_end_latitude' => $portalUser['base_end_latitude'] ?? null,
-                    'base_end_longitude' => $portalUser['base_end_longitude'] ?? null,
-                ]);
+        // A base location the rep edited on the tablet and has not pushed yet
+        // wins over the portal value; overwriting it here would discard the
+        // local edit before the push loop could deliver it.
+        if ($portalUser && ! $user->base_location_pending) {
+            $user->update([
+                'base_start_latitude' => $portalUser['base_start_latitude'] ?? null,
+                'base_start_longitude' => $portalUser['base_start_longitude'] ?? null,
+                'base_end_latitude' => $portalUser['base_end_latitude'] ?? null,
+                'base_end_longitude' => $portalUser['base_end_longitude'] ?? null,
+            ]);
+        }
+
+        // The region type is portal-authoritative and drives the photo
+        // requirement; it is not locally editable, so apply it even when the
+        // rep has an unsynced base-location edit.
+        if ($portalUser && array_key_exists('region_type_id', $portalUser)) {
+            $user->update(['region_type_id' => $portalUser['region_type_id']]);
+        }
+
+        // Reference/lookup tables must be populated before anything below that
+        // holds a foreign key into them (salescall_brands -> material_groups/brands,
+        // salescall_categories/customer_categories -> categories/sub_categories,
+        // salescall_brands/salescall_categories -> customers). On a fresh install
+        // with these tables still empty, a first pull whose itineraries already
+        // carry salescall_brands/salescall_categories data (e.g. an RSM-added call)
+        // would otherwise throw a foreign key integrity violation and abort the
+        // entire pull before customers/brands/categories ever get written.
+        $this->upsertRows('general_categories', array_map(fn (array $category): array => [
+            'id' => $category['id'],
+            'name' => $category['name'],
+            'priority_visit' => $category['priority_visit'] ?? null,
+            'duration_per_visit' => $category['duration_per_visit'] ?? null,
+            'sort' => $category['sort'] ?? 0,
+        ], $data['general_categories'] ?? []));
+
+        $this->upsertRows('companies', array_map(fn (array $company): array => [
+            'id' => $company['id'],
+            'name' => $company['name'],
+            'code' => $company['code'] ?? null,
+        ], $data['companies'] ?? []));
+
+        $this->upsertRows('regions', array_map(fn (array $region): array => [
+            'id' => $region['id'],
+            'code' => $region['code'],
+            'psgc_code' => $region['psgc_code'] ?? null,
+            'name' => $region['name'],
+        ], $data['regions'] ?? []));
+
+        $this->upsertRows('region_specifics', array_map(fn (array $regionSpecific): array => [
+            'id' => $regionSpecific['id'],
+            'region_id' => $regionSpecific['region_id'],
+            'name' => $regionSpecific['name'],
+            'sort' => $regionSpecific['sort'] ?? 0,
+        ], $data['region_specifics'] ?? []));
+
+        $this->upsertRows('region_types', array_map(fn (array $regionType): array => [
+            'id' => $regionType['id'],
+            'name' => $regionType['name'],
+            'sort' => $regionType['sort'] ?? 0,
+            'is_image_required' => $regionType['is_image_required'] ?? false,
+        ], $data['region_types'] ?? []));
+
+        $this->upsertRows('provinces', array_map(fn (array $province): array => [
+            'id' => $province['id'],
+            'region_id' => $province['region_id'] ?? null,
+            'psgc_code' => $province['psgc_code'] ?? null,
+            'region_specific_id' => $province['region_specific_id'] ?? null,
+            'name' => $province['name'],
+            'enabled' => $province['enabled'] ?? true,
+        ], $data['provinces'] ?? []));
+
+        $this->upsertRows('municipalities', $data['municipalities'] ?? [], fn (array $municipality): array => [
+            'id' => $municipality['id'],
+            'psgc_code' => $municipality['psgc_code'] ?? null,
+            'region_id' => $municipality['region_id'] ?? null,
+            'province_id' => $municipality['province_id'] ?? null,
+            'locality_type' => $municipality['locality_type'] ?? null,
+            'name' => $municipality['name'],
+            'sort' => $municipality['sort'] ?? 0,
+            'enabled' => $municipality['enabled'] ?? true,
+        ]);
+
+        $this->upsertRows('barangays', $data['barangays'] ?? [], fn (array $barangay): array => [
+            'id' => $barangay['id'],
+            'municipality_id' => $barangay['municipality_id'],
+            'psgc_code' => $barangay['psgc_code'] ?? null,
+            'code' => $barangay['code'] ?? null,
+            'name' => $barangay['name'],
+            'enabled' => $barangay['enabled'] ?? true,
+        ]);
+
+        $this->upsertRows('area_clusters', array_map(fn (array $areaCluster): array => [
+            'id' => $areaCluster['id'],
+            'region_specific_id' => $areaCluster['region_specific_id'],
+            'code' => $areaCluster['code'] ?? null,
+            'name' => $areaCluster['name'],
+            'enabled' => $areaCluster['enabled'] ?? true,
+        ], $data['area_clusters'] ?? []));
+
+        $protectedStatuses = self::PROTECTED_CUSTOMER_STATUSES;
+        $serverToLocalCustomer = [];
+        $protectedCustomerIds = DB::table('customers')->whereIn('sync_status', $protectedStatuses)->pluck('id', 'server_id')->filter()->all();
+
+        // Resolve every incoming customer's local row with two queries per
+        // chunk rather than one SELECT per customer: match on server_id first,
+        // then a same-id local row that is not holding unsynced edits.
+        $incomingCustomerIds = array_column($data['customers'] ?? [], 'id');
+        $localIdByServerId = [];
+        $localIdBySameId = [];
+
+        foreach (array_chunk($incomingCustomerIds, 500) as $chunk) {
+            $localIdByServerId += DB::table('customers')->whereIn('server_id', $chunk)->orderBy('id')->pluck('id', 'server_id')->all();
+            $localIdBySameId += DB::table('customers')->whereIn('id', $chunk)->whereNotIn('sync_status', $protectedStatuses)->pluck('id', 'id')->all();
+        }
+
+        foreach ($data['customers'] ?? [] as $customer) {
+            $localId = $localIdByServerId[$customer['id']] ?? $localIdBySameId[$customer['id']] ?? $customer['id'];
+            $serverToLocalCustomer[$customer['id']] = $localId;
+            if (isset($protectedCustomerIds[$customer['id']])) {
+                continue;
             }
 
-            // The region type is portal-authoritative and drives the photo
-            // requirement; it is not locally editable, so apply it even when the
-            // rep has an unsynced base-location edit.
-            if ($portalUser && array_key_exists('region_type_id', $portalUser)) {
-                $user->update(['region_type_id' => $portalUser['region_type_id']]);
+            DB::table('customers')->updateOrInsert(
+                ['id' => $localId],
+                [
+                    'server_id' => $customer['id'],
+                    'company_id' => $customer['company_id'] ?? null,
+                    'general_category_id' => $customer['general_category_id'] ?? null,
+                    'region_specific_id' => $customer['region_specific_id'] ?? null,
+                    'municipality_id' => $customer['municipality_id'] ?? null,
+                    'province_id' => $customer['province_id'] ?? null,
+                    'barangay_id' => $customer['barangay_id'] ?? null,
+                    'area_cluster_id' => $customer['area_cluster_id'] ?? null,
+                    'name' => $customer['name'],
+                    'unique_id' => $customer['unique_id'] ?? null,
+                    'contact_person' => $customer['contact_person'] ?? null,
+                    'contact_number' => $customer['contact_number'] ?? null,
+                    'business_landline_number' => $customer['business_landline_number'] ?? null,
+                    'business_mobile_number' => $customer['business_mobile_number'] ?? null,
+                    'date_established' => $customer['date_established'] ?? null,
+                    'person_in_charge_id' => $customer['person_in_charge_id'] ?? null,
+                    'address' => $customer['address'] ?? null,
+                    'latitude' => $customer['latitude'] ?? null,
+                    'longitude' => $customer['longitude'] ?? null,
+                    'is_active' => $customer['is_active'] ?? true,
+                    'competitor_volume' => $customer['competitor_volume'] ?? null,
+                    'sync_status' => 'synced',
+                    'sync_error' => null,
+                    'synced_at' => now(),
+                    'server_updated_at' => $customer['updated_at'] ?? null,
+                    'updated_at' => now(),
+                ]
+            );
+        }
+
+        foreach ($data['customer_trade_profiles'] ?? [] as $profile) {
+            $localCustomerId = $serverToLocalCustomer[$profile['customer_id']] ?? $profile['customer_id'];
+            if (isset($protectedCustomerIds[$profile['customer_id']])) {
+                continue;
             }
+            DB::table('customer_trade_profiles')->updateOrInsert(
+                ['customer_id' => $localCustomerId],
+                [
+                    'profile_type' => $profile['profile_type'] ?? null,
+                    'profile_data' => isset($profile['profile_data']) ? json_encode($profile['profile_data']) : null,
+                    'house_number' => $profile['house_number'] ?? null,
+                    'entry_detail' => $profile['entry_detail'] ?? null,
+                    'classifications' => isset($profile['classifications']) ? json_encode($profile['classifications']) : null,
+                    'ommc_brands' => isset($profile['ommc_brands']) ? json_encode($profile['ommc_brands']) : null,
+                    'ommc_mcb_brands' => isset($profile['ommc_mcb_brands']) ? json_encode($profile['ommc_mcb_brands']) : null,
+                    'tpl_pollux' => isset($profile['tpl_pollux']) ? json_encode($profile['tpl_pollux']) : null,
+                    'other_competitor_brands' => isset($profile['other_competitor_brands']) ? json_encode($profile['other_competitor_brands']) : null,
+                    'mcb_competitors' => isset($profile['mcb_competitors']) ? json_encode($profile['mcb_competitors']) : null,
+                    'other_competitors_note' => $profile['other_competitors_note'] ?? null,
+                    'working_days' => isset($profile['working_days']) ? json_encode($profile['working_days']) : null,
+                    'operating_hours' => isset($profile['operating_hours']) ? json_encode($profile['operating_hours']) : null,
+                    'motiv_user' => $profile['motiv_user'] ?? null,
+                    'delivery_method' => $profile['delivery_method'] ?? null,
+                    'ulab' => $profile['ulab'] ?? null,
+                    'updated_at' => now(),
+                ]
+            );
+        }
 
-            // Reference/lookup tables must be populated before anything below that
-            // holds a foreign key into them (salescall_brands -> material_groups/brands,
-            // salescall_categories/customer_categories -> categories/sub_categories,
-            // salescall_brands/salescall_categories -> customers). On a fresh install
-            // with these tables still empty, a first pull whose itineraries already
-            // carry salescall_brands/salescall_categories data (e.g. an RSM-added call)
-            // would otherwise throw a foreign key integrity violation and abort the
-            // entire pull before customers/brands/categories ever get written.
-            $this->upsertRows('general_categories', array_map(fn (array $category): array => [
-                'id' => $category['id'],
-                'name' => $category['name'],
-                'priority_visit' => $category['priority_visit'] ?? null,
-                'duration_per_visit' => $category['duration_per_visit'] ?? null,
-                'sort' => $category['sort'] ?? 0,
-            ], $data['general_categories'] ?? []));
+        foreach ($data['customer_category_histories'] ?? [] as $history) {
+            $localCustomerId = $serverToLocalCustomer[$history['customer_id']] ?? $history['customer_id'];
+            if (isset($protectedCustomerIds[$history['customer_id']])) {
+                continue;
+            }
+            DB::table('customer_category_histories')->updateOrInsert(
+                ['customer_id' => $localCustomerId, 'profile_type' => $history['profile_type'] ?? null, 'stream' => $history['stream'] ?? null, 'category_year' => $history['category_year']],
+                ['category' => $history['category'], 'updated_at' => now()]
+            );
+        }
 
-            $this->upsertRows('companies', array_map(fn (array $company): array => [
-                'id' => $company['id'],
-                'name' => $company['name'],
-                'code' => $company['code'] ?? null,
-            ], $data['companies'] ?? []));
+        foreach ($data['customer_category_events'] ?? [] as $event) {
+            $localCustomerId = $serverToLocalCustomer[$event['customer_id']] ?? $event['customer_id'];
+            if (isset($protectedCustomerIds[$event['customer_id']])) {
+                continue;
+            }
+            $supersedesId = filled($event['supersedes_event_key'] ?? null)
+                ? DB::table('customer_category_events')->where('event_key', $event['supersedes_event_key'])->value('id')
+                : null;
+            DB::table('customer_category_events')->updateOrInsert(
+                ['event_key' => $event['event_key']],
+                [
+                    'customer_id' => $localCustomerId,
+                    'profile_type' => $event['profile_type'],
+                    'stream' => $event['stream'],
+                    'category' => $event['category'],
+                    'effective_at' => $event['effective_at'],
+                    'source' => $event['source'],
+                    'supersedes_event_id' => $supersedesId,
+                    'supersedes_event_key' => $event['supersedes_event_key'] ?? null,
+                    'updated_at' => now(),
+                ]
+            );
+        }
 
-            $this->upsertRows('regions', array_map(fn (array $region): array => [
-                'id' => $region['id'],
-                'code' => $region['code'],
-                'psgc_code' => $region['psgc_code'] ?? null,
-                'name' => $region['name'],
-            ], $data['regions'] ?? []));
+        $this->upsertRows('salescall_statuses', array_map(fn (array $status): array => [
+            'id' => $status['id'],
+            'name' => $status['name'],
+        ], $data['salescall_statuses'] ?? []));
 
-            $this->upsertRows('region_specifics', array_map(fn (array $regionSpecific): array => [
-                'id' => $regionSpecific['id'],
-                'region_id' => $regionSpecific['region_id'],
-                'name' => $regionSpecific['name'],
-                'sort' => $regionSpecific['sort'] ?? 0,
-            ], $data['region_specifics'] ?? []));
+        $this->upsertRows('salescall_types', array_map(fn (array $type): array => [
+            'id' => $type['id'],
+            'name' => $type['name'],
+        ], $data['salescall_types'] ?? []));
 
-            $this->upsertRows('region_types', array_map(fn (array $regionType): array => [
-                'id' => $regionType['id'],
-                'name' => $regionType['name'],
-                'sort' => $regionType['sort'] ?? 0,
-                'is_image_required' => $regionType['is_image_required'] ?? false,
-            ], $data['region_types'] ?? []));
+        $this->upsertRows('material_groups', array_map(fn (array $group): array => [
+            'id' => $group['id'],
+            'name' => $group['name'],
+        ], $data['material_groups'] ?? []));
 
-            $this->upsertRows('provinces', array_map(fn (array $province): array => [
-                'id' => $province['id'],
-                'region_id' => $province['region_id'] ?? null,
-                'psgc_code' => $province['psgc_code'] ?? null,
-                'region_specific_id' => $province['region_specific_id'] ?? null,
-                'name' => $province['name'],
-                'enabled' => $province['enabled'] ?? true,
-            ], $data['provinces'] ?? []));
+        $this->upsertRows('brands', array_map(fn (array $brand): array => [
+            'id' => $brand['id'],
+            'material_group_id' => $brand['material_group_id'],
+            'name' => $brand['name'],
+            'enabled' => $brand['enabled'],
+        ], $data['brands'] ?? []));
 
-            $this->upsertRows('municipalities', array_map(fn (array $municipality): array => [
-                'id' => $municipality['id'],
-                'psgc_code' => $municipality['psgc_code'] ?? null,
-                'region_id' => $municipality['region_id'] ?? null,
-                'province_id' => $municipality['province_id'] ?? null,
-                'locality_type' => $municipality['locality_type'] ?? null,
-                'name' => $municipality['name'],
-                'sort' => $municipality['sort'] ?? 0,
-                'enabled' => $municipality['enabled'] ?? true,
-            ], $data['municipalities'] ?? []));
+        $this->upsertRows('categories', array_map(fn (array $item): array => [
+            'id' => $item['id'],
+            'name' => $item['name'],
+            'general_category_id' => $item['general_category_id'] ?? null,
+        ], $data['categories'] ?? []));
 
-            $this->upsertRows('barangays', array_map(fn (array $barangay): array => [
-                'id' => $barangay['id'],
-                'municipality_id' => $barangay['municipality_id'],
-                'psgc_code' => $barangay['psgc_code'] ?? null,
-                'code' => $barangay['code'] ?? null,
-                'name' => $barangay['name'],
-                'enabled' => $barangay['enabled'] ?? true,
-            ], $data['barangays'] ?? []));
+        $this->upsertRows('sub_categories', array_map(fn (array $item): array => [
+            'id' => $item['id'],
+            'category_id' => $item['category_id'],
+            'name' => $item['name'],
+            'with_form' => $item['with_form'] ?? false,
+            'is_active' => $item['is_active'] ?? true,
+        ], $data['sub_categories'] ?? []));
 
-            $this->upsertRows('area_clusters', array_map(fn (array $areaCluster): array => [
-                'id' => $areaCluster['id'],
-                'region_specific_id' => $areaCluster['region_specific_id'],
-                'code' => $areaCluster['code'] ?? null,
-                'name' => $areaCluster['name'],
-                'enabled' => $areaCluster['enabled'] ?? true,
-            ], $data['area_clusters'] ?? []));
+        $this->upsertRows('sub_sub_categories', array_map(fn (array $item): array => [
+            'id' => $item['id'],
+            'sub_category_id' => $item['sub_category_id'],
+            'name' => $item['name'],
+        ], $data['sub_sub_categories'] ?? []));
 
-            $protectedStatuses = ['pending', 'failed', 'conflict'];
-            $serverToLocalCustomer = [];
-            $protectedCustomerIds = DB::table('customers')->whereIn('sync_status', $protectedStatuses)->pluck('id', 'server_id')->filter()->all();
+        $this->upsertRows('salescall_image_categories', array_map(fn (array $item): array => [
+            'id' => $item['id'],
+            'name' => $item['name'],
+            'slug' => $item['slug'],
+            'sort' => $item['sort'] ?? 0,
+        ], $data['salescall_image_categories'] ?? []));
 
-            foreach ($data['customers'] ?? [] as $customer) {
-                $existing = DB::table('customers')
-                    ->where('server_id', $customer['id'])
-                    ->orWhere(fn ($query) => $query->where('id', $customer['id'])->whereNotIn('sync_status', $protectedStatuses))
-                    ->first();
-                $localId = $existing?->id ?? $customer['id'];
-                $serverToLocalCustomer[$customer['id']] = $localId;
-                if (isset($protectedCustomerIds[$customer['id']])) {
-                    continue;
+        $this->upsertRows('salescall_image_types', array_map(fn (array $item): array => [
+            'id' => $item['id'],
+            'salescall_image_category_id' => $item['salescall_image_category_id'],
+            'name' => $item['name'],
+            'slug' => $item['slug'],
+            'sort' => $item['sort'] ?? 0,
+        ], $data['salescall_image_types'] ?? []));
+
+        foreach ($data['itineraries'] ?? [] as $itinerary) {
+            $local = Itinerary::updateOrCreate(
+                ['local_uuid' => $itinerary['local_uuid'] ?? (string) $itinerary['id']],
+                [
+                    'server_id' => $itinerary['id'],
+                    'created_by' => $user->id,
+                    'date_month' => $itinerary['date_month'] ?? null,
+                    'date_year' => $itinerary['date_year'] ?? null,
+                    'remarks' => $itinerary['remarks'] ?? null,
+                    'itinerary_status_id' => $itinerary['itinerary_status_id'] ?? null,
+                    'sync_status' => 'synced',
+                ]
+            );
+
+            foreach ($itinerary['salescalls'] ?? [] as $sc) {
+                $visitDate = $sc['route_start_at'] ?? $sc['actual_in'] ?? null;
+                $localUuid = $sc['local_uuid'] ?? (string) $sc['id'];
+
+                // A salescall with unsynced local changes (e.g. a check-in or
+                // finish action not yet pushed) must not be clobbered by an
+                // incoming pull — the server's copy is stale until the push
+                // completes. Leave it untouched; the next push will resolve it.
+                $hasPendingLocalChanges = Salescall::where('local_uuid', $localUuid)
+                    ->whereIn('sync_status', ['pending', 'failed'])
+                    ->exists();
+
+                if ($hasPendingLocalChanges) {
+                    $localSalescall = Salescall::where('local_uuid', $localUuid)->first();
+                } else {
+                    $localSalescall = Salescall::updateOrCreate(
+                        ['local_uuid' => $localUuid],
+                        [
+                            'server_id' => $sc['id'],
+                            'ref_number' => $sc['ref_number'] ?? $sc['id'],
+                            'itinerary_id' => $local->id,
+                            'customer_id' => $sc['customer_id'],
+                            'created_by' => $user->id,
+                            'visit_date' => $visitDate,
+                            'route_start_at' => $sc['route_start_at'] ?? null,
+                            'actual_in' => $sc['actual_in'] ?? null,
+                            'actual_out' => $sc['actual_out'] ?? null,
+                            'salescall_status_id' => $sc['salescall_status_id'] ?? null,
+                            'salescall_type_id' => $sc['salescall_type_id'] ?? null,
+                            'outcome_reason' => $sc['outcome_reason'] ?? null,
+                            'collection_amount' => $sc['collection_amount'] ?? null,
+                            'remarks' => $sc['remarks'] ?? null,
+                            'concerns' => $sc['concerns'] ?? null,
+                            'partially_completed_at' => $sc['partially_completed_at'] ?? null,
+                            'partially_completed_reason' => $sc['partially_completed_reason'] ?? null,
+                            'partially_completed_by' => $sc['partially_completed_by'] ?? null,
+                            'resumed_at' => $sc['resumed_at'] ?? null,
+                            'resumed_by' => $sc['resumed_by'] ?? null,
+                            'sync_status' => 'synced',
+                        ]
+                    );
                 }
 
-                DB::table('customers')->updateOrInsert(
-                    ['id' => $localId],
-                    [
-                        'server_id' => $customer['id'],
-                        'company_id' => $customer['company_id'] ?? null,
-                        'general_category_id' => $customer['general_category_id'] ?? null,
-                        'region_specific_id' => $customer['region_specific_id'] ?? null,
-                        'municipality_id' => $customer['municipality_id'] ?? null,
-                        'province_id' => $customer['province_id'] ?? null,
-                        'barangay_id' => $customer['barangay_id'] ?? null,
-                        'area_cluster_id' => $customer['area_cluster_id'] ?? null,
-                        'name' => $customer['name'],
-                        'unique_id' => $customer['unique_id'] ?? null,
-                        'contact_person' => $customer['contact_person'] ?? null,
-                        'contact_number' => $customer['contact_number'] ?? null,
-                        'business_landline_number' => $customer['business_landline_number'] ?? null,
-                        'business_mobile_number' => $customer['business_mobile_number'] ?? null,
-                        'date_established' => $customer['date_established'] ?? null,
-                        'person_in_charge_id' => $customer['person_in_charge_id'] ?? null,
-                        'address' => $customer['address'] ?? null,
-                        'latitude' => $customer['latitude'] ?? null,
-                        'longitude' => $customer['longitude'] ?? null,
-                        'is_active' => $customer['is_active'] ?? true,
-                        'competitor_volume' => $customer['competitor_volume'] ?? null,
-                        'sync_status' => 'synced',
-                        'sync_error' => null,
-                        'synced_at' => now(),
-                        'server_updated_at' => $customer['updated_at'] ?? null,
-                        'updated_at' => now(),
-                    ]
-                );
-            }
+                if (SalescallBrand::where('salescall_id', $localSalescall->id)->where('sync_status', 'pending')->doesntExist()) {
+                    SalescallBrand::where('salescall_id', $localSalescall->id)->delete();
 
-            foreach ($data['customer_trade_profiles'] ?? [] as $profile) {
-                $localCustomerId = $serverToLocalCustomer[$profile['customer_id']] ?? $profile['customer_id'];
-                if (isset($protectedCustomerIds[$profile['customer_id']])) {
-                    continue;
-                }
-                DB::table('customer_trade_profiles')->updateOrInsert(
-                    ['customer_id' => $localCustomerId],
-                    [
-                        'profile_type' => $profile['profile_type'] ?? null,
-                        'profile_data' => isset($profile['profile_data']) ? json_encode($profile['profile_data']) : null,
-                        'house_number' => $profile['house_number'] ?? null,
-                        'entry_detail' => $profile['entry_detail'] ?? null,
-                        'classifications' => isset($profile['classifications']) ? json_encode($profile['classifications']) : null,
-                        'ommc_brands' => isset($profile['ommc_brands']) ? json_encode($profile['ommc_brands']) : null,
-                        'ommc_mcb_brands' => isset($profile['ommc_mcb_brands']) ? json_encode($profile['ommc_mcb_brands']) : null,
-                        'tpl_pollux' => isset($profile['tpl_pollux']) ? json_encode($profile['tpl_pollux']) : null,
-                        'other_competitor_brands' => isset($profile['other_competitor_brands']) ? json_encode($profile['other_competitor_brands']) : null,
-                        'mcb_competitors' => isset($profile['mcb_competitors']) ? json_encode($profile['mcb_competitors']) : null,
-                        'other_competitors_note' => $profile['other_competitors_note'] ?? null,
-                        'working_days' => isset($profile['working_days']) ? json_encode($profile['working_days']) : null,
-                        'operating_hours' => isset($profile['operating_hours']) ? json_encode($profile['operating_hours']) : null,
-                        'motiv_user' => $profile['motiv_user'] ?? null,
-                        'delivery_method' => $profile['delivery_method'] ?? null,
-                        'ulab' => $profile['ulab'] ?? null,
-                        'updated_at' => now(),
-                    ]
-                );
-            }
-
-            foreach ($data['customer_category_histories'] ?? [] as $history) {
-                $localCustomerId = $serverToLocalCustomer[$history['customer_id']] ?? $history['customer_id'];
-                if (isset($protectedCustomerIds[$history['customer_id']])) {
-                    continue;
-                }
-                DB::table('customer_category_histories')->updateOrInsert(
-                    ['customer_id' => $localCustomerId, 'profile_type' => $history['profile_type'] ?? null, 'stream' => $history['stream'] ?? null, 'category_year' => $history['category_year']],
-                    ['category' => $history['category'], 'updated_at' => now()]
-                );
-            }
-
-            foreach ($data['customer_category_events'] ?? [] as $event) {
-                $localCustomerId = $serverToLocalCustomer[$event['customer_id']] ?? $event['customer_id'];
-                if (isset($protectedCustomerIds[$event['customer_id']])) {
-                    continue;
-                }
-                $supersedesId = filled($event['supersedes_event_key'] ?? null)
-                    ? DB::table('customer_category_events')->where('event_key', $event['supersedes_event_key'])->value('id')
-                    : null;
-                DB::table('customer_category_events')->updateOrInsert(
-                    ['event_key' => $event['event_key']],
-                    [
-                        'customer_id' => $localCustomerId,
-                        'profile_type' => $event['profile_type'],
-                        'stream' => $event['stream'],
-                        'category' => $event['category'],
-                        'effective_at' => $event['effective_at'],
-                        'source' => $event['source'],
-                        'supersedes_event_id' => $supersedesId,
-                        'supersedes_event_key' => $event['supersedes_event_key'] ?? null,
-                        'updated_at' => now(),
-                    ]
-                );
-            }
-
-            $this->upsertRows('salescall_statuses', array_map(fn (array $status): array => [
-                'id' => $status['id'],
-                'name' => $status['name'],
-            ], $data['salescall_statuses'] ?? []));
-
-            $this->upsertRows('salescall_types', array_map(fn (array $type): array => [
-                'id' => $type['id'],
-                'name' => $type['name'],
-            ], $data['salescall_types'] ?? []));
-
-            $this->upsertRows('material_groups', array_map(fn (array $group): array => [
-                'id' => $group['id'],
-                'name' => $group['name'],
-            ], $data['material_groups'] ?? []));
-
-            $this->upsertRows('brands', array_map(fn (array $brand): array => [
-                'id' => $brand['id'],
-                'material_group_id' => $brand['material_group_id'],
-                'name' => $brand['name'],
-                'enabled' => $brand['enabled'],
-            ], $data['brands'] ?? []));
-
-            $this->upsertRows('categories', array_map(fn (array $item): array => [
-                'id' => $item['id'],
-                'name' => $item['name'],
-                'general_category_id' => $item['general_category_id'] ?? null,
-            ], $data['categories'] ?? []));
-
-            $this->upsertRows('sub_categories', array_map(fn (array $item): array => [
-                'id' => $item['id'],
-                'category_id' => $item['category_id'],
-                'name' => $item['name'],
-                'with_form' => $item['with_form'] ?? false,
-                'is_active' => $item['is_active'] ?? true,
-            ], $data['sub_categories'] ?? []));
-
-            $this->upsertRows('sub_sub_categories', array_map(fn (array $item): array => [
-                'id' => $item['id'],
-                'sub_category_id' => $item['sub_category_id'],
-                'name' => $item['name'],
-            ], $data['sub_sub_categories'] ?? []));
-
-            $this->upsertRows('salescall_image_categories', array_map(fn (array $item): array => [
-                'id' => $item['id'],
-                'name' => $item['name'],
-                'slug' => $item['slug'],
-                'sort' => $item['sort'] ?? 0,
-            ], $data['salescall_image_categories'] ?? []));
-
-            $this->upsertRows('salescall_image_types', array_map(fn (array $item): array => [
-                'id' => $item['id'],
-                'salescall_image_category_id' => $item['salescall_image_category_id'],
-                'name' => $item['name'],
-                'slug' => $item['slug'],
-                'sort' => $item['sort'] ?? 0,
-            ], $data['salescall_image_types'] ?? []));
-
-            foreach ($data['itineraries'] ?? [] as $itinerary) {
-                $local = Itinerary::updateOrCreate(
-                    ['local_uuid' => $itinerary['local_uuid'] ?? (string) $itinerary['id']],
-                    [
-                        'server_id' => $itinerary['id'],
-                        'created_by' => $user->id,
-                        'date_month' => $itinerary['date_month'] ?? null,
-                        'date_year' => $itinerary['date_year'] ?? null,
-                        'remarks' => $itinerary['remarks'] ?? null,
-                        'itinerary_status_id' => $itinerary['itinerary_status_id'] ?? null,
-                        'sync_status' => 'synced',
-                    ]
-                );
-
-                foreach ($itinerary['salescalls'] ?? [] as $sc) {
-                    $visitDate = $sc['route_start_at'] ?? $sc['actual_in'] ?? null;
-                    $localUuid = $sc['local_uuid'] ?? (string) $sc['id'];
-
-                    // A salescall with unsynced local changes (e.g. a check-in or
-                    // finish action not yet pushed) must not be clobbered by an
-                    // incoming pull — the server's copy is stale until the push
-                    // completes. Leave it untouched; the next push will resolve it.
-                    $hasPendingLocalChanges = Salescall::where('local_uuid', $localUuid)
-                        ->whereIn('sync_status', ['pending', 'failed'])
-                        ->exists();
-
-                    if ($hasPendingLocalChanges) {
-                        $localSalescall = Salescall::where('local_uuid', $localUuid)->first();
-                    } else {
-                        $localSalescall = Salescall::updateOrCreate(
-                            ['local_uuid' => $localUuid],
-                            [
-                                'server_id' => $sc['id'],
-                                'ref_number' => $sc['ref_number'] ?? $sc['id'],
-                                'itinerary_id' => $local->id,
-                                'customer_id' => $sc['customer_id'],
-                                'created_by' => $user->id,
-                                'visit_date' => $visitDate,
-                                'route_start_at' => $sc['route_start_at'] ?? null,
-                                'actual_in' => $sc['actual_in'] ?? null,
-                                'actual_out' => $sc['actual_out'] ?? null,
-                                'salescall_status_id' => $sc['salescall_status_id'] ?? null,
-                                'salescall_type_id' => $sc['salescall_type_id'] ?? null,
-                                'outcome_reason' => $sc['outcome_reason'] ?? null,
-                                'collection_amount' => $sc['collection_amount'] ?? null,
-                                'remarks' => $sc['remarks'] ?? null,
-                                'concerns' => $sc['concerns'] ?? null,
-                                'partially_completed_at' => $sc['partially_completed_at'] ?? null,
-                                'partially_completed_reason' => $sc['partially_completed_reason'] ?? null,
-                                'partially_completed_by' => $sc['partially_completed_by'] ?? null,
-                                'resumed_at' => $sc['resumed_at'] ?? null,
-                                'resumed_by' => $sc['resumed_by'] ?? null,
-                                'sync_status' => 'synced',
-                            ]
-                        );
-                    }
-
-                    if (SalescallBrand::where('salescall_id', $localSalescall->id)->where('sync_status', 'pending')->doesntExist()) {
-                        SalescallBrand::where('salescall_id', $localSalescall->id)->delete();
-
-                        foreach ($sc['salescall_brands'] ?? [] as $brandRow) {
-                            // A single row referencing a material_group_id/brand_id that
-                            // doesn't exist locally (e.g. a brand disabled on the portal
-                            // after this data was recorded) must not abort the entire pull
-                            // and lose every other itinerary/customer for this user — skip
-                            // just this row and report it so it's still visible in Pulse.
-                            try {
-                                SalescallBrand::create([
-                                    'salescall_id' => $localSalescall->id,
-                                    'customer_id' => $localSalescall->customer_id,
-                                    'material_group_id' => $brandRow['material_group_id'],
-                                    'brand_id' => $brandRow['brand_id'],
-                                    'quantity' => $brandRow['quantity'] ?? null,
-                                    'brand_other' => $brandRow['brand_other'] ?? null,
-                                    'local_uuid' => (string) \Str::uuid(),
-                                    'sync_status' => 'synced',
-                                ]);
-                            } catch (Throwable $e) {
-                                report($e);
-                            }
-                        }
-                    }
-
-                    $incomingCategory = $sc['salescall_category'] ?? null;
-
-                    if ($incomingCategory && SalescallCategory::where('salescall_id', $localSalescall->id)->where('sync_status', 'pending')->doesntExist()) {
+                    foreach ($sc['salescall_brands'] ?? [] as $brandRow) {
+                        // A single row referencing a material_group_id/brand_id that
+                        // doesn't exist locally (e.g. a brand disabled on the portal
+                        // after this data was recorded) must not abort the entire pull
+                        // and lose every other itinerary/customer for this user — skip
+                        // just this row and report it so it's still visible in Pulse.
                         try {
-                            $categoryRecord = SalescallCategory::firstOrNew(['salescall_id' => $localSalescall->id]);
-
-                            if (! $categoryRecord->local_uuid) {
-                                $categoryRecord->local_uuid = (string) \Str::uuid();
-                            }
-
-                            $categoryRecord->fill([
+                            SalescallBrand::create([
+                                'salescall_id' => $localSalescall->id,
                                 'customer_id' => $localSalescall->customer_id,
-                                'category_id' => $incomingCategory['category_id'],
-                                'sub_category_id' => $incomingCategory['sub_category_id'],
+                                'material_group_id' => $brandRow['material_group_id'],
+                                'brand_id' => $brandRow['brand_id'],
+                                'quantity' => $brandRow['quantity'] ?? null,
+                                'brand_other' => $brandRow['brand_other'] ?? null,
+                                'local_uuid' => (string) \Str::uuid(),
                                 'sync_status' => 'synced',
                             ]);
-
-                            $categoryRecord->save();
                         } catch (Throwable $e) {
                             report($e);
                         }
                     }
                 }
-            }
 
-            $itineraryCount = count($data['itineraries'] ?? []);
-            $salescallCount = array_sum(
-                array_map(fn ($i) => count($i['salescalls'] ?? []), $data['itineraries'] ?? [])
-            );
+                $incomingCategory = $sc['salescall_category'] ?? null;
 
-            $incomingCustomerBrands = collect($data['customer_brands'] ?? [])->groupBy('customer_id');
-
-            foreach ($incomingCustomerBrands as $customerId => $rows) {
-                $hasPendingLocalChanges = SalescallBrand::where('customer_id', $customerId)
-                    ->where('sync_status', 'pending')
-                    ->exists();
-
-                if ($hasPendingLocalChanges) {
-                    continue;
-                }
-
-                CustomerBrand::where('customer_id', $customerId)->delete();
-
-                foreach ($rows as $row) {
+                if ($incomingCategory && SalescallCategory::where('salescall_id', $localSalescall->id)->where('sync_status', 'pending')->doesntExist()) {
                     try {
-                        CustomerBrand::create([
-                            'customer_id' => $customerId,
-                            'material_group_id' => $row['material_group_id'],
-                            'brand_id' => $row['brand_id'],
-                            'quantity' => $row['quantity'] ?? null,
-                            'brand_other' => $row['brand_other'] ?? null,
-                            'last_salescall_id' => $row['last_salescall_id'] ?? null,
-                            'last_updated_by' => $row['last_updated_by'] ?? null,
+                        $categoryRecord = SalescallCategory::firstOrNew(['salescall_id' => $localSalescall->id]);
+
+                        if (! $categoryRecord->local_uuid) {
+                            $categoryRecord->local_uuid = (string) \Str::uuid();
+                        }
+
+                        $categoryRecord->fill([
+                            'customer_id' => $localSalescall->customer_id,
+                            'category_id' => $incomingCategory['category_id'],
+                            'sub_category_id' => $incomingCategory['sub_category_id'],
+                            'sync_status' => 'synced',
                         ]);
+
+                        $categoryRecord->save();
                     } catch (Throwable $e) {
                         report($e);
                     }
                 }
             }
+        }
 
-            foreach ($data['customer_categories'] ?? [] as $categoryRow) {
-                $hasPendingLocalChanges = SalescallCategory::where('customer_id', $categoryRow['customer_id'])
-                    ->where('sync_status', 'pending')
-                    ->exists();
+        $incomingCustomerBrands = collect($data['customer_brands'] ?? [])->groupBy('customer_id');
 
-                if ($hasPendingLocalChanges) {
-                    continue;
-                }
+        $customersWithPendingBrands = $incomingCustomerBrands->isEmpty()
+            ? []
+            : SalescallBrand::where('sync_status', 'pending')->distinct()->pluck('customer_id')->flip()->all();
 
+        foreach ($incomingCustomerBrands as $customerId => $rows) {
+            if (isset($customersWithPendingBrands[$customerId])) {
+                continue;
+            }
+
+            CustomerBrand::where('customer_id', $customerId)->delete();
+
+            foreach ($rows as $row) {
                 try {
-                    CustomerCategory::updateOrCreate(
-                        ['customer_id' => $categoryRow['customer_id']],
-                        [
-                            'category_id' => $categoryRow['category_id'],
-                            'sub_category_id' => $categoryRow['sub_category_id'],
-                            'last_salescall_id' => $categoryRow['last_salescall_id'] ?? null,
-                            'last_updated_by' => $categoryRow['last_updated_by'] ?? null,
-                        ]
-                    );
+                    CustomerBrand::create([
+                        'customer_id' => $customerId,
+                        'material_group_id' => $row['material_group_id'],
+                        'brand_id' => $row['brand_id'],
+                        'quantity' => $row['quantity'] ?? null,
+                        'brand_other' => $row['brand_other'] ?? null,
+                        'last_salescall_id' => $row['last_salescall_id'] ?? null,
+                        'last_updated_by' => $row['last_updated_by'] ?? null,
+                    ]);
                 } catch (Throwable $e) {
                     report($e);
                 }
             }
+        }
 
-            foreach ($data['customer_notes'] ?? [] as $noteRow) {
-                $hasPendingLocalChanges = CustomerNote::where('local_uuid', $noteRow['local_uuid'])
-                    ->where('sync_status', 'pending')
-                    ->exists();
+        $customersWithPendingCategories = empty($data['customer_categories'])
+            ? []
+            : SalescallCategory::where('sync_status', 'pending')->distinct()->pluck('customer_id')->flip()->all();
 
-                if ($hasPendingLocalChanges) {
-                    continue;
-                }
-
-                CustomerNote::updateOrCreate(
-                    ['local_uuid' => $noteRow['local_uuid']],
-                    [
-                        'server_id' => $noteRow['id'],
-                        'customer_id' => $noteRow['customer_id'],
-                        // Portal already scopes the customer_notes payload to created_by = the
-                        // syncing user (see SyncController::pull()), so every row here belongs
-                        // to $user. Use the tablet's own local user id, not the portal's numeric
-                        // id in the payload — portal and tablet user ids differ for the same
-                        // person (see "Portal user IDs ≠ tablet user IDs" gotcha), so writing the
-                        // portal's id here violates the local users FK.
-                        'created_by' => $user->id,
-                        'title' => $noteRow['title'] ?? null,
-                        'body' => $noteRow['body'],
-                        'sync_status' => 'synced',
-                        'synced_at' => now(),
-                    ]
-                );
+        foreach ($data['customer_categories'] ?? [] as $categoryRow) {
+            if (isset($customersWithPendingCategories[$categoryRow['customer_id']])) {
+                continue;
             }
 
-            $customerCount = count($data['customers'] ?? []);
+            try {
+                CustomerCategory::updateOrCreate(
+                    ['customer_id' => $categoryRow['customer_id']],
+                    [
+                        'category_id' => $categoryRow['category_id'],
+                        'sub_category_id' => $categoryRow['sub_category_id'],
+                        'last_salescall_id' => $categoryRow['last_salescall_id'] ?? null,
+                        'last_updated_by' => $categoryRow['last_updated_by'] ?? null,
+                    ]
+                );
+            } catch (Throwable $e) {
+                report($e);
+            }
+        }
 
-            return SyncResult::ok("Pulled {$itineraryCount} itineraries, {$salescallCount} salescalls, {$customerCount} customers.");
-        } catch (\Exception $e) {
-            return SyncResult::fail('Pull error: '.$e->getMessage(), 'exception');
-        } finally {
-            @unlink($sinkPath);
+        foreach ($data['customer_notes'] ?? [] as $noteRow) {
+            $hasPendingLocalChanges = CustomerNote::where('local_uuid', $noteRow['local_uuid'])
+                ->where('sync_status', 'pending')
+                ->exists();
+
+            if ($hasPendingLocalChanges) {
+                continue;
+            }
+
+            CustomerNote::updateOrCreate(
+                ['local_uuid' => $noteRow['local_uuid']],
+                [
+                    'server_id' => $noteRow['id'],
+                    'customer_id' => $noteRow['customer_id'],
+                    // Portal already scopes the customer_notes payload to created_by = the
+                    // syncing user (see SyncController::pull()), so every row here belongs
+                    // to $user. Use the tablet's own local user id, not the portal's numeric
+                    // id in the payload — portal and tablet user ids differ for the same
+                    // person (see "Portal user IDs ≠ tablet user IDs" gotcha), so writing the
+                    // portal's id here violates the local users FK.
+                    'created_by' => $user->id,
+                    'title' => $noteRow['title'] ?? null,
+                    'body' => $noteRow['body'],
+                    'sync_status' => 'synced',
+                    'synced_at' => now(),
+                ]
+            );
         }
     }
 
@@ -1410,7 +1735,7 @@ class SyncService
      *
      * @param  list<array<string, mixed>>  $rows
      */
-    private function upsertRows(string $table, array $rows): void
+    private function upsertRows(string $table, array $rows, ?callable $map = null): void
     {
         if ($rows === []) {
             return;
@@ -1418,19 +1743,23 @@ class SyncService
 
         $timestamp = now();
 
-        $rows = array_map(function (array $row) use ($timestamp): array {
+        // Rows are mapped one chunk at a time so a large table (~42K barangays)
+        // is never held in memory as a second full copy of the decoded payload.
+        $prepare = function (array $row) use ($map, $timestamp): array {
+            $row = $map ? $map($row) : $row;
             $row['updated_at'] = $timestamp;
 
             return $row;
-        }, array_values($rows));
+        };
 
-        $updateColumns = array_values(array_diff(array_keys($rows[0]), ['id', 'created_at']));
+        $first = $prepare(reset($rows));
+        $updateColumns = array_values(array_diff(array_keys($first), ['id', 'created_at']));
 
         // Keep bindings under the variable limit of older SQLite builds.
-        $chunkSize = max(1, min(500, intdiv(900, count($rows[0]))));
+        $chunkSize = max(1, min(500, intdiv(900, count($first))));
 
         foreach (array_chunk($rows, $chunkSize) as $chunk) {
-            DB::table($table)->upsert($chunk, ['id'], $updateColumns);
+            DB::table($table)->upsert(array_map($prepare, $chunk), ['id'], $updateColumns);
         }
     }
 

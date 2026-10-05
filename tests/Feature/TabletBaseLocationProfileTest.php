@@ -98,7 +98,7 @@ test('pull does not overwrite a locally pending base location', function () {
     $this->actingAs($user);
 
     Http::fake([
-        'portal.test/api/sync/pull' => Http::response([
+        'portal.test/api/sync/pull/*' => Http::response([
             'users' => [[
                 'id' => 99,
                 'email' => 'drm@example.com',
@@ -129,7 +129,7 @@ test('pull overwrites the base location when there is nothing pending', function
     $this->actingAs($user);
 
     Http::fake([
-        'portal.test/api/sync/pull' => Http::response([
+        'portal.test/api/sync/pull/*' => Http::response([
             'users' => [[
                 'id' => 99,
                 'email' => 'drm@example.com',

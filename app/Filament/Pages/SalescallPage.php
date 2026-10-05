@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Concerns\PullsCustomers;
 use App\Listeners\HandleLocationReceived;
 use App\Models\Brand;
 use App\Models\Category;
@@ -54,6 +55,8 @@ Email notification for sir Ricky approval of RSM itinerary.
  */
 class SalescallPage extends Page
 {
+    use PullsCustomers;
+
     protected string $view = 'filament.pages.salescall-page';
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedPhone;
@@ -773,12 +776,16 @@ class SalescallPage extends Page
         return (float) $parts[0] / (float) $parts[1];
     }
 
-    public function initiateCheckIn(int $salescallId): void
+    /**
+     * Returns whether the check-in was recorded, so the page only shows the
+     * visit as in progress once it has actually been saved.
+     */
+    public function initiateCheckIn(int $salescallId): bool
     {
         if ($this->hasActiveVisitElsewhere($salescallId)) {
             Notification::make()->title('Finish your current visit before starting another.')->danger()->send();
 
-            return;
+            return false;
         }
 
         $this->pendingCheckInId = $salescallId;
@@ -789,6 +796,8 @@ class SalescallPage extends Page
         ]);
 
         $this->requestGpsCapture('checkin-'.$salescallId, 'use-browser-geolocation', $salescallId);
+
+        return true;
     }
 
     private function hasActiveVisitElsewhere(int $excludeSalescallId): bool
@@ -1568,7 +1577,11 @@ class SalescallPage extends Page
             ->where('created_by', auth()->id())
             ->where(function ($q) use ($monthStart, $nextMonthEnd) {
                 $q->whereBetween('actual_in', [$monthStart, $nextMonthEnd])
-                    ->orWhereBetween('visit_date', [$monthStart, $nextMonthEnd]);
+                    ->orWhereBetween('visit_date', [$monthStart, $nextMonthEnd])
+                    // An unfinished visit from an earlier month still blocks new
+                    // check-ins (hasActiveVisitElsewhere), so it must stay visible
+                    // and finishable here.
+                    ->orWhere(fn ($open) => $open->whereNotNull('actual_in')->whereNull('actual_out'));
             })
             ->orderByRaw('COALESCE(actual_in, visit_date) ASC')
             ->get()

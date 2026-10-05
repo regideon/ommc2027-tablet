@@ -133,7 +133,7 @@ test('C: login writes the marker, logout clears it, full lifecycle', function ()
             'roles' => ['drm'],
             'rsm_id' => null,
         ], 200),
-        'portal.test/api/sync/pull' => Http::response(['success' => true, 'data' => []], 200),
+        'portal.test/api/sync/pull/*' => Http::response(['success' => true, 'data' => []], 200),
     ]);
 
     Livewire::test(Login::class)

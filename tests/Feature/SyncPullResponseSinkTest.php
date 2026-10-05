@@ -43,7 +43,7 @@ test('pull decodes a response larger than the php://temp memory threshold', func
     ]);
 
     Http::fake([
-        'portal.test/api/sync/pull' => Http::response($body, 200, ['Content-Type' => 'application/json']),
+        'portal.test/api/sync/pull/*' => Http::response($body, 200, ['Content-Type' => 'application/json']),
     ]);
 
     $result = app(SyncService::class)->pull();

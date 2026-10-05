@@ -210,8 +210,8 @@
                         start ? this.locationZoom : this.neutralZoom,
                     );
 
-                    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                        attribution: '&copy; OpenStreetMap &copy; CartoDB',
+                    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '&copy; OpenStreetMap contributors',
                         maxZoom: 18,
                     }).addTo(this.map);
 

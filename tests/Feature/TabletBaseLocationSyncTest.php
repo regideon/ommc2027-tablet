@@ -49,7 +49,7 @@ test('pull refreshes the rep base location from the users payload', function () 
     $this->actingAs($user);
 
     Http::fake([
-        'portal.test/api/sync/pull' => Http::response([
+        'portal.test/api/sync/pull/*' => Http::response([
             'users' => [
                 [
                     'id' => 99,

@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Concerns\PullsCustomers;
 use App\Models\Customer;
 use App\Models\CustomerBrand;
 use App\Models\CustomerCategory;
@@ -18,6 +19,8 @@ use Illuminate\Support\Facades\DB;
 
 class CustomerPage extends Page
 {
+    use PullsCustomers;
+
     protected string $view = 'filament.pages.customer-page';
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedUserGroup;
@@ -50,15 +53,19 @@ class CustomerPage extends Page
         $user = Auth::user();
         $roles = $user->getRoleNames()->toArray();
 
+        // Customers the portal reported in this user's scope on their last
+        // customer pull (see SyncService::recordCustomerScope()).
+        $pulledIds = DB::table('customer_scopes')->where('user_id', $user->id)->pluck('customer_id');
+
         if (in_array('rsm_approver', $roles)) {
             $customers = Customer::where('is_active', true)->orderBy('name')->get();
         } elseif (array_intersect(['rsm', 'drm_approver'], $roles)) {
             $drmIds = User::where('rsm_id', $user->id)->pluck('id');
-            $customerIds = DB::table('customer_user')->whereIn('user_id', $drmIds)->pluck('customer_id');
+            $customerIds = DB::table('customer_user')->whereIn('user_id', $drmIds)->pluck('customer_id')->merge($pulledIds)->unique();
             $customers = Customer::whereIn('id', $customerIds)->where('is_active', true)->orderBy('name')->get();
         } else {
             // DRM
-            $customerIds = DB::table('customer_user')->where('user_id', $user->id)->pluck('customer_id');
+            $customerIds = DB::table('customer_user')->where('user_id', $user->id)->pluck('customer_id')->merge($pulledIds)->unique();
             $customers = Customer::whereIn('id', $customerIds)->where('is_active', true)->orderBy('name')->get();
         }
 

@@ -1,7 +1,7 @@
 <x-filament-panels::page>
-    <div class="flex items-center justify-end mb-3">
+    <x-customer-pull class="mb-3" :auto="$this->customerPullPending()" show-button refresh-on-done>
         <a href="{{ \App\Filament\Pages\CustomerCreatePage::getUrl() }}" class="fi-btn fi-color-primary">Add Customer</a>
-    </div>
+    </x-customer-pull>
     <div class="space-y-2">
         @forelse($customers as $customer)
             <button

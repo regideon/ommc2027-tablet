@@ -234,8 +234,8 @@
                     initMap() {
                         const pins = {{ $mapPinsJson }};
                         const map = L.map('dashboard-map');
-                        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                            attribution: '&copy; OpenStreetMap &copy; CartoDB', maxZoom: 18
+                        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                            attribution: '&copy; OpenStreetMap contributors', maxZoom: 18
                         }).addTo(map);
                         this.addPins(map, pins);
                         this.leafletMap = map;
@@ -248,8 +248,8 @@
                             const pins = {{ $mapPinsJson }};
                             if (this.fullscreenMap) { this.fullscreenMap.remove(); this.fullscreenMap = null; }
                             const map = L.map('dashboard-map-fullscreen');
-                            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                                attribution: '&copy; OpenStreetMap &copy; CartoDB', maxZoom: 18
+                            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                                attribution: '&copy; OpenStreetMap contributors', maxZoom: 18
                             }).addTo(map);
                             this.addPins(map, pins);
                             this.fullscreenMap = map;
