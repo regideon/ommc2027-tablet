@@ -80,11 +80,13 @@ class CustomerProfileFormService
             'unique_id' => $customer->unique_id,
             'company_id' => $customer->company_id,
             'region_specific_id' => $customer->region_specific_id,
-            'province_id' => $customer->municipality?->province_id,
+            'province_id' => $customer->province_id ?? $customer->municipality?->province_id,
+            'barangay_id' => $customer->barangay_id,
+            'area_cluster_id' => $customer->area_cluster_id,
             'municipality_id' => $customer->municipality_id,
             'general_category_id' => $customer->general_category_id,
             'competitor_volume' => $customer->competitor_volume,
-            'address' => $customer->address,
+            'address' => $customer->address ?? '',
             'latitude' => $customer->latitude,
             'longitude' => $customer->longitude,
             'contact_person' => $customer->contact_person,
@@ -131,6 +133,7 @@ class CustomerProfileFormService
     {
         $customer->fill(Arr::only($state, [
             'name', 'unique_id', 'company_id', 'region_specific_id', 'municipality_id',
+            'province_id', 'barangay_id', 'area_cluster_id',
             'general_category_id', 'competitor_volume', 'address', 'latitude', 'longitude',
             'contact_person', 'contact_number', 'business_landline_number',
             'business_mobile_number', 'date_established', 'is_active', 'person_in_charge_id',

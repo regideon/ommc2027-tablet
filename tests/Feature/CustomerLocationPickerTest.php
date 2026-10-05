@@ -32,7 +32,7 @@ test('customer add page renders the map location picker', function () {
         ->assertSee('openPicker()', false)
         ->assertSee('data-location-coordinate="latitude"', false)
         ->assertSee('data-location-coordinate="longitude"', false)
-        ->assertSee('data-location-address="address"', false)
+        ->assertDontSee('Select specific region')
         ->assertSee('nominatim.openstreetmap.org', false)
         ->assertSee('confirmLocation()', false)
         ->assertSee('window.customerLocationPicker', false)

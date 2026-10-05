@@ -1,0 +1,34 @@
+# OMMC-20261004-tablet-sync-pull-reliability
+
+- **Title:** Make the tablet sync pull survive the embedded runtime — stream the response to a file and bulk-upsert reference data
+- **Objective:** Get `SyncService::pull()` working end-to-end on device: (1) stop the response buffering from failing with `fwrite(): Unable to create temporary file`, and (2) stop the pull from exceeding the 30-second `max_execution_time` while writing the full reference dataset.
+- **Repositories:** Tablet `ommc2027-tablet` only.
+- **State:** READY_FOR_TERMINAL_REVIEW
+- **Implementation authorization:** Granted by explicit Human reply "yes" to fixing the pull failure. Local implementation and validation only.
+- **Terminal authorization:** None.
+- **Human-authorized scope:** Fix the sync pull. Two defects addressed, both in `SyncService::pull()`. No portal changes. No `vendor/` changes.
+- **Accepted decisions:**
+  - **Defect 1 — temp file.** Guzzle buffers the response in `php://temp`, which spills to disk past 2 MB. The embedded runtime has no usable PHP temp dir, and setting one is not app-controllable (PHP caches `PG(php_sys_temp_dir)`; NativePHP regenerates the Android `php.ini` on every launch). Fixed by giving the request an explicit file `sink` under app storage (`PendingRequest::sink()`; Guzzle only uses `php://temp` when no sink is set — `CurlFactory.php:2186`).
+  - **Defect 2 — timeout.** Once the response reads, the pull re-upserts the whole reference snapshot row-by-row. `barangays` alone is ~42k rows and each `updateOrInsert()` is a SELECT plus a write (~84k statements) with no transaction, exceeding `max_execution_time = 30`. Fixed with chunked `upsert()` batches for all reference tables.
+  - Payload trigger unchanged: commit `962612b` added `barangays`/`area_clusters` to the pull payload.
+- **Implementation constraints:** No commit/push. Preserve unrelated worktree changes. Do not modify `vendor/`. Do not run `pint` across `app/Services/SyncService.php` — it reformats pre-existing unrelated code.
+- **Task-owned files/components:**
+  - `app/Services/SyncService.php` — `pull()` uses `->sink()` and `decodePullResponse()`; added `pullSinkPath()`, `decodePullResponse()`, `upsertRows()`; converted all reference-table loops to `upsertRows()`; `finally { @unlink($sinkPath); }`.
+  - `tests/Feature/SyncPullResponseSinkTest.php` (new) — sink regression.
+  - `tests/Feature/SyncPullReferenceBulkUpsertTest.php` (new) — bounded-query + in-place update regression.
+  - this Work note.
+- **Unrelated/pre-existing worktree changes to preserve:** None — `git status` was clean at the start of this Work.
+- **Implementation decisions:**
+  - `decodePullResponse()` reads JSON back from the sink file rather than `$response->json()`, so curl and `Http::fake` (whose sink stub consumes the response body) behave identically.
+  - `upsertRows()` derives the conflict-update column list from the row keys, adds one shared `updated_at`, and chunks to keep bindings under the SQLite variable limit (`max(1, min(500, 900 / columnCount))`).
+  - `upsert()` is used (not `updateOrInsert()`); it does not auto-add timestamps for `DB::table()`, so `updated_at` is set explicitly. `created_at` behaviour is unchanged.
+  - Converted tables: general_categories, companies, regions, region_specifics, provinces, municipalities, barangays, area_clusters, salescall_statuses, salescall_types, material_groups, brands, categories, sub_categories, sub_sub_categories, salescall_image_categories, salescall_image_types. Customer/pivot loops keep their existing `updateOrInsert()` because of the protected-record logic.
+- **Validation:**
+  - New: `SyncPullReferenceBulkUpsertTest` → 2 passed. Proves 2,000 barangays are ingested in **fewer than 100 queries** (was 4,002) and that existing rows update in place. `SyncPullResponseSinkTest` → 2 passed. Combined: 4 passed (12 assertions).
+  - Pull-related: `TabletBaseLocationSyncTest`, `SyncServicePullFreshInstallTest`, `CustomerLocationSyncTest`, `CustomerOperationalSyncTest` → 7 passed (50 assertions).
+  - Full suite: `php artisan test --compact` → 141 passed, 3 skipped, 12 failed. The same 12 failures reproduce on clean `HEAD`, so they are pre-existing/environmental: `CustomerCreatePageDiagnosticTest`, `ExampleTest`, `FirstLoginPersistenceTest` (×3), `IosNativeRegenerationArtifactsTest` (×2), `SalescallPhotoUploadTest` (×4), `StartupMigrationClassicDiagnosticsTest`.
+  - `pint` on the new test files → clean; `SyncService.php` intentionally left unformatted to avoid unrelated churn.
+- **Manual acceptance:** Pending — needs a rebuilt/reinstalled tablet app confirming a sync pull completes without the temp-file error and without timing out.
+- **Blockers:** None.
+- **Remaining work:** Human rebuilds/reinstalls the tablet app and confirms the pull on device; then terminal authorization.
+- **Delivery evidence status:** Not delivered.

@@ -157,6 +157,7 @@ class SyncService
                     'password' => $data['password'],
                     'api_token' => $data['api_token'],
                     'rsm_id' => $data['rsm_id'] ?? null,
+                    'region_type_id' => $data['region_type_id'] ?? null,
                     'base_start_latitude' => $data['base_start_latitude'] ?? null,
                     'base_start_longitude' => $data['base_start_longitude'] ?? null,
                     'base_end_latitude' => $data['base_end_latitude'] ?? null,
@@ -185,8 +186,18 @@ class SyncService
             return SyncResult::fail('No API token found. Please log in first.', 'no_token');
         }
 
+        $sinkPath = $this->pullSinkPath();
+
         try {
-            $response = $this->client($user->api_token)->get("{$this->serverUrl}/api/sync/pull");
+            // Stream the response to a file instead of letting Guzzle buffer it in
+            // php://temp: the embedded runtime has no usable PHP temporary
+            // directory, and the pull payload (which now includes barangays and
+            // area_clusters) exceeds php://temp's 2 MB memory threshold, so the
+            // buffered body spills to disk and fails with "Unable to create
+            // temporary file".
+            $response = $this->client($user->api_token)
+                ->sink($sinkPath)
+                ->get("{$this->serverUrl}/api/sync/pull");
 
             if ($response->status() === 401) {
                 return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
@@ -196,7 +207,7 @@ class SyncService
                 return SyncResult::fail("Pull failed ({$response->status()}).", 'server_error');
             }
 
-            $data = $response->json();
+            $data = $this->decodePullResponse($sinkPath);
 
             // Refresh the logged-in rep's itinerary base location from the pulled
             // users list. Portal user ids differ from tablet ids, so match on the
@@ -215,6 +226,13 @@ class SyncService
                 ]);
             }
 
+            // The region type is portal-authoritative and drives the photo
+            // requirement; it is not locally editable, so apply it even when the
+            // rep has an unsynced base-location edit.
+            if ($portalUser && array_key_exists('region_type_id', $portalUser)) {
+                $user->update(['region_type_id' => $portalUser['region_type_id']]);
+            }
+
             // Reference/lookup tables must be populated before anything below that
             // holds a foreign key into them (salescall_brands -> material_groups/brands,
             // salescall_categories/customer_categories -> categories/sub_categories,
@@ -223,74 +241,77 @@ class SyncService
             // carry salescall_brands/salescall_categories data (e.g. an RSM-added call)
             // would otherwise throw a foreign key integrity violation and abort the
             // entire pull before customers/brands/categories ever get written.
-            foreach ($data['general_categories'] ?? [] as $category) {
-                DB::table('general_categories')->updateOrInsert(
-                    ['id' => $category['id']],
-                    [
-                        'name' => $category['name'],
-                        'priority_visit' => $category['priority_visit'] ?? null,
-                        'duration_per_visit' => $category['duration_per_visit'] ?? null,
-                        'sort' => $category['sort'] ?? 0,
-                        'updated_at' => now(),
-                    ]
-                );
-            }
+            $this->upsertRows('general_categories', array_map(fn (array $category): array => [
+                'id' => $category['id'],
+                'name' => $category['name'],
+                'priority_visit' => $category['priority_visit'] ?? null,
+                'duration_per_visit' => $category['duration_per_visit'] ?? null,
+                'sort' => $category['sort'] ?? 0,
+            ], $data['general_categories'] ?? []));
 
-            foreach ($data['companies'] ?? [] as $company) {
-                DB::table('companies')->updateOrInsert(
-                    ['id' => $company['id']],
-                    ['name' => $company['name'], 'code' => $company['code'] ?? null, 'updated_at' => now()]
-                );
-            }
+            $this->upsertRows('companies', array_map(fn (array $company): array => [
+                'id' => $company['id'],
+                'name' => $company['name'],
+                'code' => $company['code'] ?? null,
+            ], $data['companies'] ?? []));
 
-            foreach ($data['regions'] ?? [] as $region) {
-                DB::table('regions')->updateOrInsert(
-                    ['id' => $region['id']],
-                    ['code' => $region['code'], 'psgc_code' => $region['psgc_code'] ?? null, 'name' => $region['name'], 'updated_at' => now()]
-                );
-            }
+            $this->upsertRows('regions', array_map(fn (array $region): array => [
+                'id' => $region['id'],
+                'code' => $region['code'],
+                'psgc_code' => $region['psgc_code'] ?? null,
+                'name' => $region['name'],
+            ], $data['regions'] ?? []));
 
-            foreach ($data['region_specifics'] ?? [] as $regionSpecific) {
-                DB::table('region_specifics')->updateOrInsert(
-                    ['id' => $regionSpecific['id']],
-                    [
-                        'region_id' => $regionSpecific['region_id'],
-                        'name' => $regionSpecific['name'],
-                        'sort' => $regionSpecific['sort'] ?? 0,
-                        'updated_at' => now(),
-                    ]
-                );
-            }
+            $this->upsertRows('region_specifics', array_map(fn (array $regionSpecific): array => [
+                'id' => $regionSpecific['id'],
+                'region_id' => $regionSpecific['region_id'],
+                'name' => $regionSpecific['name'],
+                'sort' => $regionSpecific['sort'] ?? 0,
+            ], $data['region_specifics'] ?? []));
 
-            foreach ($data['provinces'] ?? [] as $province) {
-                DB::table('provinces')->updateOrInsert(
-                    ['id' => $province['id']],
-                    [
-                        'region_id' => $province['region_id'] ?? null,
-                        'psgc_code' => $province['psgc_code'] ?? null,
-                        'region_specific_id' => $province['region_specific_id'] ?? null,
-                        'name' => $province['name'],
-                        'enabled' => $province['enabled'] ?? true,
-                        'updated_at' => now(),
-                    ]
-                );
-            }
+            $this->upsertRows('region_types', array_map(fn (array $regionType): array => [
+                'id' => $regionType['id'],
+                'name' => $regionType['name'],
+                'sort' => $regionType['sort'] ?? 0,
+                'is_image_required' => $regionType['is_image_required'] ?? false,
+            ], $data['region_types'] ?? []));
 
-            foreach ($data['municipalities'] ?? [] as $municipality) {
-                DB::table('municipalities')->updateOrInsert(
-                    ['id' => $municipality['id']],
-                    [
-                        'psgc_code' => $municipality['psgc_code'] ?? null,
-                        'region_id' => $municipality['region_id'] ?? null,
-                        'province_id' => $municipality['province_id'] ?? null,
-                        'locality_type' => $municipality['locality_type'] ?? null,
-                        'name' => $municipality['name'],
-                        'sort' => $municipality['sort'] ?? 0,
-                        'enabled' => $municipality['enabled'] ?? true,
-                        'updated_at' => now(),
-                    ]
-                );
-            }
+            $this->upsertRows('provinces', array_map(fn (array $province): array => [
+                'id' => $province['id'],
+                'region_id' => $province['region_id'] ?? null,
+                'psgc_code' => $province['psgc_code'] ?? null,
+                'region_specific_id' => $province['region_specific_id'] ?? null,
+                'name' => $province['name'],
+                'enabled' => $province['enabled'] ?? true,
+            ], $data['provinces'] ?? []));
+
+            $this->upsertRows('municipalities', array_map(fn (array $municipality): array => [
+                'id' => $municipality['id'],
+                'psgc_code' => $municipality['psgc_code'] ?? null,
+                'region_id' => $municipality['region_id'] ?? null,
+                'province_id' => $municipality['province_id'] ?? null,
+                'locality_type' => $municipality['locality_type'] ?? null,
+                'name' => $municipality['name'],
+                'sort' => $municipality['sort'] ?? 0,
+                'enabled' => $municipality['enabled'] ?? true,
+            ], $data['municipalities'] ?? []));
+
+            $this->upsertRows('barangays', array_map(fn (array $barangay): array => [
+                'id' => $barangay['id'],
+                'municipality_id' => $barangay['municipality_id'],
+                'psgc_code' => $barangay['psgc_code'] ?? null,
+                'code' => $barangay['code'] ?? null,
+                'name' => $barangay['name'],
+                'enabled' => $barangay['enabled'] ?? true,
+            ], $data['barangays'] ?? []));
+
+            $this->upsertRows('area_clusters', array_map(fn (array $areaCluster): array => [
+                'id' => $areaCluster['id'],
+                'region_specific_id' => $areaCluster['region_specific_id'],
+                'code' => $areaCluster['code'] ?? null,
+                'name' => $areaCluster['name'],
+                'enabled' => $areaCluster['enabled'] ?? true,
+            ], $data['area_clusters'] ?? []));
 
             $protectedStatuses = ['pending', 'failed', 'conflict'];
             $serverToLocalCustomer = [];
@@ -315,6 +336,9 @@ class SyncService
                         'general_category_id' => $customer['general_category_id'] ?? null,
                         'region_specific_id' => $customer['region_specific_id'] ?? null,
                         'municipality_id' => $customer['municipality_id'] ?? null,
+                        'province_id' => $customer['province_id'] ?? null,
+                        'barangay_id' => $customer['barangay_id'] ?? null,
+                        'area_cluster_id' => $customer['area_cluster_id'] ?? null,
                         'name' => $customer['name'],
                         'unique_id' => $customer['unique_id'] ?? null,
                         'contact_person' => $customer['contact_person'] ?? null,
@@ -401,89 +425,62 @@ class SyncService
                 );
             }
 
-            foreach ($data['salescall_statuses'] ?? [] as $status) {
-                DB::table('salescall_statuses')->updateOrInsert(
-                    ['id' => $status['id']],
-                    ['name' => $status['name'], 'updated_at' => now()]
-                );
-            }
+            $this->upsertRows('salescall_statuses', array_map(fn (array $status): array => [
+                'id' => $status['id'],
+                'name' => $status['name'],
+            ], $data['salescall_statuses'] ?? []));
 
-            foreach ($data['salescall_types'] ?? [] as $type) {
-                DB::table('salescall_types')->updateOrInsert(
-                    ['id' => $type['id']],
-                    ['name' => $type['name'], 'updated_at' => now()]
-                );
-            }
+            $this->upsertRows('salescall_types', array_map(fn (array $type): array => [
+                'id' => $type['id'],
+                'name' => $type['name'],
+            ], $data['salescall_types'] ?? []));
 
-            foreach ($data['material_groups'] ?? [] as $group) {
-                DB::table('material_groups')->updateOrInsert(
-                    ['id' => $group['id']],
-                    ['name' => $group['name'], 'updated_at' => now()]
-                );
-            }
+            $this->upsertRows('material_groups', array_map(fn (array $group): array => [
+                'id' => $group['id'],
+                'name' => $group['name'],
+            ], $data['material_groups'] ?? []));
 
-            foreach ($data['brands'] ?? [] as $brand) {
-                DB::table('brands')->updateOrInsert(
-                    ['id' => $brand['id']],
-                    [
-                        'material_group_id' => $brand['material_group_id'],
-                        'name' => $brand['name'],
-                        'enabled' => $brand['enabled'],
-                        'updated_at' => now(),
-                    ]
-                );
-            }
+            $this->upsertRows('brands', array_map(fn (array $brand): array => [
+                'id' => $brand['id'],
+                'material_group_id' => $brand['material_group_id'],
+                'name' => $brand['name'],
+                'enabled' => $brand['enabled'],
+            ], $data['brands'] ?? []));
 
-            foreach ($data['categories'] ?? [] as $item) {
-                DB::table('categories')->updateOrInsert(
-                    ['id' => $item['id']],
-                    [
-                        'name' => $item['name'],
-                        'general_category_id' => $item['general_category_id'] ?? null,
-                        'updated_at' => now(),
-                    ]
-                );
-            }
+            $this->upsertRows('categories', array_map(fn (array $item): array => [
+                'id' => $item['id'],
+                'name' => $item['name'],
+                'general_category_id' => $item['general_category_id'] ?? null,
+            ], $data['categories'] ?? []));
 
-            foreach ($data['sub_categories'] ?? [] as $item) {
-                DB::table('sub_categories')->updateOrInsert(
-                    ['id' => $item['id']],
-                    [
-                        'category_id' => $item['category_id'],
-                        'name' => $item['name'],
-                        'with_form' => $item['with_form'] ?? false,
-                        'is_active' => $item['is_active'] ?? true,
-                        'updated_at' => now(),
-                    ]
-                );
-            }
+            $this->upsertRows('sub_categories', array_map(fn (array $item): array => [
+                'id' => $item['id'],
+                'category_id' => $item['category_id'],
+                'name' => $item['name'],
+                'with_form' => $item['with_form'] ?? false,
+                'is_active' => $item['is_active'] ?? true,
+            ], $data['sub_categories'] ?? []));
 
-            foreach ($data['sub_sub_categories'] ?? [] as $item) {
-                DB::table('sub_sub_categories')->updateOrInsert(
-                    ['id' => $item['id']],
-                    ['sub_category_id' => $item['sub_category_id'], 'name' => $item['name'], 'updated_at' => now()]
-                );
-            }
+            $this->upsertRows('sub_sub_categories', array_map(fn (array $item): array => [
+                'id' => $item['id'],
+                'sub_category_id' => $item['sub_category_id'],
+                'name' => $item['name'],
+            ], $data['sub_sub_categories'] ?? []));
 
-            foreach ($data['salescall_image_categories'] ?? [] as $item) {
-                DB::table('salescall_image_categories')->updateOrInsert(
-                    ['id' => $item['id']],
-                    ['name' => $item['name'], 'slug' => $item['slug'], 'sort' => $item['sort'] ?? 0, 'updated_at' => now()]
-                );
-            }
+            $this->upsertRows('salescall_image_categories', array_map(fn (array $item): array => [
+                'id' => $item['id'],
+                'name' => $item['name'],
+                'slug' => $item['slug'],
+                'sort' => $item['sort'] ?? 0,
+            ], $data['salescall_image_categories'] ?? []));
 
-            foreach ($data['salescall_image_types'] ?? [] as $item) {
-                DB::table('salescall_image_types')->updateOrInsert(
-                    ['id' => $item['id']],
-                    [
-                        'salescall_image_category_id' => $item['salescall_image_category_id'],
-                        'name' => $item['name'],
-                        'slug' => $item['slug'],
-                        'sort' => $item['sort'] ?? 0,
-                        'updated_at' => now(),
-                    ]
-                );
-            }
+            $this->upsertRows('salescall_image_types', array_map(fn (array $item): array => [
+                'id' => $item['id'],
+                'salescall_image_category_id' => $item['salescall_image_category_id'],
+                'name' => $item['name'],
+                'slug' => $item['slug'],
+                'sort' => $item['sort'] ?? 0,
+            ], $data['salescall_image_types'] ?? []));
 
             foreach ($data['itineraries'] ?? [] as $itinerary) {
                 $local = Itinerary::updateOrCreate(
@@ -686,6 +683,8 @@ class SyncService
             return SyncResult::ok("Pulled {$itineraryCount} itineraries, {$salescallCount} salescalls, {$customerCount} customers.");
         } catch (\Exception $e) {
             return SyncResult::fail('Pull error: '.$e->getMessage(), 'exception');
+        } finally {
+            @unlink($sinkPath);
         }
     }
 
@@ -772,7 +771,7 @@ class SyncService
 
             foreach ($pendingCustomers as $customer) {
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/push/customer", [
+                    $payload = [
                         'local_uuid' => $customer->local_uuid,
                         'server_id' => $customer->server_id,
                         'base_updated_at' => $customer->server_updated_at,
@@ -815,7 +814,21 @@ class SyncService
                             'source' => $event->source,
                             'supersedes_event_key' => $event->supersedes_event_key,
                         ])->values()->all(),
-                    ]);
+                    ];
+
+                    if ($customer->province_id !== null) {
+                        $payload['province_id'] = $customer->province_id;
+                    }
+
+                    if ($customer->barangay_id !== null) {
+                        $payload['barangay_id'] = $customer->barangay_id;
+                    }
+
+                    if ($customer->area_cluster_id !== null) {
+                        $payload['area_cluster_id'] = $customer->area_cluster_id;
+                    }
+
+                    $response = $client->post("{$this->serverUrl}/api/sync/push/customer", $payload);
 
                     if ($response->status() === 401) {
                         return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
@@ -1356,6 +1369,69 @@ class SyncService
     private function client(string $token): PendingRequest
     {
         return Http::withToken($token)->acceptJson()->timeout($this->timeout);
+    }
+
+    /**
+     * Path to a writable file the pull response can be streamed into.
+     */
+    private function pullSinkPath(): string
+    {
+        $directory = storage_path('app/tmp');
+
+        if (! is_dir($directory)) {
+            @mkdir($directory, 0777, true);
+        }
+
+        return $directory.DIRECTORY_SEPARATOR.'sync-pull-'.\Str::uuid().'.json';
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function decodePullResponse(string $sinkPath): array
+    {
+        $body = is_file($sinkPath) ? file_get_contents($sinkPath) : false;
+
+        if ($body === false) {
+            throw new \RuntimeException('The pull response body was not written to the sink file.');
+        }
+
+        $decoded = json_decode($body, true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * Bulk insert-or-update rows keyed by their `id`.
+     *
+     * The reference tables are full snapshots sent on every pull — barangays
+     * alone is tens of thousands of rows. A per-row updateOrInsert() is a SELECT
+     * plus a write per row and times out the request, so batch them into chunks.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     */
+    private function upsertRows(string $table, array $rows): void
+    {
+        if ($rows === []) {
+            return;
+        }
+
+        $timestamp = now();
+
+        $rows = array_map(function (array $row) use ($timestamp): array {
+            $row['updated_at'] = $timestamp;
+
+            return $row;
+        }, array_values($rows));
+
+        $updateColumns = array_values(array_diff(array_keys($rows[0]), ['id', 'created_at']));
+
+        // Keep bindings under the variable limit of older SQLite builds.
+        $chunkSize = max(1, min(500, intdiv(900, count($rows[0]))));
+
+        foreach (array_chunk($rows, $chunkSize) as $chunk) {
+            DB::table($table)->upsert($chunk, ['id'], $updateColumns);
+        }
     }
 
     private function markFailed(Model $model, string $error): void

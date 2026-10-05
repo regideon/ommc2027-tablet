@@ -1055,12 +1055,19 @@ class SalescallPage extends Page
             return;
         }
 
-        if ($outcome === 'completed' && ! $this->canSubmitSalescall($salescallId)) {
-            // Message reflects only the active requirement below (brands) — photos
-            // are temporarily optional, see canSubmitSalescall().
-            Notification::make()->title('Save brands before submitting.')->danger()->send();
+        if ($outcome === 'completed') {
+            $blocker = $this->salescallSubmitBlocker($salescallId);
 
-            return;
+            if ($blocker !== null) {
+                Notification::make()
+                    ->title($blocker === 'image'
+                        ? 'Add at least one photo before completing this visit.'
+                        : 'Save brands before submitting.')
+                    ->danger()
+                    ->send();
+
+                return;
+            }
         }
 
         Salescall::findOrFail($salescallId)->update([
@@ -1220,14 +1227,24 @@ class SalescallPage extends Page
         }
     }
 
-    private function canSubmitSalescall(int $salescallId): bool
+    /**
+     * Reason a Completed visit cannot be submitted yet, or null when it can.
+     *
+     * Brands are always required. When the rep's region type requires a photo
+     * (is_image_required), at least one salescall image must exist.
+     */
+    private function salescallSubmitBlocker(int $salescallId): ?string
     {
-        // Photo requirement temporarily disabled (optional for now) — uncomment
-        // to re-enable "photo in every subcategory" as a submit requirement:
-        // && $this->allPhotoTypesCovered(
-        //     SalescallImage::where('salescall_id', $salescallId)->pluck('salescall_image_type_id')
-        // );
-        return SalescallBrand::where('salescall_id', $salescallId)->exists();
+        if (! SalescallBrand::where('salescall_id', $salescallId)->exists()) {
+            return 'brands';
+        }
+
+        if (auth()->user()?->regionType?->is_image_required
+            && ! SalescallImage::where('salescall_id', $salescallId)->exists()) {
+            return 'image';
+        }
+
+        return null;
     }
 
     public function syncNow(): void

@@ -1,5 +1,6 @@
 <x-filament-panels::page>
     <form wire:submit="saveCustomer" x-data="customerLocationPicker()" class="customer-create-form space-y-5 pb-8">
+    <form wire:submit="saveCustomer" x-data="customerLocationPicker()" class="customer-create-form space-y-5 pb-8">
         <div class="bg-white rounded-2xl shadow-sm p-5 space-y-4">
             <h2 class="font-extrabold">Customer Information</h2>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -22,25 +23,25 @@
         <div class="bg-white rounded-2xl shadow-sm p-5 space-y-4">
             <h2 class="font-extrabold">Location</h2>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div><label class="fi-fo-field-wrp-label">Region</label><select x-model="$wire.physical_region_id" x-on:change="$wire.$set('physical_region_id', $event.target.value, true)" class="fi-input w-full"><option value="">Select region</option>@foreach($regions as $region)<option value="{{ $region->id }}">{{ $region->name }}</option>@endforeach</select></div>
-                <div><label class="fi-fo-field-wrp-label">Specific Region</label><select x-model="$wire.region_specific_id" class="fi-input w-full"><option value="">Select specific region</option>@foreach($regionSpecifics as $region)<option value="{{ $region->id }}">{{ $region->name }}</option>@endforeach</select></div>
-                <div><label class="fi-fo-field-wrp-label">Province</label><select x-model="$wire.province_id" x-on:change="$wire.$set('province_id', $event.target.value, true)" class="fi-input w-full"><option value="">No province / independent locality</option>@foreach($provinces->where('region_id', $physical_region_id) as $province)<option value="{{ $province->id }}">{{ $province->name }}</option>@endforeach</select></div>
-                <div><label class="fi-fo-field-wrp-label">City / Municipality</label><select x-model="$wire.municipality_id" class="fi-input w-full"><option value="">Select municipality</option>@foreach($municipalities->where('region_id', $physical_region_id)->where('province_id', $province_id) as $municipality)<option value="{{ $municipality->id }}">{{ $municipality->name }}</option>@endforeach</select></div>
-                <div><label class="fi-fo-field-wrp-label">Latitude</label><x-filament::input type="number" step="any" wire:model="latitude" data-location-coordinate="latitude" /></div>
-                <div><label class="fi-fo-field-wrp-label">Longitude</label><x-filament::input type="number" step="any" wire:model="longitude" data-location-coordinate="longitude" /></div>
+                <div><label class="fi-fo-field-wrp-label">Region</label><x-filament::input :value="$this->resolvedRegionName()" readonly placeholder="Unavailable" /></div>
+                <div><label class="fi-fo-field-wrp-label">Specific Region</label><x-filament::input :value="$this->resolvedRegionSpecificName()" readonly placeholder="Unavailable" /></div>
+                <div><label class="fi-fo-field-wrp-label">Area Cluster</label><x-filament::input :value="$this->resolvedAreaClusterName()" readonly placeholder="Unavailable" /></div>
+                <div><label class="fi-fo-field-wrp-label">Province</label><x-filament::input :value="$this->resolvedProvinceName()" readonly placeholder="Unavailable" /></div>
+                <div><label class="fi-fo-field-wrp-label">City / Municipality</label><x-filament::input :value="$this->resolvedMunicipalityName()" readonly placeholder="Unavailable" /></div>
+                <div><label class="fi-fo-field-wrp-label">Barangay</label><x-filament::input :value="$this->resolvedBarangayName()" readonly placeholder="Unavailable" /></div>
+                <div class="md:col-span-3"><label class="fi-fo-field-wrp-label">Address</label><x-filament::input :value="$this->address" readonly placeholder="Unavailable" /></div>
+                <div><label class="fi-fo-field-wrp-label">Latitude</label><x-filament::input type="number" step="any" wire:model="latitude" data-location-coordinate="latitude" readonly /></div>
+                <div><label class="fi-fo-field-wrp-label">Longitude</label><x-filament::input type="number" step="any" wire:model="longitude" data-location-coordinate="longitude" readonly /></div>
                 <div class="md:col-span-3 flex flex-wrap items-center gap-3">
-                    <button
-                        type="button"
-                        x-on:click="openPicker()"
-                        class="fi-btn fi-btn-size-md fi-btn-color-gray inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold shadow-sm ring-1 ring-inset ring-gray-950/10"
-                    >
+                    <button type="button" x-on:click="openPicker()" class="fi-btn fi-btn-size-md fi-btn-color-gray inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold shadow-sm ring-1 ring-inset ring-gray-950/10">
                         <span class="material-symbols-outlined text-lg">location_on</span>
                         Pick on Map
                     </button>
-                    <span class="text-xs text-[#737685]">Pin the exact customer location on the map to fill latitude, longitude and address.</span>
+                    <span class="text-xs text-[#737685]">Pin the exact customer location on the map; the address is filled automatically.</span>
                 </div>
-                <div><label class="fi-fo-field-wrp-label">Barangay</label><x-filament::input disabled placeholder="Unavailable" /></div>
-                <div><label class="fi-fo-field-wrp-label">Area Cluster</label><x-filament::input disabled placeholder="Unavailable" /></div>
+                @if($locationError)
+                    <div class="md:col-span-3 text-sm text-danger-600">{{ $locationError }}</div>
+                @endif
             </div>
         </div>
 
@@ -156,10 +157,6 @@
                     return this.$root.querySelector('[data-location-coordinate="longitude"]');
                 },
 
-                addressInput() {
-                    return this.$root.querySelector('[data-location-address]');
-                },
-
                 currentCoordinates() {
                     const latitude = Number.parseFloat(this.latitudeInput()?.value ?? '');
                     const longitude = Number.parseFloat(this.longitudeInput()?.value ?? '');
@@ -249,6 +246,10 @@
                 setCoordinates(latitude, longitude) {
                     this.setInput(this.latitudeInput(), Number(latitude).toFixed(7));
                     this.setInput(this.longitudeInput(), Number(longitude).toFixed(7));
+
+                    if (this.$wire?.resolveLocation) {
+                        this.$wire.resolveLocation(Number(latitude), Number(longitude));
+                    }
                 },
 
                 setInput(input, value) {
@@ -296,7 +297,7 @@
                             }
 
                             this.addressPreview = '';
-                            this.message = 'Could not look up the address. You can type it manually.';
+                            this.message = 'Could not look up the address. Check your Internet connection.';
                         })
                         .finally(() => {
                             if (token === this.lookupToken) {
@@ -306,10 +307,10 @@
                 },
 
                 confirmLocation() {
-                    const address = (this.addressPreview || '').trim().slice(0, 500);
+                    const coordinates = this.currentCoordinates();
 
-                    if (address) {
-                        this.setInput(this.addressInput(), address);
+                    if (coordinates && this.$wire?.resolveLocation) {
+                        this.$wire.resolveLocation(coordinates[0], coordinates[1]);
                     }
 
                     this.closePicker();

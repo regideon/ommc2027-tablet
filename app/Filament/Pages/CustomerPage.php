@@ -74,11 +74,11 @@ class CustomerPage extends Page
      */
     public function viewCustomer(int $customerId): void
     {
-
             $this->selectedCustomerId = $customerId;
             $this->showPhotos = false;
             $this->customerPhotos = [];
 
+            
             $profile = CustomerProfile::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))
                 ->latest('created_at')
                 ->first();
@@ -114,9 +114,9 @@ class CustomerPage extends Page
 
             $photoCount = SalescallImage::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))->count();
 
-            $customer = Customer::with(['company', 'tradeProfile', 'categoryHistories', 'municipality.region', 'municipality.province'])->findOrFail($customerId);
+            $customer = Customer::with(['company', 'tradeProfile', 'categoryHistories', 'province', 'barangay', 'areaCluster', 'municipality.region', 'municipality.province'])->findOrFail($customerId);
             $physicalRegion = $customer->municipality?->region?->name;
-            $province = $customer->municipality?->province?->name;
+            $province = $customer->province?->name ?? $customer->municipality?->province?->name;
             $municipality = $customer->municipality?->name;
             $specificRegion = $customer->region_specific_id
                 ? DB::table('region_specifics')->where('id', $customer->region_specific_id)->value('name')
@@ -131,6 +131,8 @@ class CustomerPage extends Page
                 'contact_number' => $customer->contact_number,
                 'physical_region' => $physicalRegion,
                 'province' => $province,
+                'barangay' => $customer->barangay?->name,
+                'area_cluster' => $customer->areaCluster?->name,
                 'municipality' => $municipality,
                 'specific_region' => $specificRegion,
                 'latitude' => $customer->latitude,

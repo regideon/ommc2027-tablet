@@ -36,6 +36,7 @@ class SyncLoginCommand extends Command
                 'name' => $data['name'],
                 'password' => $data['password'],
                 'api_token' => $data['api_token'],
+                'region_type_id' => $data['region_type_id'] ?? null,
                 'base_start_latitude' => $data['base_start_latitude'] ?? null,
                 'base_start_longitude' => $data['base_start_longitude'] ?? null,
                 'base_end_latitude' => $data['base_end_latitude'] ?? null,

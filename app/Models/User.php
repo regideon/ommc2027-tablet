@@ -6,6 +6,7 @@ use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Spatie\Permission\Traits\HasRoles;
@@ -13,7 +14,7 @@ use Spatie\Permission\Traits\HasRoles;
 #[Fillable([
     'name', 'email', 'password', 'api_token',
     'base_start_latitude', 'base_start_longitude', 'base_end_latitude', 'base_end_longitude',
-    'base_location_pending',
+    'base_location_pending', 'region_type_id',
 ])]
 #[Hidden(['password', 'remember_token', 'api_token'])]
 class User extends Authenticatable
@@ -30,5 +31,10 @@ class User extends Authenticatable
             'password' => 'hashed',
             'base_location_pending' => 'boolean',
         ];
+    }
+
+    public function regionType(): BelongsTo
+    {
+        return $this->belongsTo(RegionType::class);
     }
 }
