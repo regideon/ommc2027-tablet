@@ -23,24 +23,24 @@
         <div class="bg-white rounded-2xl shadow-sm p-5 space-y-4">
             <h2 class="font-extrabold">Location</h2>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div><label class="fi-fo-field-wrp-label">Region</label><x-filament::input :value="$this->resolvedRegionName()" readonly placeholder="Unavailable" /></div>
-                <div><label class="fi-fo-field-wrp-label">Specific Region</label><x-filament::input :value="$this->resolvedRegionSpecificName()" readonly placeholder="Unavailable" /></div>
-                <div><label class="fi-fo-field-wrp-label">Area Cluster</label><x-filament::input :value="$this->resolvedAreaClusterName()" readonly placeholder="Unavailable" /></div>
-                <div><label class="fi-fo-field-wrp-label">Province</label><x-filament::input :value="$this->resolvedProvinceName()" readonly placeholder="Unavailable" /></div>
-                <div><label class="fi-fo-field-wrp-label">City / Municipality</label><x-filament::input :value="$this->resolvedMunicipalityName()" readonly placeholder="Unavailable" /></div>
-                <div><label class="fi-fo-field-wrp-label">Barangay</label><x-filament::input :value="$this->resolvedBarangayName()" readonly placeholder="Unavailable" /></div>
-                <div class="md:col-span-3"><label class="fi-fo-field-wrp-label">Address</label><x-filament::input :value="$this->address" readonly placeholder="Unavailable" /></div>
-                <div><label class="fi-fo-field-wrp-label">Latitude</label><x-filament::input type="number" step="any" wire:model="latitude" data-location-coordinate="latitude" readonly /></div>
-                <div><label class="fi-fo-field-wrp-label">Longitude</label><x-filament::input type="number" step="any" wire:model="longitude" data-location-coordinate="longitude" readonly /></div>
+                <div><label class="fi-fo-field-wrp-label">Region</label><select wire:model.live="physical_region_id" class="fi-input w-full"><option value="">Select region</option>@foreach($regions as $region)<option value="{{ $region->id }}">{{ $region->name }}</option>@endforeach</select></div>
+                <div><label class="fi-fo-field-wrp-label">Specific Region</label><select wire:model.live="region_specific_id" class="fi-input w-full"><option value="">Select specific region</option>@foreach($regionSpecifics as $region)<option value="{{ $region->id }}">{{ $region->name }}</option>@endforeach</select></div>
+                <div><label class="fi-fo-field-wrp-label">Area Cluster</label><select wire:model="area_cluster_id" class="fi-input w-full"><option value="">Select area cluster</option>@foreach($areaClusters as $cluster)<option value="{{ $cluster->id }}">{{ $cluster->name }}</option>@endforeach</select></div>
+                <div><label class="fi-fo-field-wrp-label">Province</label><select wire:model.live="province_id" class="fi-input w-full"><option value="">No province / independent locality</option>@foreach($provinces->where('region_id', $physical_region_id) as $province)<option value="{{ $province->id }}">{{ $province->name }}</option>@endforeach</select></div>
+                <div><label class="fi-fo-field-wrp-label">City / Municipality</label><select wire:model.live="municipality_id" class="fi-input w-full"><option value="">Select municipality</option>@foreach($municipalities->where('region_id', $physical_region_id)->where('province_id', $province_id) as $municipality)<option value="{{ $municipality->id }}">{{ $municipality->name }}</option>@endforeach</select></div>
+                <div><label class="fi-fo-field-wrp-label">Barangay</label><select wire:model="barangay_id" class="fi-input w-full"><option value="">Select barangay</option>@foreach($barangays as $barangay)<option value="{{ $barangay->id }}">{{ $barangay->name }}</option>@endforeach</select></div>
+                <div class="md:col-span-3"><label class="fi-fo-field-wrp-label">Address</label><textarea wire:model="address" data-location-address="address" class="fi-input w-full" rows="3"></textarea></div>
+                <div><label class="fi-fo-field-wrp-label">Latitude</label><x-filament::input type="number" step="any" wire:model="latitude" data-location-coordinate="latitude" /></div>
+                <div><label class="fi-fo-field-wrp-label">Longitude</label><x-filament::input type="number" step="any" wire:model="longitude" data-location-coordinate="longitude" /></div>
                 <div class="md:col-span-3 flex flex-wrap items-center gap-3">
                     <button type="button" x-on:click="openPicker()" class="fi-btn fi-btn-size-md fi-btn-color-gray inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold shadow-sm ring-1 ring-inset ring-gray-950/10">
                         <span class="material-symbols-outlined text-lg">location_on</span>
                         Pick on Map
                     </button>
-                    <span class="text-xs text-[#737685]">Pin the exact customer location on the map; the address is filled automatically.</span>
+                    <span class="text-xs text-[#737685]">Online, pick on the map to fill these fields; offline, choose them here.</span>
                 </div>
                 @if($locationError)
-                    <div class="md:col-span-3 text-sm text-danger-600">{{ $locationError }}</div>
+                    <div class="md:col-span-3 text-sm text-[#737685]">{{ $locationError }}</div>
                 @endif
             </div>
         </div>

@@ -145,3 +145,69 @@ test('resolver leaves area cluster null when the specific region has multiple cl
     expect($result['region_specific_id'])->toBe(1)
         ->and($result['area_cluster_id'])->toBeNull();
 });
+
+test('resolver prefers authoritative psgc rows over legacy duplicates', function () {
+    DB::table('regions')->insert([
+        ['id' => 1, 'code' => 'MM', 'psgc_code' => null, 'name' => 'Metro Manila', 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 2, 'code' => 'PSGC-1300000000', 'psgc_code' => '1300000000', 'name' => 'National Capital Region (NCR)', 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    DB::table('provinces')->insert(['id' => 1, 'region_id' => null, 'psgc_code' => null, 'name' => 'Quezon City', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('municipalities')->insert([
+        ['id' => 1, 'region_id' => 1, 'province_id' => 1, 'psgc_code' => null, 'name' => 'Quezon City', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 14, 'region_id' => 2, 'province_id' => null, 'psgc_code' => '1381300000', 'name' => 'Quezon City', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    DB::table('barangays')->insert(['id' => 1553, 'municipality_id' => 14, 'psgc_code' => '1381300001', 'code' => 'pinyahan', 'name' => 'Pinyahan', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+
+    Http::fake([
+        'nominatim.openstreetmap.org/*' => Http::response([
+            'display_name' => '24, Mapang-akit Street, Pinyahan, Diliman, Quezon City, Metro Manila',
+            'address' => [
+                'house_number' => '24', 'road' => 'Mapang-akit Street', 'quarter' => 'Pinyahan',
+                'suburb' => 'Diliman', 'city' => 'Quezon City', 'state_district' => 'Eastern Manila District', 'region' => 'Metro Manila',
+            ],
+        ], 200),
+    ]);
+
+    $result = app(PhilippineAddressResolver::class)->resolve(14.633293953499, 121.04837064589);
+
+    expect($result['municipality_id'])->toBe(14)
+        ->and($result['region_id'])->toBe(2)
+        ->and($result['province_id'])->toBeNull()
+        ->and($result['barangay_id'])->toBe(1553);
+});
+
+test('resolver derives the province from the matched municipality when the county does not match', function () {
+    seedResolverGeography();
+
+    Http::fake([
+        'nominatim.openstreetmap.org/*' => Http::response([
+            'display_name' => 'Angeles',
+            'address' => ['city' => 'Angeles', 'state' => 'Central Luzon'],
+        ], 200),
+    ]);
+
+    $result = app(PhilippineAddressResolver::class)->resolve(15.1456, 120.5887);
+
+    expect($result['municipality_id'])->toBe(1)
+        ->and($result['province_id'])->toBe(1);
+});
+
+test('resolver falls back to the region only specific region when the name and province link do not match', function () {
+    seedResolverGeography();
+    DB::table('provinces')->update(['region_specific_id' => null]);
+    DB::table('region_specifics')->update(['name' => 'Custom Zone']);
+
+    Http::fake([
+        'nominatim.openstreetmap.org/*' => Http::response([
+            'display_name' => 'Angeles',
+            'address' => ['city' => 'Angeles', 'county' => 'Pampanga', 'state' => 'Central Luzon'],
+        ], 200),
+    ]);
+
+    $result = app(PhilippineAddressResolver::class)->resolve(15.1456, 120.5887);
+
+    expect($result['region_id'])->toBe(1)
+        ->and($result['province_id'])->toBe(1)
+        ->and($result['region_specific_id'])->toBe(1)
+        ->and($result['area_cluster_id'])->toBe(1);
+});

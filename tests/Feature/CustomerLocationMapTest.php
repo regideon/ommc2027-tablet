@@ -24,16 +24,17 @@ function seedTabletLocationFixtures(): User
     return User::factory()->create();
 }
 
-test('tablet customer form has no manual location controls', function () {
+test('tablet customer form has editable location dropdowns and the map', function () {
     $this->actingAs(seedTabletLocationFixtures());
 
     Livewire::test(CustomerCreatePage::class)
         ->assertOk()
-        ->assertDontSee('Select region')
-        ->assertDontSee('Select specific region')
-        ->assertDontSee('No province / independent locality')
-        ->assertDontSee('Select municipality')
-        ->assertDontSee('data-location-address', false)
+        ->assertSee('Select region')
+        ->assertSee('Select specific region')
+        ->assertSee('No province / independent locality')
+        ->assertSee('Select municipality')
+        ->assertSee('Select barangay')
+        ->assertSee('data-location-address="address"', false)
         ->assertSee('Pick on Map')
         ->assertSee('data-location-coordinate="latitude"', false);
 });

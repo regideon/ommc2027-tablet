@@ -70,3 +70,7 @@
 - **Validation:** tablet focused suites **20 passed (89 assertions)**; `php artisan view:cache` clean.
 - **Note:** Region/City/Address populate from the pin; Barangay and Area Cluster additionally require a `sync:pull` to populate the tablet reference tables (currently 0 rows), and Province can legitimately be null for independent/highly-urbanized cities.
 
+
+## Revision 2026-10-06 — dropdowns restored (offline fallback)
+
+Human revised the design: restore the location dropdowns (Region, Specific Region, Province, City/Municipality, Barangay, Area Cluster) and an editable Address, with editable nullable Latitude/Longitude. Offline users pick the dropdowns; online map picking fills them via `resolveLocation`. Implemented on both repos; tablet tests 19 passed (86 assertions), portal tests 12 passed (56 assertions); `view:cache` clean.
