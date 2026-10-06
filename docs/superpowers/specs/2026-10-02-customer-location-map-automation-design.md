@@ -200,3 +200,12 @@ street/address string, and a distinct failure reason.
 - **Tablet:** same behavior; a created/edited customer syncs latitude, longitude,
   address, and any resolved hierarchy to the portal without wiping existing
   portal values.
+
+## Revision 2026-10-06 — dropdowns restored (offline fallback)
+
+The Human revised the location-input decision. Manual controls are restored and remain editable; the map still resolves and fills them.
+
+- Admin and tablet: Region, Specific Region, Province, City/Municipality, Barangay, Area Cluster are dropdowns, and Address is an editable field. Latitude/Longitude are editable and nullable.
+- Offline: the dropdowns are the fallback; no blocking error. The map shows a soft hint when a lookup needs internet.
+- Online + map pick: the pin reverse-geocodes and sets those dropdowns/address via `resolveLocation`, and the user can adjust them afterward.
+- Data, sync, resolver, models, and validations are unchanged. The tablet now renders real Barangay and Area Cluster dropdowns (previously disabled placeholders), filtered by the selected City/Municipality and Specific Region.

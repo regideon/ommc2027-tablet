@@ -44,8 +44,8 @@ class PhilippineAddressResolver
 
         $stateTokens = [$components['state'] ?? null, $components['region'] ?? null];
 
-        $regionId = $this->match(Region::class, $stateTokens);
-        $provinceId = $this->match(Province::class, [$components['county'] ?? null, $components['state_district'] ?? null], ['enabled' => true]);
+        $regionId = $this->match(Region::class, $stateTokens, [], true);
+        $provinceId = $this->match(Province::class, [$components['county'] ?? null, $components['state_district'] ?? null], ['enabled' => true], true);
         $municipalityId = $this->match(Municipality::class, [
             $components['city'] ?? null,
             $components['municipality'] ?? null,
@@ -53,7 +53,7 @@ class PhilippineAddressResolver
             $components['city_district'] ?? null,
         ], $provinceId
             ? ['enabled' => true, 'province_id' => $provinceId]
-            : ($regionId ? ['enabled' => true, 'region_id' => $regionId] : ['enabled' => true]));
+            : ($regionId ? ['enabled' => true, 'region_id' => $regionId] : ['enabled' => true]), true);
         $barangayId = $municipalityId
             ? $this->match(Barangay::class, [
                 $components['suburb'] ?? null,
@@ -63,7 +63,25 @@ class PhilippineAddressResolver
                 $components['hamlet'] ?? null,
             ], ['enabled' => true, 'municipality_id' => $municipalityId])
             : null;
+
+        // The matched municipality is the most reliable local relationship, so
+        // take the physical region/province from it rather than trusting
+        // Nominatim's county/state naming.
+        if ($municipalityId && ($municipality = Municipality::query()->find($municipalityId, ['id', 'region_id', 'province_id']))) {
+            $regionId ??= $municipality->region_id;
+            $provinceId ??= $municipality->province_id;
+        }
+
         $regionSpecificId = $this->match(RegionSpecific::class, $stateTokens, $regionId ? ['region_id' => $regionId] : []);
+
+        if ($regionSpecificId === null && $provinceId) {
+            $regionSpecificId = Province::query()->whereKey($provinceId)->value('region_specific_id');
+        }
+
+        if ($regionSpecificId === null && $regionId) {
+            $regionSpecificId = $this->onlyRegionSpecificId($regionId);
+        }
+
         $areaClusterId = $regionSpecificId ? $this->uniqueAreaClusterId($regionSpecificId) : null;
 
         $street = trim(((string) ($components['house_number'] ?? '')).' '.((string) ($components['road'] ?? '')));
@@ -99,7 +117,7 @@ class PhilippineAddressResolver
      * @param  array<int, mixed>  $values
      * @param  array<string, mixed>  $constraints
      */
-    private function match(string $model, array $values, array $constraints = []): ?int
+    private function match(string $model, array $values, array $constraints = [], bool $requirePsgc = false): ?int
     {
         $tokens = $this->tokens($values);
 
@@ -108,6 +126,14 @@ class PhilippineAddressResolver
         }
 
         $query = $model::query();
+
+        // Prefer authoritative PSGC rows. Legacy/sample rows carry a null
+        // psgc_code and incomplete relationships (e.g. a "Quezon City"
+        // municipality with no barangays, or cities miscoded as provinces).
+        if ($requirePsgc) {
+            $query->whereNotNull('psgc_code');
+        }
+
         foreach ($constraints as $column => $value) {
             $query->where($column, $value);
         }
@@ -130,6 +156,13 @@ class PhilippineAddressResolver
             ->where('region_specific_id', $regionSpecificId)
             ->where('enabled', true)
             ->pluck('id');
+
+        return $ids->count() === 1 ? (int) $ids->first() : null;
+    }
+
+    private function onlyRegionSpecificId(int $regionId): ?int
+    {
+        $ids = RegionSpecific::query()->where('region_id', $regionId)->pluck('id');
 
         return $ids->count() === 1 ? (int) $ids->first() : null;
     }
@@ -170,7 +203,7 @@ class PhilippineAddressResolver
     {
         $value = Str::ascii($value);
         $value = Str::lower($value);
-        $value = preg_replace('/\b(?:city of|municipality of|barangay|brgy\.?|city)\b/', ' ', $value) ?? $value;
+        $value = preg_replace('/\b(?:city of|municipality of|barangay|brgy\.?)\b/', ' ', $value) ?? $value;
         $value = preg_replace('/[^a-z0-9]+/', ' ', $value) ?? $value;
 
         return trim(preg_replace('/\s+/', ' ', $value) ?? $value);

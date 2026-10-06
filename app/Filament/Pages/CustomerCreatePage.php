@@ -97,8 +97,14 @@ class CustomerCreatePage extends Page
             'companies' => Company::orderBy('name')->get(),
             'regions' => Region::whereNotNull('psgc_code')->orderBy('name')->get(),
             'regionSpecifics' => RegionSpecific::orderBy('name')->get(),
+            'areaClusters' => $this->region_specific_id
+                ? AreaCluster::where('region_specific_id', $this->region_specific_id)->where('enabled', true)->orderBy('name')->get()
+                : collect(),
             'provinces' => Province::where('enabled', true)->orderBy('name')->get(),
             'municipalities' => Municipality::where('enabled', true)->orderBy('name')->get(),
+            'barangays' => $this->municipality_id
+                ? Barangay::where('municipality_id', $this->municipality_id)->where('enabled', true)->orderBy('name')->get()
+                : collect(),
             'generalCategories' => GeneralCategory::orderBy('sort')->get(),
             'users' => User::orderBy('name')->get(),
         ];
@@ -143,13 +149,14 @@ class CustomerCreatePage extends Page
 
     public function updatedRegionSpecificId(): void
     {
-        // Commercial geography is independent from physical geography.
+        $this->area_cluster_id = null;
     }
 
     public function updatedPhysicalRegionId(): void
     {
         $this->province_id = null;
         $this->municipality_id = null;
+        $this->barangay_id = null;
     }
 
     public function updatedGeneralCategoryId(): void
@@ -162,6 +169,12 @@ class CustomerCreatePage extends Page
     public function updatedProvinceId(): void
     {
         $this->municipality_id = null;
+        $this->barangay_id = null;
+    }
+
+    public function updatedMunicipalityId(): void
+    {
+        $this->barangay_id = null;
     }
 
     public function resolveLocation(?float $latitude = null, ?float $longitude = null): void
@@ -195,42 +208,6 @@ class CustomerCreatePage extends Page
         $this->physical_region_id = $this->municipality_id
             ? Municipality::find($this->municipality_id)?->region_id
             : null;
-    }
-
-    public function resolvedRegionName(): ?string
-    {
-        return $this->municipality_id
-            ? Municipality::find($this->municipality_id)?->region?->name
-            : null;
-    }
-
-    public function resolvedRegionSpecificName(): ?string
-    {
-        return $this->region_specific_id
-            ? DB::table('region_specifics')->where('id', $this->region_specific_id)->value('name')
-            : null;
-    }
-
-    public function resolvedAreaClusterName(): ?string
-    {
-        return $this->area_cluster_id
-            ? AreaCluster::whereKey($this->area_cluster_id)->value('name')
-            : null;
-    }
-
-    public function resolvedProvinceName(): ?string
-    {
-        return $this->province_id ? Province::whereKey($this->province_id)->value('name') : null;
-    }
-
-    public function resolvedMunicipalityName(): ?string
-    {
-        return $this->municipality_id ? Municipality::whereKey($this->municipality_id)->value('name') : null;
-    }
-
-    public function resolvedBarangayName(): ?string
-    {
-        return $this->barangay_id ? Barangay::whereKey($this->barangay_id)->value('name') : null;
     }
 
     public function categoryOptions(string $stream): array
