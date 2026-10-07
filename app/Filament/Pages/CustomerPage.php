@@ -93,7 +93,10 @@ class CustomerPage extends Page
             });
         }
 
-        return ['customers' => $customers->orderBy('name')->get()];
+        return [
+            'customers' => $customers->orderBy('name')->get(),
+            'hasPendingCustomerPushWork' => app(SyncService::class)->hasPendingCustomerPushWork(),
+        ];
     }
 
     public function pushCustomers(): void

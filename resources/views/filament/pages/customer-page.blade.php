@@ -24,7 +24,7 @@
                 wire:target="pushCustomers"
                 @disabled($pushingCustomers)
                 title="Push pending Customers"
-                class="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold text-[#434654] transition-colors hover:bg-[#edeef0] hover:text-[#890f00] disabled:cursor-wait disabled:opacity-60">
+                class="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold transition-colors hover:bg-[#edeef0] disabled:cursor-wait disabled:opacity-60 {{ $hasPendingCustomerPushWork ? 'text-red-500 hover:text-red-600' : 'text-[#434654] hover:text-[#890f00]' }}">
                 <span class="material-symbols-outlined mat-fill text-lg {{ $pushingCustomers ? 'animate-spin' : '' }}" wire:loading.class="animate-spin" wire:target="pushCustomers">{{ $pushingCustomers ? 'progress_activity' : 'cloud_upload' }}</span>
                 <span>{{ $pushingCustomers ? 'Pushing…' : 'Push Customers' }}</span>
             </button>

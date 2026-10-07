@@ -120,3 +120,118 @@ test('Customer page manual action uses Customer-only push and exposes loading co
 
     Http::assertSentCount(1);
 });
+
+test('Push Customers is neutral when no customer is eligible', function () {
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerPage::class)
+        ->assertSee('text-[#434654] hover:text-[#890f00]', false)
+        ->assertDontSee('text-red-500 hover:text-red-600', false);
+});
+
+test('a pending customer makes Push Customers red', function () {
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    insertPushCustomer('Pending Indicator Shop');
+
+    Livewire::test(CustomerPage::class)
+        ->assertSee('text-red-500 hover:text-red-600', false);
+});
+
+test('a retryable failed customer makes Push Customers red', function () {
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    insertPushCustomer('Retry Indicator Shop', 'failed', 2);
+
+    Livewire::test(CustomerPage::class)
+        ->assertSee('text-red-500 hover:text-red-600', false);
+});
+
+test('synced customers do not make Push Customers red', function () {
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    insertPushCustomer('Synced Indicator Shop', 'synced');
+
+    Livewire::test(CustomerPage::class)
+        ->assertSee('text-[#434654] hover:text-[#890f00]', false)
+        ->assertDontSee('text-red-500 hover:text-red-600', false);
+});
+
+test('exhausted failed customers do not make Push Customers red', function () {
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    insertPushCustomer('Exhausted Indicator Shop', 'failed', 3);
+
+    Livewire::test(CustomerPage::class)
+        ->assertSee('text-[#434654] hover:text-[#890f00]', false)
+        ->assertDontSee('text-red-500 hover:text-red-600', false);
+});
+
+test('indicator eligibility matches records attempted by Customer-only push', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    insertPushCustomer('Pending Parity Shop');
+    insertPushCustomer('Retry Parity Shop', 'failed', 2);
+    insertPushCustomer('Exhausted Parity Shop', 'failed', 3);
+    insertPushCustomer('Synced Parity Shop', 'synced');
+    Http::fake(['portal.test/api/sync/push/customer' => Http::sequence()
+        ->push(['server_id' => 401, 'updated_at' => now()->toISOString()])
+        ->push(['server_id' => 402, 'updated_at' => now()->toISOString()])]);
+
+    $sync = app(SyncService::class);
+    expect($sync->hasPendingCustomerPushWork())->toBeTrue();
+
+    Livewire::test(CustomerPage::class)
+        ->assertSee('text-red-500 hover:text-red-600', false);
+
+    $result = $sync->pushPendingCustomers();
+
+    expect($result->syncedCount)->toBe(2)
+        ->and($sync->hasPendingCustomerPushWork())->toBeFalse();
+    Http::assertSentCount(2);
+});
+
+test('successful manual push immediately clears red state when no customer work remains', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    insertPushCustomer('Successful Indicator Shop');
+    Http::fake(['portal.test/api/sync/push/customer' => Http::response(['server_id' => 403, 'updated_at' => now()->toISOString()])]);
+
+    Livewire::test(CustomerPage::class)
+        ->assertSee('text-red-500 hover:text-red-600', false)
+        ->call('pushCustomers')
+        ->assertSee('text-[#434654] hover:text-[#890f00]', false)
+        ->assertDontSee('text-red-500 hover:text-red-600', false);
+});
+
+test('failed manual push keeps Push Customers red while customer work remains', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    insertPushCustomer('Failed Indicator Shop');
+    Http::fake(['portal.test/api/sync/push/customer' => Http::response(['message' => 'Unavailable'], 503)]);
+
+    Livewire::test(CustomerPage::class)
+        ->assertSee('text-red-500 hover:text-red-600', false)
+        ->call('pushCustomers')
+        ->assertSee('text-red-500 hover:text-red-600', false);
+});
+
+test('partial manual push keeps Push Customers red while retryable customer work remains', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    insertPushCustomer('Partial Success Indicator Shop');
+    insertPushCustomer('Partial Failure Indicator Shop');
+    Http::fake(['portal.test/api/sync/push/customer' => Http::sequence()
+        ->push(['server_id' => 404, 'updated_at' => now()->toISOString()])
+        ->push(['message' => 'Unavailable'], 503)]);
+
+    Livewire::test(CustomerPage::class)
+        ->assertSee('text-red-500 hover:text-red-600', false)
+        ->call('pushCustomers')
+        ->assertSee('text-red-500 hover:text-red-600', false);
+});

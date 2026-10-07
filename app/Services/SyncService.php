@@ -1614,6 +1614,11 @@ class SyncService
         return $this->pushCustomerRecords($this->client($user->api_token), $customers);
     }
 
+    public function hasPendingCustomerPushWork(): bool
+    {
+        return $this->pendingCustomerPushQuery()->exists();
+    }
+
     private function pendingCustomerPushQuery(): Builder
     {
         return Customer::with(['tradeProfile', 'categoryHistories', 'categoryEvents'])
