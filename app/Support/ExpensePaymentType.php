@@ -18,7 +18,6 @@ final class ExpensePaymentType
             'Fleet Card',
             self::PETTY_CASH_VOUCHER,
             'Revolving Fund',
-            'Cash Advance',
         ];
     }
 

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -16,5 +17,12 @@ class ExpenseType extends Model
     public function expenses(): HasMany
     {
         return $this->hasMany(Expense::class);
+    }
+
+    public function scopeAvailableForNewEntry(Builder $query): Builder
+    {
+        return $query
+            ->where('is_enabled', true)
+            ->where('code', '!=', 'communication_expenses');
     }
 }

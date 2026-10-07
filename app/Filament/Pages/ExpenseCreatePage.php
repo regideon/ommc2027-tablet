@@ -52,8 +52,8 @@ class ExpenseCreatePage extends Page
             ->findOrFail($salescallId);
 
         $this->expenseType = ExpenseType::query()
+            ->availableForNewEntry()
             ->where('code', $typeCode)
-            ->where('is_enabled', true)
             ->firstOrFail();
     }
 

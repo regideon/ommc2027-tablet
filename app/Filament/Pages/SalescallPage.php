@@ -1639,7 +1639,7 @@ class SalescallPage extends Page
                 ->get(['id', 'name', 'unique_id', 'address', 'latitude', 'longitude'])->toJson(),
             'canAddSalescall' => auth()->user()?->hasAnyRole(['drm', 'rsm']) ?? false,
             'expenseTypes' => ExpenseType::query()
-                ->where('is_enabled', true)
+                ->availableForNewEntry()
                 ->orderBy('sort_order')
                 ->get(['code', 'label'])
                 ->map(fn (ExpenseType $type): array => [

@@ -1,5 +1,6 @@
 <?php
 
+use App\Filament\Pages\ExpenseCreatePage;
 use App\Filament\Pages\ExpensePage;
 use App\Filament\Pages\SalescallPage;
 use App\Models\Customer;
@@ -11,6 +12,7 @@ use App\Services\ExpenseReadService;
 use App\Services\LocalExpenseCreationService;
 use App\Services\SyncService;
 use App\Support\ExpensePaymentType;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Validation\ValidationException;
@@ -88,31 +90,115 @@ test('Expense read aliases historical Petty Cash and keeps other legacy values r
     omExpenseReadCreateExpense($salescall, $this->customer, $this->expenseType, $this->user, [
         'payment_type' => 'Other Credit Card',
     ]);
+    omExpenseReadCreateExpense($salescall, $this->customer, $this->expenseType, $this->user, [
+        'payment_type' => 'Cash Advance',
+    ]);
 
     expect(app(ExpenseReadService::class)->forSalescall($salescall->id)->pluck('payment_type')->sort()->values()->all())
-        ->toBe(['Other Credit Card', 'Petty Cash Voucher (PCV)'])
+        ->toBe(['Cash Advance', 'Other Credit Card', 'Petty Cash Voucher (PCV)'])
         ->and($legacy->fresh()->payment_type)->toBe('Petty Cash')
         ->and(ExpensePaymentType::newEntryValues())->toBe([
             'Cash', 'SBC Credit Card', 'Other Payment Type', 'Fleet Card',
-            'Petty Cash Voucher (PCV)', 'Revolving Fund', 'Cash Advance',
-        ]);
+            'Petty Cash Voucher (PCV)', 'Revolving Fund',
+        ])
+        ->and(ExpensePaymentType::newEntryValues())->not->toContain('Cash Advance');
 });
 
-test('new Expense form omits Payment Remarks and requests two-decimal Amount input', function () {
+test('new Expense form sanitizes a shared decimal Amount input before submitting', function () {
     $view = file_get_contents(resource_path('views/filament/pages/expense-create-page.blade.php'));
+    preg_match('/const isAllowedPartialAmount = (\/.*\/)\.test\(candidate\);/', $view, $patternMatch);
 
-    expect($view)->toContain('step="0.01"')
+    expect($patternMatch)->not->toBeEmpty();
+    $amountPattern = '~'.substr($patternMatch[1], 1, -1).'~D';
+
+    foreach (['1', '10', '100', '1.5', '1.50', '0.01', '12345.67', '', '.', '1.'] as $candidate) {
+        expect(preg_match($amountPattern, $candidate))->toBe(1);
+    }
+
+    foreach (['abc', '$$$$$', '12abc', '12abc34', '1.2.3', '1.234', '-1', '1,23'] as $candidate) {
+        expect(preg_match($amountPattern, $candidate))->toBe(0);
+    }
+
+    expect($view)->toContain('type="text" inputmode="decimal" pattern="([0-9]+([.][0-9]{0,2})?|[.][0-9]{1,2})" required x-model="expenseForm.amount" @input="onExpenseAmountInput($event)"')
+        ->and($view)->toContain('const isAllowedPartialAmount = /^(?:\d+(?:\.\d{0,2})?|\.\d{0,2})?$/.test(candidate);')
+        ->and($view)->toContain('input.value = this.lastValidExpenseAmount;')
+        ->and($view)->toContain('this.expenseForm.amount = this.lastValidExpenseAmount;')
+        ->and($view)->toContain('Number(amount) <= 0;')
+        ->and($view)->toContain("'Amount must be greater than zero.'")
+        ->and($view)->toContain('input.setCustomValidity(')
+        ->and($view)->toContain('if (!this.$refs.expenseEntryForm.reportValidity()) return;')
+        ->and($view)->toContain('<form x-ref="expenseEntryForm" @submit.prevent="saveExpenseForm()"')
+        ->and(strpos($view, 'reportValidity()'))->toBeLessThan(strpos($view, '$wire.saveExpense('))
+        ->and($view)->not->toContain('type="number" min="0.01" step="0.01" required x-model="expenseForm.amount"')
         ->and($view)->toContain('@foreach ($paymentTypes as $paymentType)')
         ->and($view)->not->toContain('payment_remarks')
         ->and($view)->not->toContain('Payment Remarks');
 });
 
-test('new Expense creation accepts positive amounts with at most two decimals and stores no remarks', function () {
+test('Communication Expenses is excluded from new entry but historical Expenses remain readable', function () {
+    Role::create(['name' => 'drm']);
+    $this->user->assignRole('drm');
     $salescall = omExpenseReadCreateSalescall($this->customer, $this->user);
-    $type = ExpenseType::query()->where('code', 'communication_expenses')->firstOrFail();
+    $communicationType = ExpenseType::query()->where('code', 'communication_expenses')->firstOrFail();
+    $legacy = omExpenseReadCreateExpense($salescall, $this->customer, $communicationType, $this->user);
+
+    expect(ExpenseType::query()->availableForNewEntry()->pluck('code')->all())
+        ->not->toContain('communication_expenses');
+
+    Livewire::test(SalescallPage::class)
+        ->assertDontSee('Communication expenses');
+
+    expect(fn () => Livewire::withQueryParams([
+        'salescall' => $salescall->id,
+        'type' => 'communication_expenses',
+    ])->test(ExpenseCreatePage::class))->toThrow(ModelNotFoundException::class);
+
+    $input = [
+        'expense_type_code' => 'communication_expenses',
+        'amount' => '10.00',
+        'date_filed' => '2026-10-07',
+        'payment_type' => 'Cash',
+        'invoice_number' => 'INV-COMM',
+        'establishment' => 'Shop',
+        'location' => 'Manila',
+        'purpose' => 'Business expense',
+        'tin' => 'TIN-1',
+    ];
+    expect(fn () => app(LocalExpenseCreationService::class)->createFromSalescall($salescall, $this->user, $input))
+        ->toThrow(ValidationException::class);
+
+    expect(app(ExpenseReadService::class)->forSalescall($salescall->id)
+        ->firstWhere('id', $legacy->id)['expense_type'])->toBe($communicationType->label);
+});
+
+test('new Expense creation rejects Cash Advance while preserving a historical Cash Advance', function () {
+    $salescall = omExpenseReadCreateSalescall($this->customer, $this->user);
+    $lodging = ExpenseType::query()->where('code', 'lodging')->firstOrFail();
+    $legacy = omExpenseReadCreateExpense($salescall, $this->customer, $lodging, $this->user, [
+        'payment_type' => 'Cash Advance',
+    ]);
+    $input = [
+        'expense_type_code' => 'lodging',
+        'amount' => '10.00',
+        'date_filed' => '2026-10-07',
+        'payment_type' => 'Cash Advance',
+        'invoice_number' => 'INV-ADV',
+        'establishment' => 'Hotel',
+        'location' => 'Manila',
+        'purpose' => 'Business expense',
+        'tin' => 'TIN-1',
+    ];
+
+    expect(fn () => app(LocalExpenseCreationService::class)->createFromSalescall($salescall, $this->user, $input))
+        ->toThrow(ValidationException::class)
+        ->and(app(ExpenseReadService::class)->forSalescall($salescall->id)
+            ->firstWhere('id', $legacy->id)['payment_type'])->toBe('Cash Advance');
+});
+
+test('new Expense creation enforces the common Amount rule for Per Diem Lodging and other types', function () {
+    $salescall = omExpenseReadCreateSalescall($this->customer, $this->user);
     $service = app(LocalExpenseCreationService::class);
     $base = [
-        'expense_type_code' => $type->code,
         'date_filed' => '2026-10-04',
         'payment_type' => 'Other Payment Type',
         'invoice_number' => 'INV-1',
@@ -123,15 +209,27 @@ test('new Expense creation accepts positive amounts with at most two decimals an
         'payment_remarks' => 'must be ignored on new entry',
     ];
 
-    foreach (['1', '1.5', '1.50', '100', '100.01'] as $amount) {
-        $expense = $service->createFromSalescall($salescall, $this->user, $base + ['amount' => $amount]);
-        expect($expense->payment_remarks)->toBeNull();
+    foreach (['per_diem', 'lodging', 'emergency_expenses'] as $expenseTypeCode) {
+        foreach (['1', '1.5', '1.50'] as $amount) {
+            $expense = $service->createFromSalescall($salescall, $this->user, $base + [
+                'expense_type_code' => $expenseTypeCode,
+                'amount' => $amount,
+            ]);
+            expect($expense->payment_remarks)->toBeNull();
+        }
     }
 
-    foreach (['0', '0.00', '-1', 'abc', '1.001', '100.999'] as $amount) {
-        expect(fn () => $service->createFromSalescall($salescall, $this->user, $base + ['amount' => $amount]))
-            ->toThrow(ValidationException::class);
+    $countBeforeInvalidAmounts = Expense::query()->count();
+    foreach (['per_diem', 'lodging', 'emergency_expenses'] as $expenseTypeCode) {
+        foreach (['', '0', '0.00', '-1', 'abc', '$$$$$', '12abc', '1.2.3', '1.234', '100.999'] as $amount) {
+            expect(fn () => $service->createFromSalescall($salescall, $this->user, $base + [
+                'expense_type_code' => $expenseTypeCode,
+                'amount' => $amount,
+            ]))->toThrow(ValidationException::class);
+        }
     }
+
+    expect(Expense::query()->count())->toBe($countBeforeInvalidAmounts);
 });
 
 test('pending historical Petty Cash syncs as PCV while retaining its old remarks and raw local value', function () {

@@ -88,8 +88,8 @@ class LocalExpenseCreationService
             is_array($validated['attachments'] ?? null) ? $validated['attachments'] : [],
         );
         $expenseType = ExpenseType::query()
+            ->availableForNewEntry()
             ->where('code', $validated['expense_type_code'])
-            ->where('is_enabled', true)
             ->first();
 
         if (! $expenseType) {

@@ -6,6 +6,8 @@
             expenseSaving: false,
             expenseErrors: {},
             expenseForm: {},
+            lastValidExpenseAmount: '',
+            expenseAmountInputError: '',
             expenseAttachments: [],
             expenseAttachmentError: '',
             emptyExpenseForm() {
@@ -42,6 +44,25 @@
                 }[typeCode] || {};
             },
             expenseError(field) { return (this.expenseErrors[field] || [])[0] || ''; },
+            onExpenseAmountInput(event) {
+                const input = event.target;
+                const candidate = input.value;
+                const isAllowedPartialAmount = /^(?:\d+(?:\.\d{0,2})?|\.\d{0,2})?$/.test(candidate);
+
+                if (isAllowedPartialAmount) {
+                    this.lastValidExpenseAmount = candidate;
+                    this.expenseForm.amount = candidate;
+                    this.expenseAmountInputError = '';
+                } else {
+                    input.value = this.lastValidExpenseAmount;
+                    this.expenseForm.amount = this.lastValidExpenseAmount;
+                    this.expenseAmountInputError = 'Use digits and an optional decimal point with at most two decimal places.';
+                }
+
+                const amount = this.expenseForm.amount;
+                const isNonPositive = amount !== '' && Number.isFinite(Number(amount)) && Number(amount) <= 0;
+                input.setCustomValidity(this.expenseAmountInputError || (isNonPositive ? 'Amount must be greater than zero.' : ''));
+            },
             isExpenseOther() {
                 const value = (this.expenseForm.form_data?.expense_kind || '').trim().toLowerCase();
                 return value === 'other' || value === 'others';
@@ -115,6 +136,7 @@
             removeExpenseAttachment(index) { this.expenseAttachments.splice(index, 1); },
             async saveExpenseForm() {
                 if (this.expenseSaving) return;
+                if (!this.$refs.expenseEntryForm.reportValidity()) return;
                 this.expenseSaving = true;
                 this.expenseErrors = {};
                 if (['representation', 'staff_meeting'].includes(this.expenseSelectedType.code)) {
@@ -152,7 +174,7 @@
             <button type="button" @click="cancelExpense()" class="h-10 px-4 rounded-xl border border-gray-200 text-[#434654] font-bold">Back</button>
         </div>
 
-        <form @submit.prevent="saveExpenseForm()" class="space-y-4">
+        <form x-ref="expenseEntryForm" @submit.prevent="saveExpenseForm()" class="space-y-4">
             <div class="p-3 bg-gray-50 border border-gray-200 rounded-xl">
                 <p class="text-[10px] font-black text-[#737685] uppercase tracking-wider">Expense Type</p>
                 <p class="font-bold text-[#191c1e]" x-text="expenseSelectedType.label"></p>
@@ -204,7 +226,7 @@
                 <div x-show="expenseSelectedType.code === 'transportation_commute'" class="space-y-3"><div><label class="field-label">Expense Kind</label><select x-model="expenseForm.form_data.expense_kind" @change="onCommuteKindChange()" class="field-input bg-white"><option value="">Select expense kind</option><option>RORO Fare</option><option>Terminal Fee</option><option>Taxi Fare</option><option>Others</option></select><p class="field-error" x-text="expenseError('form_data.expense_kind')"></p></div><div x-show="isCommuteOther()"><label class="field-label">Specify Other Expense Kind</label><input type="text" x-model="expenseForm.form_data.expense_kind_other" class="field-input"><p class="field-error" x-text="expenseError('form_data.expense_kind_other')"></p></div><div><label class="field-label">Route</label><input type="text" x-model="expenseForm.form_data.route" class="field-input"><p class="field-error" x-text="expenseError('form_data.route')"></p></div></div>
             </div>
 
-            <div class="grid grid-cols-2 gap-3"><div><label class="field-label">Amount *</label><input type="number" min="0.01" step="0.01" x-model="expenseForm.amount" class="field-input" inputmode="decimal"><p class="field-error" x-text="expenseError('amount')"></p></div><div><label class="field-label">Date Filed *</label><input type="date" x-model="expenseForm.date_filed" class="field-input"><p class="field-error" x-text="expenseError('date_filed')"></p></div></div>
+            <div class="grid grid-cols-2 gap-3"><div><label class="field-label">Amount *</label><input type="text" inputmode="decimal" pattern="([0-9]+([.][0-9]{0,2})?|[.][0-9]{1,2})" required x-model="expenseForm.amount" @input="onExpenseAmountInput($event)" class="field-input" autocomplete="off"><p class="field-error" x-text="expenseAmountInputError || expenseError('amount')"></p></div><div><label class="field-label">Date Filed *</label><input type="date" x-model="expenseForm.date_filed" class="field-input"><p class="field-error" x-text="expenseError('date_filed')"></p></div></div>
             <div><label class="field-label">Payment Type *</label><select x-model="expenseForm.payment_type" class="field-input bg-white"><option value="">Select payment type</option>@foreach ($paymentTypes as $paymentType)<option value="{{ $paymentType }}">{{ $paymentType }}</option>@endforeach</select><p class="field-error" x-text="expenseError('payment_type')"></p></div>
             <div class="grid grid-cols-2 gap-3"><div><label class="field-label">Invoice Number *</label><input type="text" x-model="expenseForm.invoice_number" class="field-input"><p class="field-error" x-text="expenseError('invoice_number')"></p></div><div><label class="field-label">TIN *</label><input type="text" x-model="expenseForm.tin" class="field-input"><p class="field-error" x-text="expenseError('tin')"></p></div></div>
             <div><label class="field-label">Establishment *</label><input type="text" x-model="expenseForm.establishment" class="field-input"><p class="field-error" x-text="expenseError('establishment')"></p></div>
