@@ -39,12 +39,15 @@
     </div>
     <div class="space-y-2">
         @forelse($customers as $customer)
+            @php
+                $customerCode = trim((string) $customer->unique_id);
+            @endphp
             <button
                 type="button"
                 wire:click="viewCustomer({{ $customer->id }})"
                 class="w-full flex items-center gap-3 px-4 py-3 bg-white rounded-2xl shadow-sm text-left hover:bg-gray-50 transition-colors">
                 <div class="flex-1 min-w-0">
-                    <p class="font-semibold text-[#191c1e] text-sm truncate">{{ $customer->name }}</p>
+                    <p class="font-semibold text-[#191c1e] text-sm truncate">{{ $customerCode !== '' ? $customerCode.' - '.$customer->name : $customer->name }}</p>
                     @if($customer->address)
                         <p class="text-xs text-[#737685] truncate">{{ $customer->address }}</p>
                     @endif

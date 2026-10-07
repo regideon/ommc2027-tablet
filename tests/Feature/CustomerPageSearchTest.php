@@ -66,3 +66,68 @@ test('customer search cannot expose a matching customer outside existing access 
         ->assertSee('Visible Shop')
         ->assertDontSee('Hidden Shop');
 });
+
+test('customer tile title uses the stored customer code instead of company code', function () {
+    Role::create(['name' => 'rsm_approver']);
+    $user = User::factory()->create();
+    $user->assignRole('rsm_approver');
+    $companyId = DB::table('companies')->insertGetId([
+        'name' => 'Example Company',
+        'code' => 'OMMC',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    Customer::create(['name' => 'ALEX ENTERPRISES', 'unique_id' => 'OMMC08738', 'company_id' => $companyId, 'is_active' => true]);
+
+    $this->actingAs($user);
+
+    Livewire::test(CustomerPage::class)
+        ->assertSee('OMMC08738 - ALEX ENTERPRISES')
+        ->assertDontSee('OMMC - ALEX ENTERPRISES');
+});
+
+test('customer tile title omits null blank and whitespace-only customer codes', function () {
+    Role::create(['name' => 'rsm_approver']);
+    $user = User::factory()->create();
+    $user->assignRole('rsm_approver');
+    Customer::create(['name' => 'Null Customer Code Shop', 'unique_id' => null, 'is_active' => true]);
+    Customer::create(['name' => 'Blank Customer Code Shop', 'unique_id' => '', 'is_active' => true]);
+    Customer::create(['name' => 'Whitespace Customer Code Shop', 'unique_id' => " \t\n ", 'is_active' => true]);
+
+    $this->actingAs($user);
+
+    Livewire::test(CustomerPage::class)
+        ->assertSee('Null Customer Code Shop')
+        ->assertSee('Blank Customer Code Shop')
+        ->assertSee('Whitespace Customer Code Shop')
+        ->assertDontSee(' - Null Customer Code Shop')
+        ->assertDontSee(' - Blank Customer Code Shop')
+        ->assertDontSee(' - Whitespace Customer Code Shop')
+        ->assertDontSee('OMMC -');
+});
+
+test('customer code titles preserve customer ordering and access scoping', function () {
+    Role::create(['name' => 'drm']);
+    $user = User::factory()->create();
+    $user->assignRole('drm');
+    $companyId = DB::table('companies')->insertGetId([
+        'name' => 'Example Company',
+        'code' => 'COMPANY-CATEGORY',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    $zebra = Customer::create(['name' => 'Zebra Hardware', 'unique_id' => 'CARCLUBS00001', 'company_id' => $companyId, 'is_active' => true]);
+    $alpha = Customer::create(['name' => 'Alpha Store', 'is_active' => true]);
+    Customer::create(['name' => 'Hidden Store', 'company_id' => $companyId, 'is_active' => true]);
+    DB::table('customer_user')->insert([
+        ['customer_id' => $zebra->id, 'user_id' => $user->id, 'created_at' => now(), 'updated_at' => now()],
+        ['customer_id' => $alpha->id, 'user_id' => $user->id, 'created_at' => now(), 'updated_at' => now()],
+    ]);
+
+    $this->actingAs($user);
+
+    Livewire::test(CustomerPage::class)
+        ->assertSeeInOrder(['Alpha Store', 'CARCLUBS00001 - Zebra Hardware'])
+        ->assertDontSee('COMPANY-CATEGORY - Zebra Hardware')
+        ->assertDontSee('Hidden Store');
+});
