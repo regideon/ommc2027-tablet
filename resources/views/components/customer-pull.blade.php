@@ -70,8 +70,9 @@
                 type="button"
                 @click="run()"
                 :disabled="running"
-                class="fi-btn fi-color-gray inline-flex items-center gap-1 disabled:opacity-60">
-                <span class="material-symbols-outlined text-lg" :class="running && 'animate-spin'">sync</span>
+                title="Pull latest Customers"
+                class="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold text-[#434654] transition-colors hover:bg-[#edeef0] hover:text-[#890f00] disabled:cursor-wait disabled:opacity-60">
+                <span class="material-symbols-outlined mat-fill text-lg" :class="running && 'animate-spin'" x-text="running ? 'progress_activity' : 'cloud_download'"></span>
                 <span x-text="running ? 'Pulling…' : 'Pull Customers'"></span>
             </button>
         @endif

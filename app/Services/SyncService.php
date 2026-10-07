@@ -17,6 +17,7 @@ use App\Models\SalescallCategory;
 use App\Models\SalescallImage;
 use App\Models\User;
 use App\Support\ExpensePaymentType;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Collection;
@@ -1088,102 +1089,16 @@ class SyncService
         $failureReasons = [];
 
         try {
-            $pendingCustomers = Customer::with(['tradeProfile', 'categoryHistories', 'categoryEvents'])
-                ->where(function ($query): void {
-                    $query->where('sync_status', 'pending')
-                        ->orWhere(fn ($retry) => $retry->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
-                })->get();
+            $pendingCustomers = $this->pendingCustomerPushQuery()->get();
 
-            foreach ($pendingCustomers as $customer) {
-                try {
-                    $payload = [
-                        'local_uuid' => $customer->local_uuid,
-                        'server_id' => $customer->server_id,
-                        'base_updated_at' => $customer->server_updated_at,
-                        'sync_intent' => $customer->server_id ? 'update' : 'create',
-                        'name' => $customer->name,
-                        'unique_id' => $customer->unique_id,
-                        'customer_code_reservation_token' => $customer->customer_code_reservation_token,
-                        'company_id' => $customer->company_id,
-                        'general_category_id' => $customer->general_category_id,
-                        'competitor_volume' => $customer->competitor_volume,
-                        'region_specific_id' => $customer->region_specific_id,
-                        'municipality_id' => $customer->municipality_id,
-                        'address' => $customer->address,
-                        'latitude' => $customer->latitude,
-                        'longitude' => $customer->longitude,
-                        'contact_person' => $customer->contact_person,
-                        'contact_number' => $customer->contact_number,
-                        'business_landline_number' => $customer->business_landline_number,
-                        'business_mobile_number' => $customer->business_mobile_number,
-                        'date_established' => optional($customer->date_established)->format('Y-m-d'),
-                        'is_active' => $customer->is_active,
-                        'profile_type' => $customer->tradeProfile?->profile_type,
-                        'person_in_charge_id' => $customer->person_in_charge_id,
-                        'trade_profile' => $customer->tradeProfile?->toArray() ?? [],
-                        'profile_data' => $customer->tradeProfile?->profile_data ?? [],
-                        'category_histories' => $customer->categoryHistories->map(fn ($history) => [
-                            'profile_type' => $history->profile_type ?: $customer->tradeProfile?->profile_type,
-                            'stream' => $history->stream ?: (($customer->tradeProfile?->profile_type === 'outlet') ? match ($customer->tradeProfile?->entry_detail) {
-                                'AB' => 'ab', 'MCB' => 'mcb', default => (str_starts_with((string) $history->category, 'AB ') ? 'ab' : (str_starts_with((string) $history->category, 'MCB ') ? 'mcb' : null)),
-                            } : $customer->tradeProfile?->profile_type),
-                            'category_year' => $history->category_year,
-                            'category' => $history->category,
-                        ])->values()->all(),
-                        'category_events' => $customer->categoryEvents->map(fn ($event) => [
-                            'event_key' => $event->event_key,
-                            'profile_type' => $event->profile_type,
-                            'stream' => $event->stream,
-                            'category' => $event->category,
-                            'effective_at' => $event->effective_at?->toISOString(),
-                            'source' => $event->source,
-                            'supersedes_event_key' => $event->supersedes_event_key,
-                        ])->values()->all(),
-                    ];
+            $customerResult = $this->pushCustomerRecords($client, $pendingCustomers);
+            $pushed += $customerResult->syncedCount;
+            $failed += $customerResult->failedCount;
+            $retryable += $customerResult->retryableCount;
+            $failureReasons = array_fill_keys($customerResult->failureReasons, true);
 
-                    if ($customer->province_id !== null) {
-                        $payload['province_id'] = $customer->province_id;
-                    }
-
-                    if ($customer->barangay_id !== null) {
-                        $payload['barangay_id'] = $customer->barangay_id;
-                    }
-
-                    if ($customer->area_cluster_id !== null) {
-                        $payload['area_cluster_id'] = $customer->area_cluster_id;
-                    }
-
-                    $response = $client->post("{$this->serverUrl}/api/sync/push/customer", $payload);
-
-                    if ($response->status() === 401) {
-                        return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
-                    }
-
-                    if ($response->successful()) {
-                        $this->markSynced($customer, [
-                            'server_id' => $response->json('server_id'),
-                            'server_updated_at' => $response->json('updated_at'),
-                            'unique_id' => $response->json('unique_id') ?: $customer->unique_id,
-                            'customer_code_reservation_token' => null,
-                            'synced_at' => now(),
-                        ]);
-                        $pushed++;
-                    } elseif ($response->status() === 409 && $response->json('code') === 'customer_conflict') {
-                        $customer->update(['sync_status' => 'conflict', 'sync_error' => $response->json('message', 'Customer changed on Portal.')]);
-                        $failed++;
-                        $failureReasons['customer_conflict'] = true;
-                    } else {
-                        $this->recordItemFailure($customer, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), ['stage' => 'customer:portal', 'endpoint' => '/api/sync/push/customer', 'http_status' => $response->status()]);
-                        $failed++;
-                        $retryable++;
-                        $failureReasons['portal_rejected'] = true;
-                    }
-                } catch (Throwable $e) {
-                    $this->recordUnexpectedItemFailure($customer, $e, 'customer:unexpected');
-                    $failed++;
-                    $retryable++;
-                    $failureReasons['unexpected_sync_error'] = true;
-                }
+            if ($customerResult->errorCode === 'token_expired') {
+                return SyncResult::fail($customerResult->message, 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
             }
 
             $pendingItineraries = Itinerary::where('sync_status', 'pending')
@@ -1667,6 +1582,170 @@ class SyncService
         }
 
         return $this->buildPushResult($pushed, $failed, $retryable, array_keys($failureReasons));
+    }
+
+    public function pushCustomer(int $customerId): SyncResult
+    {
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (! $user || blank($user->api_token)) {
+            return SyncResult::fail('No API token found. Please log in first.', 'no_token');
+        }
+
+        $customer = $this->pendingCustomerPushQuery()->whereKey($customerId)->first();
+
+        if (! $customer) {
+            return SyncResult::ok('Customer has no pending changes.');
+        }
+
+        return $this->pushCustomerRecords($this->client($user->api_token), collect([$customer]));
+    }
+
+    public function pushPendingCustomers(): SyncResult
+    {
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (! $user || blank($user->api_token)) {
+            return SyncResult::fail('No API token found. Please log in first.', 'no_token');
+        }
+
+        $customers = $this->pendingCustomerPushQuery()->get();
+
+        return $this->pushCustomerRecords($this->client($user->api_token), $customers);
+    }
+
+    private function pendingCustomerPushQuery(): Builder
+    {
+        return Customer::with(['tradeProfile', 'categoryHistories', 'categoryEvents'])
+            ->where(function (Builder $query): void {
+                $query->where('sync_status', 'pending')
+                    ->orWhere(fn ($retry) => $retry->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+            });
+    }
+
+    /**
+     * @param  Collection<int, Customer>  $customers
+     */
+    private function pushCustomerRecords(PendingRequest $client, Collection $customers): SyncResult
+    {
+        $pushed = 0;
+        $failed = 0;
+        $retryable = 0;
+        $failureReasons = [];
+
+        foreach ($customers as $customer) {
+            $result = $this->pushCustomerRecord($client, $customer);
+
+            if ($result->errorCode === 'token_expired') {
+                return SyncResult::fail(
+                    $result->message,
+                    'token_expired',
+                    $pushed + $result->syncedCount,
+                    $failed + $result->failedCount,
+                    $retryable + $result->retryableCount,
+                    array_values(array_unique([...$failureReasons, ...$result->failureReasons])),
+                );
+            }
+
+            $pushed += $result->syncedCount;
+            $failed += $result->failedCount;
+            $retryable += $result->retryableCount;
+            $failureReasons = array_values(array_unique([...$failureReasons, ...$result->failureReasons]));
+        }
+
+        return $this->buildPushResult($pushed, $failed, $retryable, $failureReasons);
+    }
+
+    private function pushCustomerRecord(PendingRequest $client, Customer $customer): SyncResult
+    {
+        try {
+            $payload = [
+                'local_uuid' => $customer->local_uuid,
+                'server_id' => $customer->server_id,
+                'base_updated_at' => $customer->server_updated_at,
+                'sync_intent' => $customer->server_id ? 'update' : 'create',
+                'name' => $customer->name,
+                'unique_id' => $customer->unique_id,
+                'customer_code_reservation_token' => $customer->customer_code_reservation_token,
+                'company_id' => $customer->company_id,
+                'general_category_id' => $customer->general_category_id,
+                'competitor_volume' => $customer->competitor_volume,
+                'region_specific_id' => $customer->region_specific_id,
+                'municipality_id' => $customer->municipality_id,
+                'address' => $customer->address,
+                'latitude' => $customer->latitude,
+                'longitude' => $customer->longitude,
+                'contact_person' => $customer->contact_person,
+                'contact_number' => $customer->contact_number,
+                'business_landline_number' => $customer->business_landline_number,
+                'business_mobile_number' => $customer->business_mobile_number,
+                'date_established' => optional($customer->date_established)->format('Y-m-d'),
+                'is_active' => $customer->is_active,
+                'profile_type' => $customer->tradeProfile?->profile_type,
+                'person_in_charge_id' => $customer->person_in_charge_id,
+                'trade_profile' => $customer->tradeProfile?->toArray() ?? [],
+                'profile_data' => $customer->tradeProfile?->profile_data ?? [],
+                'category_histories' => $customer->categoryHistories->map(fn ($history) => [
+                    'profile_type' => $history->profile_type ?: $customer->tradeProfile?->profile_type,
+                    'stream' => $history->stream ?: (($customer->tradeProfile?->profile_type === 'outlet') ? match ($customer->tradeProfile?->entry_detail) {
+                        'AB' => 'ab', 'MCB' => 'mcb', default => (str_starts_with((string) $history->category, 'AB ') ? 'ab' : (str_starts_with((string) $history->category, 'MCB ') ? 'mcb' : null)),
+                    } : $customer->tradeProfile?->profile_type),
+                    'category_year' => $history->category_year,
+                    'category' => $history->category,
+                ])->values()->all(),
+                'category_events' => $customer->categoryEvents->map(fn ($event) => [
+                    'event_key' => $event->event_key,
+                    'profile_type' => $event->profile_type,
+                    'stream' => $event->stream,
+                    'category' => $event->category,
+                    'effective_at' => $event->effective_at?->toISOString(),
+                    'source' => $event->source,
+                    'supersedes_event_key' => $event->supersedes_event_key,
+                ])->values()->all(),
+            ];
+
+            foreach (['province_id', 'barangay_id', 'area_cluster_id'] as $locationId) {
+                if ($customer->{$locationId} !== null) {
+                    $payload[$locationId] = $customer->{$locationId};
+                }
+            }
+
+            $response = $client->post("{$this->serverUrl}/api/sync/push/customer", $payload);
+
+            if ($response->status() === 401) {
+                return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+            }
+
+            if ($response->successful()) {
+                $this->markSynced($customer, [
+                    'server_id' => $response->json('server_id'),
+                    'server_updated_at' => $response->json('updated_at'),
+                    'unique_id' => $response->json('unique_id') ?: $customer->unique_id,
+                    'customer_code_reservation_token' => null,
+                    'synced_at' => now(),
+                ]);
+
+                return SyncResult::ok('Customer synced.', 1);
+            }
+
+            if ($response->status() === 409 && $response->json('code') === 'customer_conflict') {
+                $customer->update(['sync_status' => 'conflict', 'sync_error' => $response->json('message', 'Customer changed on Portal.')]);
+
+                return SyncResult::fail('Customer changed on the server and needs review.', 'customer_conflict', 0, 1, 0, ['customer_conflict']);
+            }
+
+            $this->recordItemFailure($customer, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
+                'stage' => 'customer:portal',
+                'endpoint' => '/api/sync/push/customer',
+                'http_status' => $response->status(),
+            ]);
+
+            return SyncResult::fail('Customer push failed and will retry later.', 'push_failed', 0, 1, 1, ['portal_rejected']);
+        } catch (Throwable $exception) {
+            $this->recordUnexpectedItemFailure($customer, $exception, 'customer:unexpected');
+
+            return SyncResult::fail('Customer push failed and will retry later.', 'push_failed', 0, 1, 1, ['unexpected_sync_error']);
+        }
     }
 
     /**

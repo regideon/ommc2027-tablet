@@ -4,6 +4,7 @@ use App\Filament\Pages\CustomerCreatePage;
 use App\Filament\Pages\CustomerPage;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
@@ -78,10 +79,10 @@ test('reservation failure leaves Customer Code blank without local allocation', 
         ->assertSet('customer_code_reservation_token', null);
 });
 
-test('reservation token is persisted with an offline Customer', function () {
-    $user = seedCustomerCodePageFixtures();
+test('creation keeps the reservation token on the local Customer when its automatic push fails', function () {
+    $user = seedCustomerCodePageFixtures('tablet-token');
     $this->actingAs($user);
-    Http::fake();
+    Http::fake(['portal.test/api/sync/push/customer' => Http::response(['message' => 'Unavailable'], 503)]);
 
     Livewire::test(CustomerCreatePage::class)
         ->set('company_id', 1)
@@ -91,6 +92,63 @@ test('reservation token is persisted with an offline Customer', function () {
         ->call('saveCustomer')
         ->assertRedirect(CustomerPage::getUrl());
 
-    expect(DB::table('customers')->where('name', 'Pending Customer')->value('customer_code_reservation_token'))
-        ->toBe('11111111-1111-4111-8111-111111111111');
+    $customer = DB::table('customers')->where('name', 'Pending Customer')->first();
+    expect($customer->customer_code_reservation_token)->toBe('11111111-1111-4111-8111-111111111111')
+        ->and($customer->sync_status)->toBe('failed')
+        ->and($customer->sync_attempts)->toBe(1);
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer'));
+});
+
+test('creation commits locally before successful automatic Customer reconciliation', function () {
+    $user = seedCustomerCodePageFixtures('tablet-token');
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+
+    Http::fake(function ($request) {
+        if (str_ends_with($request->url(), '/api/sync/push/customer')) {
+            expect(DB::table('customers')->where('name', 'Created Shop')->exists())->toBeTrue();
+
+            return Http::response(['server_id' => 881, 'unique_id' => 'OMMC0881', 'updated_at' => now()->toISOString()]);
+        }
+
+        return Http::response(['token' => '33333333-3333-4333-8333-333333333333', 'code' => 'OMMC0881']);
+    });
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('company_id', 1)
+        ->set('name', 'Created Shop')
+        ->call('saveCustomer')
+        ->assertRedirect(CustomerPage::getUrl());
+
+    $customer = DB::table('customers')->where('name', 'Created Shop')->first();
+    expect($customer->sync_status)->toBe('synced')
+        ->and($customer->server_id)->toBe(881)
+        ->and($customer->unique_id)->toBe('OMMC0881')
+        ->and($customer->customer_code_reservation_token)->toBeNull();
+    Http::assertSentCount(2);
+});
+
+test('creation remains successful and locally stored when automatic push throws offline', function () {
+    $user = seedCustomerCodePageFixtures('tablet-token');
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+
+    Http::fake(function ($request) {
+        if (str_ends_with($request->url(), '/api/sync/push/customer')) {
+            throw new ConnectionException('Offline');
+        }
+
+        return Http::response(['token' => '44444444-4444-4444-8444-444444444444', 'code' => 'OMMC0882']);
+    });
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('company_id', 1)
+        ->set('name', 'Offline Created Shop')
+        ->call('saveCustomer')
+        ->assertRedirect(CustomerPage::getUrl());
+
+    $customer = DB::table('customers')->where('name', 'Offline Created Shop')->first();
+    expect($customer)->not->toBeNull()
+        ->and($customer->sync_status)->toBe('failed')
+        ->and($customer->sync_attempts)->toBe(1);
 });

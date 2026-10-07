@@ -258,7 +258,7 @@ class CustomerCreatePage extends Page
                 }
             }
         }
-        DB::transaction(function () use ($profileType): void {
+        $customerId = DB::transaction(function () use ($profileType): int {
             do {
                 $localId = -random_int(1, PHP_INT_MAX);
             } while (Customer::withTrashed()->whereKey($localId)->exists());
@@ -298,9 +298,22 @@ class CustomerCreatePage extends Page
                 'categories' => $this->categories,
                 'access_user_ids' => $this->access_user_ids,
             ], $profileType);
+
+            return (int) $customer->id;
         });
 
-        Notification::make()->title('Customer saved offline')->success()->send();
+        $pushResult = app(SyncService::class)->pushCustomer($customerId);
+
+        if ($pushResult->success && $pushResult->failedCount === 0) {
+            Notification::make()->title('Customer created and synced')->success()->send();
+        } else {
+            Notification::make()
+                ->title('Customer saved locally; synchronization is still pending.')
+                ->body($pushResult->message)
+                ->warning()
+                ->send();
+        }
+
         $this->redirect(CustomerPage::getUrl());
     }
 

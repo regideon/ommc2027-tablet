@@ -1,7 +1,42 @@
 <x-filament-panels::page>
-    <x-customer-pull class="mb-3" :auto="$this->customerPullPending()" show-button refresh-on-done>
-        <a href="{{ \App\Filament\Pages\CustomerCreatePage::getUrl() }}" class="fi-btn fi-color-primary">Add Customer</a>
-    </x-customer-pull>
+    <div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <label class="flex min-w-0 flex-1 items-center gap-2 rounded-full bg-[#edeef0] px-4 py-2.5">
+            <span class="material-symbols-outlined text-[#737685] text-lg">search</span>
+            <input
+                type="search"
+                wire:model.live.debounce.300ms="search"
+                placeholder="Search customers, codes, or locations"
+                aria-label="Search customers"
+                class="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-[#191c1e] placeholder:text-[#737685] focus:ring-0"
+            />
+            @if($search !== '')
+                <button type="button" wire:click="$set('search', '')" aria-label="Clear customer search" class="text-[#737685] hover:text-[#890f00]">
+                    <span class="material-symbols-outlined text-lg">close</span>
+                </button>
+            @endif
+        </label>
+
+        <x-customer-pull class="w-full sm:w-auto" :auto="$this->customerPullPending()" show-button refresh-on-done>
+            <button
+                type="button"
+                wire:click="pushCustomers"
+                wire:loading.attr="disabled"
+                wire:target="pushCustomers"
+                @disabled($pushingCustomers)
+                title="Push pending Customers"
+                class="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold text-[#434654] transition-colors hover:bg-[#edeef0] hover:text-[#890f00] disabled:cursor-wait disabled:opacity-60">
+                <span class="material-symbols-outlined mat-fill text-lg {{ $pushingCustomers ? 'animate-spin' : '' }}" wire:loading.class="animate-spin" wire:target="pushCustomers">{{ $pushingCustomers ? 'progress_activity' : 'cloud_upload' }}</span>
+                <span>{{ $pushingCustomers ? 'Pushing…' : 'Push Customers' }}</span>
+            </button>
+            <a
+                href="{{ \App\Filament\Pages\CustomerCreatePage::getUrl() }}"
+                title="Add Customer"
+                class="inline-flex items-center gap-1.5 rounded-full bg-[#890f00] px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#6f0c00]">
+                <span class="material-symbols-outlined mat-fill text-lg">add_circle</span>
+                <span>Add Customer</span>
+            </a>
+        </x-customer-pull>
+    </div>
     <div class="space-y-2">
         @forelse($customers as $customer)
             <button
@@ -17,7 +52,7 @@
                 <span class="material-symbols-outlined text-[#737685] text-lg shrink-0">chevron_right</span>
             </button>
         @empty
-            <p class="text-sm text-[#737685] text-center py-10">No customers found.</p>
+            <p class="text-sm text-[#737685] text-center py-10">{{ trim($search) !== '' ? 'No customers match your search.' : 'No customers found.' }}</p>
         @endforelse
     </div>
 

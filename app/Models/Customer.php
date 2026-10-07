@@ -51,6 +51,11 @@ class Customer extends Model
         return $this->belongsTo(AreaCluster::class);
     }
 
+    public function regionSpecific(): BelongsTo
+    {
+        return $this->belongsTo(RegionSpecific::class);
+    }
+
     public function personInCharge(): BelongsTo
     {
         return $this->belongsTo(User::class, 'person_in_charge_id');

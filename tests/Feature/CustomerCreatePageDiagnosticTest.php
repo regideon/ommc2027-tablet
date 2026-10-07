@@ -153,10 +153,11 @@ test('customer add page renders against the complete migrated sqlite schema', fu
     }
 });
 
-test('customer add page saves the complete local aggregate without network access', function () {
+test('customer add page saves the complete aggregate locally when its immediate push fails', function () {
     $user = seedCustomerCreateFixtures();
+    $user->forceFill(['api_token' => 'tablet-token'])->save();
     $this->actingAs($user);
-    Http::fake();
+    Http::fake(['*api/sync/push/customer' => Http::response(['message' => 'Unavailable'], 503)]);
 
     $component = Livewire::test(CustomerCreatePage::class)->set(validCustomerCreateState());
 
@@ -169,8 +170,8 @@ test('customer add page saves the complete local aggregate without network acces
         ->and($customer->id)->toBeLessThan(0)
         ->and($customer->local_uuid)->not->toBeNull()
         ->and($customer->server_id)->toBeNull()
-        ->and($customer->sync_status)->toBe('pending')
-        ->and($customer->sync_attempts)->toBe(0)
+        ->and($customer->sync_status)->toBe('failed')
+        ->and($customer->sync_attempts)->toBe(1)
         ->and($customer->company_id)->toBe(1)
         ->and($customer->region_specific_id)->toBe(1)
         ->and($customer->municipality_id)->toBe(1);
@@ -189,7 +190,7 @@ test('customer add page saves the complete local aggregate without network acces
         ->and($histories->pluck('category_year')->all())->toBe(range(2018, 2026))
         ->and($histories->pluck('category')->unique()->all())->toBe(['AB Loyal']);
 
-    Http::assertNothingSent();
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer'));
 
     $edit = Livewire::test(CustomerEditPage::class, ['customerId' => $customer->id])
         ->assertOk()
@@ -253,7 +254,9 @@ test('customer add page preserves the default current user when adding another a
 
 test('customer add page still rejects an invalid access user id', function () {
     $user = seedCustomerCreateFixtures();
+    $user->forceFill(['api_token' => 'tablet-token'])->save();
     $this->actingAs($user);
+    Http::fake();
 
     Livewire::test(CustomerCreatePage::class)
         ->set(validCustomerCreateState())
@@ -262,6 +265,7 @@ test('customer add page still rejects an invalid access user id', function () {
         ->assertHasErrors(['access_user_ids.0']);
 
     expect(DB::table('customers')->where('name', 'Diagnostic Customer')->exists())->toBeFalse();
+    Http::assertNotSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer'));
 });
 
 test('customer add page renders the scoped customer-create-form styling hook', function () {

@@ -11,7 +11,9 @@ use App\Models\CustomerProfile;
 use App\Models\Salescall;
 use App\Models\SalescallImage;
 use App\Models\User;
+use App\Services\SyncService;
 use BackedEnum;
+use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Facades\Auth;
@@ -48,6 +50,10 @@ class CustomerPage extends Page
 
     public array $customerPhotos = [];
 
+    public string $search = '';
+
+    public bool $pushingCustomers = false;
+
     protected function getViewData(): array
     {
         $user = Auth::user();
@@ -57,19 +63,69 @@ class CustomerPage extends Page
         // customer pull (see SyncService::recordCustomerScope()).
         $pulledIds = DB::table('customer_scopes')->where('user_id', $user->id)->pluck('customer_id');
 
-        if (in_array('rsm_approver', $roles)) {
-            $customers = Customer::where('is_active', true)->orderBy('name')->get();
-        } elseif (array_intersect(['rsm', 'drm_approver'], $roles)) {
-            $drmIds = User::where('rsm_id', $user->id)->pluck('id');
-            $customerIds = DB::table('customer_user')->whereIn('user_id', $drmIds)->pluck('customer_id')->merge($pulledIds)->unique();
-            $customers = Customer::whereIn('id', $customerIds)->where('is_active', true)->orderBy('name')->get();
-        } else {
-            // DRM
-            $customerIds = DB::table('customer_user')->where('user_id', $user->id)->pluck('customer_id')->merge($pulledIds)->unique();
-            $customers = Customer::whereIn('id', $customerIds)->where('is_active', true)->orderBy('name')->get();
+        $customers = Customer::query()->where('is_active', true);
+
+        if (! in_array('rsm_approver', $roles)) {
+            if (array_intersect(['rsm', 'drm_approver'], $roles)) {
+                $drmIds = User::where('rsm_id', $user->id)->pluck('id');
+                $customerIds = DB::table('customer_user')->whereIn('user_id', $drmIds)->pluck('customer_id')->merge($pulledIds)->unique();
+            } else {
+                // DRM
+                $customerIds = DB::table('customer_user')->where('user_id', $user->id)->pluck('customer_id')->merge($pulledIds)->unique();
+            }
+
+            $customers->whereIn('id', $customerIds);
         }
 
-        return ['customers' => $customers];
+        $term = trim($this->search);
+
+        if ($term !== '') {
+            $pattern = '%'.mb_strtolower($term).'%';
+            $customers->where(function ($query) use ($pattern): void {
+                $query->whereRaw('LOWER(customers.name) LIKE ?', [$pattern])
+                    ->orWhereRaw('LOWER(customers.unique_id) LIKE ?', [$pattern])
+                    ->orWhereRaw('LOWER(customers.address) LIKE ?', [$pattern])
+                    ->orWhereHas('municipality', fn ($location) => $location->whereRaw('LOWER(name) LIKE ?', [$pattern]))
+                    ->orWhereHas('province', fn ($location) => $location->whereRaw('LOWER(name) LIKE ?', [$pattern]))
+                    ->orWhereHas('barangay', fn ($location) => $location->whereRaw('LOWER(name) LIKE ?', [$pattern]))
+                    ->orWhereHas('areaCluster', fn ($location) => $location->whereRaw('LOWER(name) LIKE ?', [$pattern]))
+                    ->orWhereHas('regionSpecific', fn ($location) => $location->whereRaw('LOWER(name) LIKE ?', [$pattern]));
+            });
+        }
+
+        return ['customers' => $customers->orderBy('name')->get()];
+    }
+
+    public function pushCustomers(): void
+    {
+        if ($this->pushingCustomers) {
+            return;
+        }
+
+        $this->pushingCustomers = true;
+
+        try {
+            $result = app(SyncService::class)->pushPendingCustomers();
+            $notification = Notification::make()->title($result->message);
+
+            if ($result->failedCount > 0) {
+                $notification->warning();
+            } elseif ($result->success) {
+                $notification->success();
+            } else {
+                $notification->danger();
+            }
+
+            $notification->send();
+        } catch (\Throwable $exception) {
+            report($exception);
+            Notification::make()
+                ->title('Customer push could not be completed. Pending Customers remain saved locally.')
+                ->danger()
+                ->send();
+        } finally {
+            $this->pushingCustomers = false;
+        }
     }
 
     /**
