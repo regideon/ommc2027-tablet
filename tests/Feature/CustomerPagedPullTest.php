@@ -19,6 +19,15 @@ beforeEach(function () {
     $this->actingAs($this->user);
 
     $this->requests = [];
+    $this->makeLocationPayload = function (array $sections = []): array {
+        $sections = array_replace(array_fill_keys(['regions', 'region_specifics', 'area_clusters', 'provinces', 'municipalities', 'barangays'], []), $sections);
+
+        return [
+            'reference_contract_version' => 1,
+            ...$sections,
+            'reference_counts' => array_map('count', $sections),
+        ];
+    };
 
     $this->customer = fn (int $id, ?string $name = null): array => [
         'id' => $id,
@@ -41,7 +50,7 @@ beforeEach(function () {
             $this->requests[] = ['path' => $url['path'], 'query' => $query];
 
             return match ($url['path']) {
-                '/api/sync/pull/locations' => Http::response(['municipalities' => [['id' => 1, 'name' => 'M1', 'enabled' => true]]]),
+                '/api/sync/pull/locations' => Http::response($this->locationPayload ?? ($this->makeLocationPayload)(['municipalities' => [['id' => 1, 'region_id' => null, 'province_id' => null, 'name' => 'M1', 'enabled' => true]]])),
                 '/api/sync/pull/customers' => $customerPages[isset($query['ids']) ? 'ids' : (int) ($query['after_id'] ?? 0)],
                 default => Http::response([], 404),
             };
@@ -127,11 +136,43 @@ test('a later customer pull asks only for changes and fetches customers that re-
     $steps = ($this->runToCompletion)();
 
     expect(end($steps))->toMatchArray(['done' => true, 'pulled' => 2, 'message' => 'Customers up to date (2 updated).'])
-        ->and($this->requests[0]['query'])->toMatchArray(['updated_since' => '2026-10-04T00:00:00.000000Z'])
-        ->and($this->requests[1]['query'])->toBe(['ids' => '2'])
+        ->and(collect($this->requests)->pluck('path')->all())->toBe(['/api/sync/pull/locations', '/api/sync/pull/customers', '/api/sync/pull/customers'])
+        ->and($this->requests[1]['query'])->toMatchArray(['updated_since' => '2026-10-04T00:00:00.000000Z'])
+        ->and($this->requests[2]['query'])->toBe(['ids' => '2'])
         ->and(DB::table('customers')->where('id', 1)->value('name'))->toBe('Renamed')
         ->and(DB::table('customers')->where('id', 2)->value('is_active'))->toBeTruthy()
         ->and(json_decode(DB::table('sync_states')->where('key', 'customers.pulled_through.'.$this->user->id)->value('value')))->toBe('2026-10-05T01:00:00.000000Z');
+});
+
+test('a later customer pull refreshes location references before changed customers', function () {
+    DB::table('sync_states')->insert(['key' => 'customers.pulled_through.'.$this->user->id, 'value' => json_encode('2026-10-04T00:00:00.000000Z')]);
+    DB::table('municipalities')->insert(['id' => 1, 'name' => 'M1']);
+    $this->locationPayload = [
+        'regions' => [['id' => 4, 'code' => 'R4', 'name' => 'Region 4']],
+        'region_specifics' => [['id' => 14, 'region_id' => 4, 'name' => 'Specific 14']],
+        'area_clusters' => [['id' => 24, 'region_specific_id' => 14, 'code' => 'AC24', 'name' => 'Cluster 24', 'enabled' => true]],
+        'provinces' => [['id' => 34, 'region_id' => 4, 'region_specific_id' => 14, 'name' => 'Province 34', 'enabled' => true]],
+        'municipalities' => [['id' => 44, 'region_id' => 4, 'province_id' => 34, 'name' => 'Municipality 44', 'enabled' => true]],
+        'barangays' => [['id' => 54, 'municipality_id' => 44, 'code' => 'B54', 'name' => 'Barangay 54', 'enabled' => true]],
+    ];
+    $this->locationPayload = ($this->makeLocationPayload)($this->locationPayload);
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [],
+            'next_after_id' => null,
+            'total' => 0,
+            'server_time' => '2026-10-05T01:00:00.000000Z',
+            'scope_ids' => [],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+    expect(end($steps)['done'])->toBeTrue()
+        ->and(collect($this->requests)->pluck('path')->first())->toBe('/api/sync/pull/locations')
+        ->and(DB::table('region_specifics')->where('id', 14)->value('name'))->toBe('Specific 14')
+        ->and(DB::table('area_clusters')->where('id', 24)->value('region_specific_id'))->toBe(14)
+        ->and(DB::table('provinces')->where('id', 34)->value('region_id'))->toBe(4)
+        ->and(DB::table('barangays')->where('id', 54)->value('municipality_id'))->toBe(44);
 });
 
 test('an interrupted customer pull resumes from the page that failed', function () {
@@ -149,10 +190,12 @@ test('an interrupted customer pull resumes from the page that failed', function 
     ];
     ($this->fakePortal)($page);
 
+    $locations = app(SyncService::class)->pullCustomersStep();
     $first = app(SyncService::class)->pullCustomersStep();
     $failed = app(SyncService::class)->pullCustomersStep();
 
-    expect($first)->toMatchArray(['success' => true, 'done' => false, 'pulled' => 1])
+    expect($locations)->toMatchArray(['success' => true, 'done' => false, 'pulled' => 0])
+        ->and($first)->toMatchArray(['success' => true, 'done' => false, 'pulled' => 1])
         ->and($failed)->toMatchArray(['success' => false, 'done' => false, 'pulled' => 1, 'message' => 'Pull failed (500).'])
         ->and(app(SyncService::class)->customerPullPending())->toBeTrue();
 
@@ -174,7 +217,7 @@ test('an interrupted customer pull resumes from the page that failed', function 
 test('the salescall pull uses the schedule endpoint and fetches locations only when missing', function () {
     Http::fake([
         'portal.test/api/sync/pull/schedule' => Http::response(['itineraries' => [], 'customers' => []]),
-        'portal.test/api/sync/pull/locations' => Http::response(['municipalities' => [['id' => 1, 'name' => 'M1', 'enabled' => true]]]),
+        'portal.test/api/sync/pull/locations' => Http::response(($this->makeLocationPayload)(['municipalities' => [['id' => 1, 'region_id' => null, 'province_id' => null, 'name' => 'M1', 'enabled' => true]]])),
     ]);
 
     expect(app(SyncService::class)->pull()->success)->toBeTrue();
@@ -221,7 +264,7 @@ test('reps sharing a tablet each get a full pull and their own customer list', f
     $steps = ($this->runToCompletion)();
 
     expect(end($steps))->toMatchArray(['done' => true, 'message' => 'Pulled 1 customers.'])
-        ->and($this->requests[0]['query'])->not->toHaveKey('updated_since')
+        ->and($this->requests[1]['query'])->not->toHaveKey('updated_since')
         ->and(DB::table('customers')->where('id', 1)->value('is_active'))->toBeTruthy()
         ->and(DB::table('customer_scopes')->where('user_id', $this->user->id)->pluck('customer_id')->all())->toBe([1])
         ->and(DB::table('customer_scopes')->where('user_id', $otherRep->id)->pluck('customer_id')->all())
@@ -259,7 +302,10 @@ test('a step that fails after reading its page is retried from the same page', f
         ]),
     ]);
 
+    $locations = app(SyncService::class)->pullCustomersStep();
     $failed = app(SyncService::class)->pullCustomersStep();
+
+    expect($locations)->toMatchArray(['success' => true, 'done' => false, 'pulled' => 0]);
 
     expect($failed['success'])->toBeFalse()
         ->and(json_decode(DB::table('sync_states')->where('key', 'customers.pull_run.'.$this->user->id)->value('value'), true))

@@ -9,8 +9,8 @@ use App\Models\Customer;
 use App\Models\GeneralCategory;
 use App\Models\Municipality;
 use App\Models\Province;
-use App\Models\RegionSpecific;
 use App\Models\Region;
+use App\Models\RegionSpecific;
 use App\Models\User;
 use App\Services\CustomerProfileFormService;
 use App\Services\PhilippineAddressResolver;
@@ -36,31 +36,57 @@ class CustomerCreatePage extends Page
     protected static ?string $title = 'Add Customer';
 
     public string $name = '';
+
     public ?string $unique_id = null;
+
     public ?string $customer_code_reservation_token = null;
+
     public ?int $company_id = null;
+
     public ?int $region_specific_id = null;
+
     public ?int $physical_region_id = null;
+
     public ?int $province_id = null;
+
     public ?int $municipality_id = null;
+
     public ?int $barangay_id = null;
+
     public ?int $area_cluster_id = null;
+
     public ?string $locationError = null;
+
     public ?int $general_category_id = null;
+
     public ?int $competitor_volume = null;
+
     public string $address = '';
+
     public ?string $latitude = null;
+
     public ?string $longitude = null;
+
     public ?string $contact_person = null;
+
     public ?string $contact_number = null;
+
     public ?string $business_landline_number = null;
+
     public ?string $business_mobile_number = null;
+
     public ?string $date_established = null;
+
     public ?int $person_in_charge_id = null;
+
     public array $access_user_ids = [];
+
     public bool $is_active = true;
+
     public array $trade = [];
+
     public array $active = [];
+
     public array $categories = [];
 
     protected ?string $companyChangeOldProfile = null;
@@ -95,15 +121,15 @@ class CustomerCreatePage extends Page
     {
         return [
             'companies' => Company::orderBy('name')->get(),
-            'regions' => Region::whereNotNull('psgc_code')->orderBy('name')->get(),
+            'regions' => Region::where(fn ($query) => $query->whereNotNull('psgc_code')->orWhere('id', $this->physical_region_id))->orderBy('name')->get(),
             'regionSpecifics' => RegionSpecific::orderBy('name')->get(),
             'areaClusters' => $this->region_specific_id
-                ? AreaCluster::where('region_specific_id', $this->region_specific_id)->where('enabled', true)->orderBy('name')->get()
+                ? AreaCluster::where(fn ($query) => $query->where('region_specific_id', $this->region_specific_id)->where('enabled', true)->orWhere('id', $this->area_cluster_id))->orderBy('name')->get()
                 : collect(),
-            'provinces' => Province::where('enabled', true)->orderBy('name')->get(),
-            'municipalities' => Municipality::where('enabled', true)->orderBy('name')->get(),
+            'provinces' => Province::where(fn ($query) => $query->where('enabled', true)->orWhere('id', $this->province_id))->orderBy('name')->get(),
+            'municipalities' => Municipality::where(fn ($query) => $query->where('enabled', true)->orWhere('id', $this->municipality_id))->orderBy('name')->get(),
             'barangays' => $this->municipality_id
-                ? Barangay::where('municipality_id', $this->municipality_id)->where('enabled', true)->orderBy('name')->get()
+                ? Barangay::where(fn ($query) => $query->where('municipality_id', $this->municipality_id)->where('enabled', true)->orWhere('id', $this->barangay_id))->orderBy('name')->get()
                 : collect(),
             'generalCategories' => GeneralCategory::orderBy('sort')->get(),
             'users' => User::orderBy('name')->get(),
@@ -122,6 +148,7 @@ class CustomerCreatePage extends Page
 
     public function updatedCompanyId(): void
     {
+        $this->resetValidation();
         $this->unique_id = null;
         $this->customer_code_reservation_token = null;
 
@@ -137,6 +164,7 @@ class CustomerCreatePage extends Page
 
         if ($this->companyChangeOldProfile !== null && $this->companyChangeOldProfile === $profile) {
             $this->companyChangeOldProfile = null;
+
             return;
         }
 
@@ -244,6 +272,9 @@ class CustomerCreatePage extends Page
             'business_mobile_number' => 'nullable|string|max:50',
             'date_established' => 'nullable|date',
             'active.conversion_program' => ['nullable', Rule::in([...array_keys(config('customer_trade_form.conversion_programs', [])), ''])],
+            'active.warehouse_code' => ['nullable', 'string', 'max:255'],
+            'active.delivery_type' => ['nullable', Rule::in(['yes', 'no'])],
+            'active.delivery_detail' => ['nullable', Rule::in(['own_delivery', 'meh'])],
         ]);
 
         if (! $this->physicalGeographyIsValid()) {
@@ -254,6 +285,7 @@ class CustomerCreatePage extends Page
             foreach ($this->categories[$stream] ?? [] as $year => $category) {
                 if ($category !== null && $category !== '' && ! array_key_exists($category, $this->categoryOptions($stream))) {
                     $this->addError('categories', "Every {$stream} annual category must be selected from the allowed options.");
+
                     return;
                 }
             }
@@ -319,14 +351,24 @@ class CustomerCreatePage extends Page
 
     protected function physicalGeographyIsValid(): bool
     {
+        if ($this->physical_region_id && $this->province_id) {
+            $province = Province::find($this->province_id);
+
+            if (! $province || (int) $province->region_id !== (int) $this->physical_region_id) {
+                $this->addError('province_id', 'The Province does not belong to the selected physical Region or has no physical Region mapping.');
+
+                return false;
+            }
+        }
+
         if (! $this->municipality_id) {
-            return true;
+            return $this->commercialGeographyIsValid();
         }
 
         $municipality = Municipality::find($this->municipality_id);
 
         if (! $municipality) {
-            return true;
+            return $this->commercialGeographyIsValid();
         }
 
         if ($this->physical_region_id && (int) $municipality->region_id !== (int) $this->physical_region_id) {
@@ -341,6 +383,27 @@ class CustomerCreatePage extends Page
             return false;
         }
 
+        if ($this->barangay_id && ! Barangay::whereKey($this->barangay_id)->where('municipality_id', $this->municipality_id)->exists()) {
+            $this->addError('barangay_id', 'The Barangay does not belong to the selected City / Municipality.');
+
+            return false;
+        }
+
+        return $this->commercialGeographyIsValid();
+    }
+
+    protected function commercialGeographyIsValid(): bool
+    {
+        if (! $this->area_cluster_id) {
+            return true;
+        }
+
+        if (! $this->region_specific_id || ! AreaCluster::whereKey($this->area_cluster_id)->where('region_specific_id', $this->region_specific_id)->exists()) {
+            $this->addError('area_cluster_id', 'The Area Cluster does not belong to the selected Specific Region.');
+
+            return false;
+        }
+
         return true;
     }
 
@@ -349,6 +412,7 @@ class CustomerCreatePage extends Page
         $accessIds = array_filter($this->access_user_ids);
         if (User::whereIn('id', $accessIds)->whereNull('rsm_id')->exists()) {
             $this->addError('access_user_ids', 'Each assigned Access user must have an RSM relationship.');
+
             return false;
         }
 

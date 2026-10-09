@@ -1,6 +1,7 @@
 <?php
 
 use App\Filament\Pages\CustomerPage;
+use App\Models\Customer;
 use App\Models\User;
 use App\Services\SyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -104,6 +105,147 @@ test('Customer-only push targets the requested customer and excludes ineligible 
 
     expect($result->syncedCount)->toBe(1);
     Http::assertSentCount(1);
+});
+
+test('an exhausted Customer requires a saved correction and retries once with its existing identity and reservation', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    $token = '22222222-2222-4222-8222-222222222222';
+    $customerId = insertPushCustomer('Before Correction', 'failed', 3, $token);
+    DB::table('customers')->where('id', $customerId)->update(['local_uuid' => '11111111-1111-4111-8111-111111111111', 'sync_error' => '422: invalid optional value']);
+    Http::fake(['portal.test/api/sync/push/customer' => Http::response([
+        'server_id' => 991,
+        'local_uuid' => '11111111-1111-4111-8111-111111111111',
+        'unique_id' => 'CODE-Before Correction',
+        'updated_at' => now()->toISOString(),
+    ])]);
+
+    $service = app(SyncService::class);
+    expect($service->retryExhaustedCustomer($customerId)->errorCode)->toBe('correction_required');
+    Http::assertNothingSent();
+
+    DB::table('customers')->where('id', $customerId)->update(['name' => 'Corrected Shop']);
+    $corrected = Customer::with(['tradeProfile', 'categoryHistories', 'categoryEvents', 'users', 'personInCharge'])->findOrFail($customerId);
+    DB::table('sync_states')->insert([
+        'key' => 'customer.manual_retry_ready.'.$customerId,
+        'value' => json_encode($service->customerPayloadFingerprint($corrected)),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    $result = $service->retryExhaustedCustomer($customerId);
+    $saved = DB::table('customers')->where('id', $customerId)->first();
+
+    expect($result->syncedCount)->toBe(1)
+        ->and($saved->sync_status)->toBe('synced')
+        ->and($saved->sync_attempts)->toBe(3)
+        ->and($saved->server_id)->toBe(991)
+        ->and($saved->local_uuid)->toBe('11111111-1111-4111-8111-111111111111')
+        ->and($saved->customer_code_reservation_token)->toBeNull()
+        ->and($saved->sync_error)->toContain('invalid optional value');
+    Http::assertSentCount(1);
+    Http::assertSent(fn ($request): bool => $request['name'] === 'Corrected Shop'
+        && $request['unique_id'] === 'CODE-Before Correction'
+        && $request['customer_code_reservation_token'] === $token
+        && $request['local_uuid'] === '11111111-1111-4111-8111-111111111111');
+});
+
+test('an in-flight claim prevents a concurrent Customer push from issuing another request', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    $customerId = insertPushCustomer('Claimed Shop', 'pending', 0);
+    $concurrent = null;
+    Http::fake(function ($request) use ($customerId, &$concurrent) {
+        if (str_ends_with($request->url(), '/api/sync/push/customer')) {
+            $concurrent = app(SyncService::class)->pushCustomer($customerId);
+
+            return Http::response(['server_id' => 992, 'updated_at' => now()->toISOString()]);
+        }
+
+        return Http::response([], 404);
+    });
+
+    $result = app(SyncService::class)->pushCustomer($customerId);
+
+    expect($result->syncedCount)->toBe(1)
+        ->and($concurrent?->syncedCount)->toBe(0)
+        ->and(DB::table('customers')->where('id', $customerId)->value('sync_status'))->toBe('synced');
+    Http::assertSentCount(1);
+});
+
+test('Portal rejects an invalid local reference as a recoverable failure and explicit retry accepts its correction', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    DB::table('regions')->insert(['id' => 7, 'code' => 'R7', 'name' => 'Region 7', 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('region_specifics')->insert([
+        ['id' => 53, 'region_id' => 7, 'name' => 'Retained Historical Row', 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 54, 'region_id' => 7, 'name' => 'Corrected Current Row', 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    $customerId = insertPushCustomer('Stale Reference Customer', 'failed', 3);
+    $localUuid = '77777777-7777-4777-8777-777777777777';
+    $reservationToken = '77777777-7777-4777-8777-777777777778';
+    DB::table('customers')->where('id', $customerId)->update([
+        'local_uuid' => $localUuid,
+        'region_specific_id' => 53,
+        'customer_code_reservation_token' => $reservationToken,
+        'sync_error' => 'Earlier failed Portal validation',
+    ]);
+    $service = app(SyncService::class);
+    $customer = Customer::with(['tradeProfile', 'categoryHistories', 'categoryEvents', 'users', 'personInCharge'])->findOrFail($customerId);
+    DB::table('sync_states')->insert([
+        'key' => 'customer.manual_retry_ready.'.$customerId,
+        'value' => json_encode($service->customerPayloadFingerprint($customer)),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    Http::fake(['portal.test/api/sync/push/customer' => Http::sequence()
+        ->push(['message' => 'Invalid Specific Region ID.', 'errors' => ['region_specific_id' => ['ID 53 does not exist in Portal.']]], 422)
+        ->push(['server_id' => 993, 'local_uuid' => $localUuid, 'unique_id' => 'CODE-Stale Reference Customer', 'updated_at' => now()->toISOString()])]);
+
+    $rejected = $service->retryExhaustedCustomer($customerId);
+    $afterRejection = DB::table('customers')->where('id', $customerId)->first();
+
+    expect($rejected->errorCode)->toBe('push_failed')
+        ->and($rejected->message)->toContain('HTTP 422', 'ID 53 does not exist in Portal')
+        ->and($afterRejection->region_specific_id)->toBe(53)
+        ->and($afterRejection->sync_status)->toBe('failed')
+        ->and($afterRejection->sync_attempts)->toBe(4)
+        ->and($afterRejection->unique_id)->toBe('CODE-Stale Reference Customer')
+        ->and($afterRejection->customer_code_reservation_token)->toBe($reservationToken);
+
+    DB::table('customers')->where('id', $customerId)->update(['name' => 'Corrected Reference Customer', 'region_specific_id' => 54]);
+    $corrected = Customer::with(['tradeProfile', 'categoryHistories', 'categoryEvents', 'users', 'personInCharge'])->findOrFail($customerId);
+    DB::table('sync_states')->updateOrInsert(
+        ['key' => 'customer.manual_retry_ready.'.$customerId],
+        ['value' => json_encode($service->customerPayloadFingerprint($corrected)), 'created_at' => now(), 'updated_at' => now()],
+    );
+
+    $retried = $service->retryExhaustedCustomer($customerId);
+    $afterCorrection = DB::table('customers')->where('id', $customerId)->first();
+
+    expect($retried->syncedCount)->toBe(1)
+        ->and($afterCorrection->id)->toBe($customerId)
+        ->and($afterCorrection->local_uuid)->toBe($localUuid)
+        ->and($afterCorrection->sync_status)->toBe('synced')
+        ->and($afterCorrection->sync_attempts)->toBe(4)
+        ->and($afterCorrection->region_specific_id)->toBe(54)
+        ->and($afterCorrection->unique_id)->toBe('CODE-Stale Reference Customer')
+        ->and($afterCorrection->customer_code_reservation_token)->toBeNull()
+        ->and(DB::table('customers')->where('local_uuid', $localUuid)->count())->toBe(1);
+
+    Http::assertSentCount(2);
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+        && $request['region_specific_id'] === 53
+        && $request['local_uuid'] === $localUuid
+        && $request['customer_code_reservation_token'] === $reservationToken);
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+        && $request['region_specific_id'] === 54
+        && $request['local_uuid'] === $localUuid
+        && $request['unique_id'] === 'CODE-Stale Reference Customer'
+        && $request['customer_code_reservation_token'] === $reservationToken);
 });
 
 test('Customer page manual action uses Customer-only push and exposes loading controls', function () {

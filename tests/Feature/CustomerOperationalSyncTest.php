@@ -4,9 +4,9 @@ use App\Models\Customer;
 use App\Models\User;
 use App\Services\SyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
@@ -23,6 +23,16 @@ test('pull persists customer category and competitor volume without affecting se
     $this->actingAs($user);
 
     Http::fake([
+        'portal.test/api/sync/pull/locations' => Http::response((function (): array {
+            $payload = [
+                'regions' => [['id' => 1, 'code' => 'R1', 'name' => 'Region 1']],
+                'region_specifics' => [['id' => 2, 'region_id' => 1, 'name' => 'Region Specific']],
+                'area_clusters' => [], 'provinces' => [['id' => 7, 'region_id' => 1, 'name' => 'Pampanga', 'enabled' => true]],
+                'municipalities' => [['id' => 3, 'region_id' => 1, 'province_id' => 7, 'name' => 'Municipality', 'enabled' => true]], 'barangays' => [],
+            ];
+
+            return ['reference_contract_version' => 1, ...$payload, 'reference_counts' => array_map('count', $payload)];
+        })(), 200),
         'portal.test/api/sync/pull/*' => Http::response([
             'companies' => [['id' => 7, 'name' => 'OMMC', 'code' => 'OMMC']],
             'general_categories' => [['id' => 1, 'name' => 'Mixed Outlet', 'sort' => 1]],

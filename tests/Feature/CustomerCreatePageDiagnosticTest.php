@@ -3,6 +3,7 @@
 use App\Filament\Pages\CustomerCreatePage;
 use App\Filament\Pages\CustomerEditPage;
 use App\Filament\Pages\CustomerPage;
+use App\Models\Customer;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -19,8 +20,10 @@ function seedCustomerCreateFixtures(): User
     DB::table('companies')->insert(['id' => 1, 'name' => 'OMMC', 'code' => 'OMMC', 'created_at' => $now, 'updated_at' => $now]);
     DB::table('regions')->insert(['id' => 1, 'code' => 'MM', 'psgc_code' => '130000000', 'name' => 'Metro Manila', 'created_at' => $now, 'updated_at' => $now]);
     DB::table('region_specifics')->insert(['id' => 1, 'region_id' => 1, 'name' => 'NCR', 'sort' => 1, 'created_at' => $now, 'updated_at' => $now]);
-    DB::table('provinces')->insert(['id' => 1, 'region_specific_id' => 1, 'name' => 'Metro Manila', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('provinces')->insert(['id' => 1, 'region_id' => 1, 'region_specific_id' => 1, 'name' => 'Metro Manila', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
     DB::table('municipalities')->insert(['id' => 1, 'region_id' => 1, 'province_id' => 1, 'name' => 'Quezon City', 'sort' => 1, 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('area_clusters')->insert(['id' => 1, 'region_specific_id' => 1, 'code' => 'cluster-1', 'name' => 'Cluster 1', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 1])]);
     DB::table('general_categories')->insert(['id' => 1, 'name' => 'Mixed Outlet', 'priority_visit' => null, 'duration_per_visit' => null, 'sort' => 1, 'created_at' => $now, 'updated_at' => $now]);
 
     return User::factory()->create();
@@ -119,16 +122,12 @@ test('customer add page renders against the complete migrated sqlite schema', fu
         ->assertSee('wire:model="latitude"', false)
         ->assertSee('x-model="$wire.trade.entry_detail"', false)
         ->assertSee('x-on:change="$wire.$set(\'trade.entry_detail\', $event.target.value, true)"', false)
-        ->assertSee('x-model="$wire.company_id"', false)
-        ->assertSee('x-on:change="$wire.$set(\'company_id\', $event.target.value, true)"', false)
-        ->assertSee('x-model="$wire.physical_region_id"', false)
-        ->assertSee('x-on:change="$wire.$set(\'physical_region_id\', $event.target.value, true)"', false)
-        ->assertSee('x-model="$wire.region_specific_id"', false)
-        ->assertSee('x-model="$wire.province_id"', false)
-        ->assertSee('x-on:change="$wire.$set(\'province_id\', $event.target.value, true)"', false)
-        ->assertSee('x-model="$wire.municipality_id"', false)
+        ->assertSee('wire:model.live="company_id"', false)
+        ->assertSee('wire:model.live="physical_region_id"', false)
+        ->assertSee('wire:model.live="region_specific_id"', false)
+        ->assertSee('wire:model.live="province_id"', false)
+        ->assertSee('wire:model.live="municipality_id"', false)
         ->assertDontSee('wire:model.live="trade.entry_detail"', false)
-        ->assertDontSee('wire:model.live="physical_region_id"', false)
         ->assertSee('wire:model="trade.classifications"', false)
         ->assertSee('x-model="$wire.categories.ab.2018"', false)
         ->assertSee('OMMC')
@@ -190,12 +189,18 @@ test('customer add page saves the complete aggregate locally when its immediate 
         ->and($histories->pluck('category_year')->all())->toBe(range(2018, 2026))
         ->and($histories->pluck('category')->unique()->all())->toBe(['AB Loyal']);
 
-    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer'));
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+        && $request['general_category_id'] === 1
+        && $request['region_specific_id'] === 1
+        && $request['province_id'] === 1
+        && $request['municipality_id'] === 1
+        && $request['category_histories'][0]['stream'] === 'ab'
+        && count($request['category_histories']) === 9);
 
     $edit = Livewire::test(CustomerEditPage::class, ['customerId' => $customer->id])
         ->assertOk()
-        ->assertSee('x-model="$wire.company_id"', false)
-        ->assertSee('x-model="$wire.physical_region_id"', false)
+        ->assertSee('wire:model.live="company_id"', false)
+        ->assertSee('wire:model.live="physical_region_id"', false)
         ->assertSee('OMMC')
         ->assertSee('NCR')
         ->assertSee('Quezon City');
@@ -252,6 +257,101 @@ test('customer add page preserves the default current user when adding another a
         ->toBe([$user->id, $otherUser->id]);
 });
 
+test('customer add page pushes Access and PIC using user emails instead of local numeric ids', function () {
+    $user = seedCustomerCreateFixtures();
+    $pic = User::factory()->create(['email' => 'pic@example.test']);
+    $user->forceFill(['api_token' => 'tablet-token'])->save();
+    $this->actingAs($user);
+    Http::fake(['*api/sync/push/customer' => Http::response(['server_id' => 100, 'updated_at' => now()->toISOString()], 200)]);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set(validCustomerCreateState())
+        ->set('person_in_charge_id', $pic->id)
+        ->set('access_user_ids', [$user->id, $pic->id])
+        ->call('saveCustomer')
+        ->assertRedirect(CustomerPage::getUrl());
+
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+        && $request['person_in_charge_email'] === 'pic@example.test'
+        && $request['access_user_emails'] === [$user->email, 'pic@example.test']
+        && ! array_key_exists('person_in_charge_id', $request->data())
+        && ! array_key_exists('access_user_ids', $request->data()));
+});
+
+test('customer add location dependencies keep physical and commercial hierarchies independent', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('region_specifics')->insert(['id' => 2, 'region_id' => 1, 'name' => 'Commercial Region 2', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('area_clusters')->insert(['id' => 2, 'region_specific_id' => 2, 'code' => 'cluster-2', 'name' => 'Cluster 2', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set('physical_region_id', 1)
+        ->set('region_specific_id', 1)
+        ->set('province_id', 1)
+        ->set('municipality_id', 1)
+        ->set('area_cluster_id', 1)
+        ->set('barangay_id', null)
+        ->set('physical_region_id', 2)
+        ->assertSet('province_id', null)
+        ->assertSet('municipality_id', null)
+        ->assertSet('barangay_id', null)
+        ->assertSet('region_specific_id', 1)
+        ->assertSet('area_cluster_id', 1)
+        ->set('physical_region_id', 1)
+        ->set('province_id', 1)
+        ->set('municipality_id', 1)
+        ->set('region_specific_id', 2)
+        ->assertSet('physical_region_id', 1)
+        ->assertSet('province_id', 1)
+        ->assertSet('municipality_id', 1)
+        ->assertSet('area_cluster_id', null);
+
+    expect($component->html())
+        ->toContain('Commercial Region 2')
+        ->toContain('Cluster 2')
+        ->toContain('Metro Manila');
+});
+
+test('an exhausted failed Customer can be corrected in the existing edit page without changing its code or local identity', function () {
+    $user = seedCustomerCreateFixtures();
+    $now = now();
+    DB::table('region_specifics')->insert(['id' => 2, 'region_id' => 1, 'name' => 'Current Commercial Region', 'sort' => 2, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('customers')->insert([
+        'id' => -44,
+        'local_uuid' => '44444444-4444-4444-8444-444444444444',
+        'name' => 'Failed Customer',
+        'unique_id' => 'OMMC0044',
+        'customer_code_reservation_token' => '44444444-4444-4444-8444-444444444445',
+        'company_id' => 1,
+        'region_specific_id' => 1,
+        'is_active' => true,
+        'sync_status' => 'failed',
+        'sync_attempts' => 3,
+        'sync_error' => '422: selected region-specific id is invalid',
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => -44])
+        ->assertSet('region_specific_id', 1)
+        ->assertSee('NCR')
+        ->assertDontSee('historical; unavailable')
+        ->set('region_specific_id', 2)
+        ->set('area_cluster_id', null)
+        ->call('saveCustomer')
+        ->assertHasNoErrors();
+
+    $customer = Customer::findOrFail(-44);
+    expect($customer->region_specific_id)->toBe(2)
+        ->and($customer->unique_id)->toBe('OMMC0044')
+        ->and($customer->customer_code_reservation_token)->toBe('44444444-4444-4444-8444-444444444445')
+        ->and($customer->local_uuid)->toBe('44444444-4444-4444-8444-444444444444')
+        ->and($customer->sync_status)->toBe('failed')
+        ->and($customer->sync_attempts)->toBe(3)
+        ->and(DB::table('sync_states')->where('key', 'customer.manual_retry_ready.-44')->exists())->toBeTrue();
+});
+
 test('customer add page still rejects an invalid access user id', function () {
     $user = seedCustomerCreateFixtures();
     $user->forceFill(['api_token' => 'tablet-token'])->save();
@@ -268,11 +368,137 @@ test('customer add page still rejects an invalid access user id', function () {
     Http::assertNotSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer'));
 });
 
+test('customer add page accepts blank Warehouse Code when MOTIV User is enabled', function () {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set(array_replace_recursive(validCustomerCreateState(), ['trade' => ['motiv_user' => true]]))
+        ->call('saveCustomer')
+        ->assertHasNoErrors();
+
+    $customer = DB::table('customers')->where('name', 'Diagnostic Customer')->first();
+    $profile = DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->first();
+    expect($customer)->not->toBeNull()
+        ->and(json_decode($profile->profile_data, true)['active']['warehouse_code'] ?? null)->toBeNull();
+});
+
+test('customer add page accepts blank Delivery Detail when Delivery Type is Yes', function () {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set(array_replace_recursive(validCustomerCreateState(), ['active' => ['delivery_type' => 'yes']]))
+        ->call('saveCustomer')
+        ->assertHasNoErrors();
+
+    $customer = DB::table('customers')->where('name', 'Diagnostic Customer')->first();
+    $profile = DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->first();
+    expect($customer)->not->toBeNull()
+        ->and(json_decode($profile->profile_data, true)['active']['delivery_type'])->toBe('yes')
+        ->and(json_decode($profile->profile_data, true)['active']['delivery_detail'] ?? null)->toBeNull();
+});
+
+test('customer add validates supplied Warehouse Code and Delivery Detail values without conditional requiredness', function () {
+    $user = seedCustomerCreateFixtures();
+    $user->forceFill(['api_token' => 'tablet-token'])->save();
+    $this->actingAs($user);
+    Http::fake(['*' => Http::response(['server_id' => 100, 'updated_at' => now()->toISOString()], 200)]);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set(array_replace_recursive(validCustomerCreateState(), [
+            'trade' => ['motiv_user' => true],
+            'active' => ['warehouse_code' => 'WH-123', 'delivery_type' => 'yes', 'delivery_detail' => 'own_delivery'],
+        ]))
+        ->call('saveCustomer')
+        ->assertHasNoErrors();
+
+    $customer = DB::table('customers')->where('name', 'Diagnostic Customer')->first();
+    $active = json_decode(DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->value('profile_data'), true)['active'];
+    expect($active['warehouse_code'])->toBe('WH-123')
+        ->and($active['delivery_detail'])->toBe('own_delivery');
+
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+        && data_get($request->data(), 'profile_data.active.warehouse_code') === 'WH-123'
+        && data_get($request->data(), 'profile_data.active.delivery_detail') === 'own_delivery');
+});
+
+test('customer add rejects malformed populated Warehouse Code and Delivery Detail values', function () {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set(array_replace_recursive(validCustomerCreateState(), ['active' => ['delivery_detail' => 'invalid']]))
+        ->call('saveCustomer')
+        ->assertHasErrors(['active.delivery_detail']);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set(array_replace_recursive(validCustomerCreateState(), ['active' => ['warehouse_code' => str_repeat('x', 256)]]))
+        ->call('saveCustomer')
+        ->assertHasErrors(['active.warehouse_code']);
+
+    expect(DB::table('customers')->where('name', 'Diagnostic Customer')->exists())->toBeFalse();
+});
+
+test('customer add minimum Name and Company creation supports every mapped company profile including CAR_CLUBS', function () {
+    $user = seedCustomerCreateFixtures();
+    $companies = [
+        [2, 'LAST MILE', 'LAST_MILE'], [3, 'FLEET', 'FLEET'], [4, 'OE', 'OE'], [5, 'IB', 'IB'], [6, 'CAR CLUBS', 'CAR_CLUBS'],
+    ];
+    foreach ($companies as [$id, $name, $code]) {
+        DB::table('companies')->insert(['id' => $id, 'name' => $name, 'code' => $code, 'created_at' => now(), 'updated_at' => now()]);
+    }
+    $this->actingAs($user);
+    Http::fake(['*' => Http::response(['message' => 'offline'], 503)]);
+
+    foreach ([1, 2, 3, 4, 5, 6] as $companyId) {
+        Livewire::test(CustomerCreatePage::class)
+            ->set('name', "Minimal Customer {$companyId}")
+            ->set('company_id', $companyId)
+            ->call('saveCustomer')
+            ->assertHasNoErrors();
+    }
+
+    expect(DB::table('customers')->whereIn('name', collect(range(1, 6))->map(fn ($id) => "Minimal Customer {$id}")->all())->count())->toBe(6)
+        ->and(DB::table('customer_trade_profiles')->whereIn('customer_id', DB::table('customers')->whereIn('name', collect(range(1, 6))->map(fn ($id) => "Minimal Customer {$id}")->all())->select('id'))->count())->toBe(6);
+});
+
+test('switching company profile clears validation state and does not persist stale outlet values', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('companies')->insert(['id' => 2, 'name' => 'FLEET', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+    Http::fake();
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set('name', 'Fleet after switch')
+        ->set('company_id', 1)
+        ->set('active.delivery_detail', 'invalid')
+        ->call('saveCustomer')
+        ->assertHasErrors(['active.delivery_detail'])
+        ->set('company_id', 2)
+        ->assertSet('active', [])
+        ->assertHasNoErrors()
+        ->set('name', 'Fleet after switch')
+        ->call('saveCustomer')
+        ->assertHasNoErrors();
+
+    $customer = DB::table('customers')->where('name', 'Fleet after switch')->first();
+    $profile = DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->first();
+    expect($profile->profile_type)->toBe('fleet')
+        ->and(json_decode($profile->profile_data, true)['active'] ?? [])->toBe([]);
+});
+
 test('customer add page renders the scoped customer-create-form styling hook', function () {
     $user = seedCustomerCreateFixtures();
     $this->actingAs($user);
 
-    Livewire::test(CustomerCreatePage::class)
+    $component = Livewire::test(CustomerCreatePage::class)
         ->assertOk()
         ->assertSee('customer-create-form', false);
+
+    expect(substr_count($component->html(), '<form '))->toBe(1)
+        ->and(substr_count($component->html(), '</form>'))->toBe(1);
 });

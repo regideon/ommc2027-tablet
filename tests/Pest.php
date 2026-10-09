@@ -48,3 +48,14 @@ function something()
 {
     // ..
 }
+
+function emptyLocationReferenceSnapshot(): array
+{
+    $sections = array_fill_keys(['regions', 'region_specifics', 'area_clusters', 'provinces', 'municipalities', 'barangays'], []);
+
+    return [
+        'reference_contract_version' => 1,
+        ...$sections,
+        'reference_counts' => array_map('count', $sections),
+    ];
+}

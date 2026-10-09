@@ -98,7 +98,9 @@
                     <button wire:click="closeCustomer" @click="unlock()" class="w-8 h-8 rounded-full bg-[#edeef0] flex items-center justify-center hover:bg-[#e7e8ea] transition-colors shrink-0">
                         <span class="material-symbols-outlined text-[#434654] text-lg">close</span>
                     </button>
-                    {{-- <a href="{{ \App\Filament\Pages\CustomerEditPage::getUrl(['customerId' => $selectedCustomer->id]) }}" class="fi-btn fi-color-primary">Edit</a> --}}
+                    @if(($customerDetail['customer']['sync_status'] ?? null) === 'failed')
+                        <a href="{{ \App\Filament\Pages\CustomerEditPage::getUrl(['customerId' => $selectedCustomer->id]) }}" class="text-xs font-bold text-[#890f00]">Correct Customer</a>
+                    @endif
                 </div>
 
                 <div class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 space-y-6" style="-webkit-overflow-scrolling: touch;">
@@ -122,7 +124,16 @@
                             @if($customerDetail['customer']['competitor_volume'] ?? null)<p><span class="font-bold">Competitor Volume:</span> {{ $customerDetail['customer']['competitor_volume'] }}</p>@endif
                             <p><span class="font-bold">Status:</span> {{ ($customerDetail['customer']['is_active'] ?? false) ? 'Active' : 'Inactive' }}</p>
                             <p><span class="font-bold">Sync:</span> {{ $customerDetail['customer']['sync_status'] ?? 'synced' }}@if($customerDetail['customer']['server_id'] ?? null) (Server ID {{ $customerDetail['customer']['server_id'] }})@endif</p>
-                            @if($customerDetail['customer']['sync_error'] ?? null)<p class="text-danger-600"><span class="font-bold">Sync Error:</span> {{ $customerDetail['customer']['sync_error'] }}</p>@endif
+                            @if($customerDetail['customer']['sync_error'] ?? null)<p class="text-danger-600"><span class="font-bold">{{ ($customerDetail['customer']['sync_status'] ?? null) === 'synced' ? 'Previous push error (resolved):' : 'Sync Error:' }}</span> {{ $customerDetail['customer']['sync_error'] }}</p>@endif
+                            @foreach(($customerDetail['customer']['previous_push_errors'] ?? []) as $previousPushError)
+                                <p class="text-xs text-[#737685]"><span class="font-bold">Earlier push attempt {{ $previousPushError['attempt'] ?? '' }}:</span> {{ $previousPushError['message'] ?? '' }}</p>
+                            @endforeach
+                            @if(($customerDetail['customer']['sync_status'] ?? null) === 'failed' && (int) ($customerDetail['customer']['sync_attempts'] ?? 0) >= 3)
+                                <p class="text-xs text-[#737685]">Automatic retries are exhausted. Correct and save a value before making one explicit retry.</p>
+                                <button type="button" wire:click="retryCustomerPush({{ $selectedCustomer->id }})" wire:loading.attr="disabled" class="fi-btn fi-btn-size-sm fi-btn-color-primary" @disabled($retryingCustomerId === $selectedCustomer->id)>
+                                    {{ $retryingCustomerId === $selectedCustomer->id ? 'Retrying…' : 'Retry Customer' }}
+                                </button>
+                            @endif
                         </div>
                     </div>
 

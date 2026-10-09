@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Models\Customer;
 use App\Services\CustomerProfileFormService;
+use App\Services\SyncService;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -36,6 +37,16 @@ class CustomerEditPage extends CustomerCreatePage
 
     public function saveCustomer(): void
     {
+        $customerBefore = Customer::with(['tradeProfile', 'categoryHistories', 'categoryEvents', 'users', 'personInCharge'])->findOrFail($this->customerId);
+        abort_if($customerBefore->sync_status === 'syncing', 409, 'This Customer is currently being pushed. Wait for the result before editing.');
+        if ((int) $this->company_id !== (int) $customerBefore->company_id) {
+            $this->addError('company_id', 'Company cannot be changed while correcting a failed Customer.');
+
+            return;
+        }
+        $wasFailed = $customerBefore->sync_status === 'failed';
+        $beforeFingerprint = app(SyncService::class)->customerPayloadFingerprint($customerBefore);
+
         $profileType = $this->profileType();
         abort_unless($profileType, 422, 'The selected Company has no profile mapping.');
 
@@ -74,12 +85,14 @@ class CustomerEditPage extends CustomerCreatePage
             foreach ($this->categories[$stream] ?? [] as $category) {
                 if ($category !== null && $category !== '' && ! array_key_exists($category, $this->categoryOptions($stream))) {
                     $this->addError('categories', "Every {$stream} annual category must be selected from the allowed options.");
+
                     return;
                 }
             }
         }
-        DB::transaction(function () use ($profileType): void {
+        DB::transaction(function () use ($profileType, $wasFailed): void {
             $customer = Customer::with(['company', 'tradeProfile', 'categoryHistories'])->findOrFail($this->customerId);
+            abort_if($customer->sync_status === 'syncing', 409, 'This Customer is currently being pushed. Wait for the result before editing.');
             $oldProfile = $customer->tradeProfile?->profile_type ?: CustomerProfileFormService::profileForCompany($customer->company_id);
             if ($oldProfile && $oldProfile !== $profileType) {
                 CustomerProfileFormService::archiveProfile($customer, $profileType, auth()->id());
@@ -87,7 +100,7 @@ class CustomerEditPage extends CustomerCreatePage
 
             CustomerProfileFormService::saveAggregate($customer, [
                 'name' => $this->name,
-                'unique_id' => $this->unique_id,
+                'unique_id' => $customer->unique_id,
                 'company_id' => $this->company_id,
                 'region_specific_id' => $this->region_specific_id,
                 'municipality_id' => $this->municipality_id,
@@ -111,10 +124,28 @@ class CustomerEditPage extends CustomerCreatePage
                 'categories' => $this->categories,
                 'access_user_ids' => $this->access_user_ids,
             ], $profileType);
-            $customer->update(['sync_status' => 'pending', 'sync_error' => null]);
+            $customer->update([
+                'sync_status' => $wasFailed ? 'failed' : 'pending',
+                'sync_error' => $wasFailed ? $customer->sync_error : null,
+            ]);
         });
 
-        Notification::make()->title('Customer updated offline')->success()->send();
+        if ($wasFailed) {
+            $correctedCustomer = Customer::with(['tradeProfile', 'categoryHistories', 'categoryEvents', 'users', 'personInCharge'])->findOrFail($this->customerId);
+            $correctedFingerprint = app(SyncService::class)->customerPayloadFingerprint($correctedCustomer);
+            $readyKey = 'customer.manual_retry_ready.'.$this->customerId;
+
+            if (! hash_equals($beforeFingerprint, $correctedFingerprint)) {
+                DB::table('sync_states')->updateOrInsert(
+                    ['key' => $readyKey],
+                    ['value' => json_encode($correctedFingerprint), 'created_at' => now(), 'updated_at' => now()],
+                );
+            } else {
+                DB::table('sync_states')->where('key', $readyKey)->delete();
+            }
+        }
+
+        Notification::make()->title($wasFailed ? 'Correction saved. Use Retry Customer to make one push attempt.' : 'Customer updated offline')->success()->send();
         $this->redirect(CustomerPage::getUrl());
     }
 }
