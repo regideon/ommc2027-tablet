@@ -14,6 +14,8 @@
         running: false,
         failed: false,
         finished: false,
+        partial: false,
+        locationRefreshFailed: false,
         pulled: 0,
         total: null,
         message: '',
@@ -24,13 +26,15 @@
             if (this.running) return;
             if (!navigator.onLine) {
                 this.failed = true;
-                this.message = 'You are offline. Connect to the internet to pull customers.';
+                this.message = 'Customer Pull failed. Please try again.';
                 return;
             }
 
             this.running = true;
             this.failed = false;
             this.finished = false;
+            this.partial = false;
+            this.locationRefreshFailed = false;
             this.message = 'Starting customer pull…';
 
             try {
@@ -38,24 +42,32 @@
                     const step = await $wire.pullCustomersStep();
                     this.pulled = step.pulled;
                     this.total = step.total;
-                    this.message = step.message;
+                    this.locationRefreshFailed = this.locationRefreshFailed || !!step.location_refresh_failed;
+                    this.partial = this.locationRefreshFailed;
 
                     if (!step.success) {
                         this.failed = true;
+                        this.message = 'Customer Pull failed. Please try again.';
                         break;
                     }
 
                     if (step.done) {
+                        const changed = (step.inserted || 0) + (step.updated || 0);
+                        this.message = changed === 0
+                            ? 'Customers are up to date.'
+                            : 'Customer Pull completed successfully.';
                         this.finished = true;
                         setTimeout(() => this.finished = false, 4000);
                         $dispatch('customers-pulled');
                         @if($refreshOnDone) await $wire.$refresh(); @endif
                         break;
                     }
+
+                    this.message = 'Pulling Customers…';
                 }
             } catch (e) {
                 this.failed = true;
-                this.message = 'Customer pull was interrupted. Tap Pull Customers to resume.';
+                this.message = 'Customer Pull failed. Please try again.';
             } finally {
                 this.running = false;
             }
@@ -81,7 +93,7 @@
 
     <template x-if="running || failed || finished">
         <div class="mt-2 rounded-2xl px-4 py-3 text-xs"
-             :class="failed ? 'bg-red-50 text-red-700' : 'bg-[#f3f4f6] text-[#434654]'">
+             :class="failed ? 'bg-red-50 text-red-700' : (partial ? 'bg-amber-50 text-amber-800' : 'bg-[#f3f4f6] text-[#434654]')">
             <p class="font-semibold" x-text="message"></p>
             <template x-if="running && percent !== null">
                 <div class="mt-2">

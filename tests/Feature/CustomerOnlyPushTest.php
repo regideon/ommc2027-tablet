@@ -377,3 +377,53 @@ test('partial manual push keeps Push Customers red while retryable customer work
         ->call('pushCustomers')
         ->assertSee('text-red-500 hover:text-red-600', false);
 });
+
+test('successful push stores the Portal ID and synced state while retaining a large negative local key', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    $localId = -7_166_839_558_920_329_640;
+    $localUuid = (string) Str::uuid();
+    DB::table('customers')->insert([
+        'id' => $localId,
+        'local_uuid' => $localUuid,
+        'name' => 'Negative Local Key Customer',
+        'is_active' => true,
+        'sync_status' => 'pending',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    Http::fake(['portal.test/api/sync/push/customer' => Http::response([
+        'server_id' => 98003,
+        'local_uuid' => $localUuid,
+        'updated_at' => now()->toISOString(),
+    ])]);
+
+    $result = app(SyncService::class)->pushCustomer($localId);
+    $saved = DB::table('customers')->where('local_uuid', $localUuid)->first();
+
+    expect($result->success)->toBeTrue()
+        ->and($saved->id)->toBe($localId)
+        ->and($saved->server_id)->toBe(98003)
+        ->and($saved->sync_status)->toBe('synced');
+
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+        && $request['local_uuid'] === $localUuid
+        && $request['server_id'] === null
+        && $request['sync_intent'] === 'create');
+});
+
+test('a successful HTTP response without a valid Portal ID is never marked synced', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    $localId = insertPushCustomer('Missing Portal ID Customer');
+    Http::fake(['portal.test/api/sync/push/customer' => Http::response(['message' => 'Malformed acknowledgment'], 200)]);
+
+    $result = app(SyncService::class)->pushCustomer($localId);
+    $saved = DB::table('customers')->where('id', $localId)->first();
+
+    expect($result->success)->toBeFalse()
+        ->and($saved->server_id)->toBeNull()
+        ->and($saved->sync_status)->toBe('failed');
+});

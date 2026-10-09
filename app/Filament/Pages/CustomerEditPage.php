@@ -15,7 +15,7 @@ class CustomerEditPage extends CustomerCreatePage
 
     protected static ?string $title = 'Edit Customer';
 
-    public int $customerId;
+    public string $customerId;
 
     public function mount(?int $customerId = null): void
     {
@@ -32,7 +32,7 @@ class CustomerEditPage extends CustomerCreatePage
         $this->trade = array_merge($this->trade, $state['trade'] ?? []);
         $this->active = $state['active'] ?? [];
         $this->categories = $state['categories'] ?? [];
-        $this->customerId = $customer->id;
+        $this->customerId = (string) $customer->id;
     }
 
     public function saveCustomer(): void
@@ -77,10 +77,6 @@ class CustomerEditPage extends CustomerCreatePage
             return;
         }
 
-        if (! $this->validateScopedPortalRules($profileType)) {
-            return;
-        }
-
         foreach (CustomerProfileFormService::categoryStreams($profileType) as $stream) {
             foreach ($this->categories[$stream] ?? [] as $category) {
                 if ($category !== null && $category !== '' && ! array_key_exists($category, $this->categoryOptions($stream))) {
@@ -118,7 +114,7 @@ class CustomerEditPage extends CustomerCreatePage
                 'business_mobile_number' => $this->business_mobile_number,
                 'date_established' => $this->date_established,
                 'is_active' => $this->is_active,
-                'person_in_charge_id' => $profileType === 'outlet' ? $this->person_in_charge_id : null,
+                'person_in_charge_id' => $profileType === 'outlet' ? $this->person_in_charge_id : $customer->person_in_charge_id,
                 'trade' => $this->trade,
                 'active' => $this->active,
                 'categories' => $this->categories,

@@ -5,6 +5,7 @@ use App\Filament\Pages\CustomerEditPage;
 use App\Filament\Pages\CustomerPage;
 use App\Models\Customer;
 use App\Models\User;
+use App\Services\SyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -129,7 +130,8 @@ test('customer add page renders against the complete migrated sqlite schema', fu
         ->assertSee('wire:model.live="municipality_id"', false)
         ->assertDontSee('wire:model.live="trade.entry_detail"', false)
         ->assertSee('wire:model="trade.classifications"', false)
-        ->assertSee('x-model="$wire.categories.ab.2018"', false)
+        ->assertSee('x-model="$wire.categories[\'ab\'][2018]"', false)
+        ->assertDontSee('x-model="$wire.categories.ab.2018"', false)
         ->assertSee('OMMC')
         ->assertSee('NCR')
         ->assertSee('Metro Manila');
@@ -150,6 +152,86 @@ test('customer add page renders against the complete migrated sqlite schema', fu
     foreach (range(2018, 2026) as $year) {
         expect($state[$year])->toBeNull();
     }
+});
+
+test('Fleet annual category bindings save, push, edit, and push updates without losing other years', function () {
+    $user = seedCustomerCreateFixtures();
+    $user->forceFill(['api_token' => 'fleet-test-token'])->save();
+    DB::table('companies')->insert(['id' => 4, 'name' => 'Fleet', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
+    config(['sync.server_url' => 'http://portal.test']);
+    $this->actingAs($user);
+
+    Http::fake(function ($request) {
+        if (str_ends_with($request->url(), '/api/sync/reserve-customer-code')) {
+            return Http::response(['token' => 'fleet-reservation-token', 'code' => 'FLEET90001']);
+        }
+
+        return Http::response([
+            'server_id' => 99001,
+            'local_uuid' => $request['local_uuid'],
+            'unique_id' => 'FLEET90001',
+            'updated_at' => now()->toISOString(),
+        ]);
+    });
+
+    $add = Livewire::test(CustomerCreatePage::class)
+        ->set('company_id', 4)
+        ->assertSee('FLEET Annual Categories')
+        ->assertSee('x-model="$wire.categories[\'fleet\'][2018]"', false)
+        ->assertSee('x-model="$wire.categories[\'fleet\'][2026]"', false)
+        ->assertDontSee('x-model="$wire.categories.fleet.2018"', false)
+        ->set('name', 'Fleet Annual Category Contract')
+        ->set('categories.fleet.2018', 'Motolite Only')
+        ->set('categories.fleet.2026', 'Mixed')
+        ->call('saveCustomer')
+        ->assertRedirect(CustomerPage::getUrl());
+
+    $customer = DB::table('customers')->where('name', 'Fleet Annual Category Contract')->first();
+    $histories = DB::table('customer_category_histories')->where('customer_id', $customer->id)->orderBy('category_year')->get();
+
+    expect($histories->map(fn ($row): array => [$row->profile_type, $row->stream, (int) $row->category_year, $row->category])->all())
+        ->toBe([['fleet', 'fleet', 2018, 'Motolite Only'], ['fleet', 'fleet', 2026, 'Mixed']])
+        ->and($customer->server_id)->toBe(99001)
+        ->and($customer->sync_status)->toBe('synced');
+
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+        && collect($request['category_histories'])->pluck('category_year')->all() === [2018, 2026]
+        && collect($request['category_histories'])->pluck('stream')->unique()->all() === ['fleet']);
+
+    $edit = Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customer->id])
+        ->assertSee('x-model="$wire.categories[\'fleet\'][2018]"', false)
+        ->assertSet('categories.fleet.2018', 'Motolite Only')
+        ->assertSet('categories.fleet.2026', 'Mixed')
+        ->set('categories.fleet.2026', 'Competitor')
+        ->call('saveCustomer')
+        ->assertRedirect(CustomerPage::getUrl());
+
+    expect(DB::table('customer_category_histories')->where('customer_id', $customer->id)->where('category_year', 2018)->value('category'))->toBe('Motolite Only')
+        ->and(DB::table('customer_category_histories')->where('customer_id', $customer->id)->where('category_year', 2026)->value('category'))->toBe('Competitor');
+
+    $localId = (int) $customer->id;
+    app(SyncService::class)->pushCustomer($localId);
+
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+        && $request['sync_intent'] === 'update'
+        && collect($request['category_histories'])->map(fn (array $row): array => [(int) $row['category_year'], $row['category']])->all() === [[2018, 'Motolite Only'], [2026, 'Competitor']]);
+});
+
+test('Fleet Customer with intentionally blank annual categories persists no fabricated history', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('companies')->insert(['id' => 4, 'name' => 'Fleet', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+    Http::fake();
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('company_id', 4)
+        ->assertSee('x-model="$wire.categories[\'fleet\'][2018]"', false)
+        ->set('name', 'Fleet Empty Category Contract')
+        ->call('saveCustomer')
+        ->assertRedirect(CustomerPage::getUrl());
+
+    $customer = DB::table('customers')->where('name', 'Fleet Empty Category Contract')->first();
+    expect(DB::table('customer_category_histories')->where('customer_id', $customer->id)->count())->toBe(0);
 });
 
 test('customer add page saves the complete aggregate locally when its immediate push fails', function () {
@@ -350,6 +432,38 @@ test('an exhausted failed Customer can be corrected in the existing edit page wi
         ->and($customer->sync_status)->toBe('failed')
         ->and($customer->sync_attempts)->toBe(3)
         ->and(DB::table('sync_states')->where('key', 'customer.manual_retry_ready.-44')->exists())->toBeTrue();
+});
+
+test('editing a non-outlet Customer accepts Access users without RSM and preserves its hidden PIC relationship', function () {
+    $viewer = seedCustomerCreateFixtures();
+    $now = now();
+    DB::table('companies')->insert(['id' => 4, 'name' => 'FLEET', 'code' => 'FLEET', 'created_at' => $now, 'updated_at' => $now]);
+    $access = User::factory()->create(['rsm_id' => null]);
+    $pic = User::factory()->create();
+    $customer = new Customer;
+    $customer->id = -45;
+    $customer->fill([
+        'name' => 'Fleet edit customer',
+        'company_id' => 4,
+        'person_in_charge_id' => $pic->id,
+        'is_active' => true,
+        'sync_status' => 'synced',
+    ]);
+    $customer->save();
+    $customer->tradeProfile()->create(['profile_type' => 'fleet', 'profile_data' => ['active' => []]]);
+    $customer->users()->attach($access->id);
+    $this->actingAs($viewer);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => -45])
+        ->set('name', 'Edited Fleet customer')
+        ->call('saveCustomer')
+        ->assertHasNoErrors()
+        ->assertRedirect(CustomerPage::getUrl());
+
+    expect(Customer::findOrFail(-45)->person_in_charge_id)->toBe($pic->id)
+        ->and(DB::table('customer_user')->where('customer_id', -45)->where('user_id', $access->id)->exists())->toBeTrue()
+        ->and(DB::table('customers')->where('id', -45)->value('name'))->toBe('Edited Fleet customer')
+        ->and($access->fresh()->rsm_id)->toBeNull();
 });
 
 test('customer add page still rejects an invalid access user id', function () {

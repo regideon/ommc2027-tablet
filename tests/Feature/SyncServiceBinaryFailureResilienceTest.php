@@ -7,8 +7,8 @@ use App\Models\Salescall;
 use App\Models\SalescallImage;
 use App\Models\SubCategory;
 use App\Models\User;
-use App\Services\SyncService;
 use App\Services\SyncResult;
+use App\Services\SyncService;
 use App\Services\TabletS3UploadService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -251,7 +251,7 @@ test('repeated retry after image s3 success does not duplicate s3 upload', funct
         ->and(count(Storage::disk('s3')->allFiles()))->toBe(1);
 });
 
-test('top level livewire sync action always returns normally when sync service throws', function () {
+test('top level Livewire sync action reports failure when the sync service throws', function () {
     $user = User::factory()->create();
     $this->actingAs($user);
 
@@ -267,5 +267,5 @@ test('top level livewire sync action always returns normally when sync service t
 
     Livewire::test(SalescallPage::class)
         ->call('syncNow')
-        ->assertDispatched('sync-done');
+        ->assertDispatched('sync-done', fn (string $event, array $params): bool => ($params['success'] ?? null) === false);
 });

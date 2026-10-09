@@ -867,7 +867,7 @@ class SalescallPage extends Page
             'id' => $salescall->id,
             'seq' => $salescall->id,
             'local_uuid' => $salescall->local_uuid,
-            'customer_id' => $customer->id,
+            'customer_id' => (string) $customer->id,
             'name' => $customer->name ?? '—',
             'unique_id' => $customer->unique_id ?? '',
             'location' => $customer->address ?? '',
@@ -1524,7 +1524,7 @@ class SalescallPage extends Page
         try {
             $result = $this->safePushSync();
         } finally {
-            $this->dispatch('sync-done');
+            $this->dispatch('sync-done', success: $result?->success ?? false);
         }
 
         if ($result->success) {
@@ -1601,7 +1601,7 @@ class SalescallPage extends Page
                     'seq' => $call->id,
                     'local_uuid' => $call->local_uuid,
                     'server_id' => $call->server_id,
-                    'customer_id' => $call->customer_id,
+                    'customer_id' => (string) $call->customer_id,
                     'name' => $call->customer->name ?? '—',
                     'unique_id' => $call->customer->unique_id ?? '',
                     'location' => $call->customer->address ?? '',
@@ -1636,7 +1636,15 @@ class SalescallPage extends Page
             'categoriesJson' => Category::orderBy('name')->get(['id', 'name'])->toJson(),
             'subCategoriesJson' => SubCategory::orderBy('name')->get(['id', 'category_id', 'name', 'with_form'])->toJson(),
             'customersJson' => Customer::where('is_active', true)->orderBy('name')
-                ->get(['id', 'name', 'unique_id', 'address', 'latitude', 'longitude'])->toJson(),
+                ->get(['id', 'name', 'unique_id', 'address', 'latitude', 'longitude'])
+                ->map(fn (Customer $customer): array => [
+                    'id' => (string) $customer->id,
+                    'name' => $customer->name,
+                    'unique_id' => $customer->unique_id,
+                    'address' => $customer->address,
+                    'latitude' => $customer->latitude,
+                    'longitude' => $customer->longitude,
+                ])->toJson(),
             'canAddSalescall' => auth()->user()?->hasAnyRole(['drm', 'rsm']) ?? false,
             'expenseTypes' => ExpenseType::query()
                 ->availableForNewEntry()

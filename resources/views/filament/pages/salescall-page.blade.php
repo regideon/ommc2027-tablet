@@ -849,7 +849,7 @@
             checkedIn = false;
         }
     "
-    @sync-done.window="syncStatus = 'success'; setTimeout(() => syncStatus = null, 2500)"
+    @sync-done.window="syncStatus = $event.detail.success ? 'success' : 'failed'; setTimeout(() => syncStatus = null, 4000)"
 
     class="flex flex-col bg-gray-50"
     style="height: calc(100dvh - 5rem); overflow: hidden;"
@@ -889,6 +889,13 @@
                 <div class="text-center">
                     <p class="font-black text-xl text-[#191c1e]">All Synced!</p>
                     <p class="text-sm text-[#737685] mt-1">Data uploaded successfully</p>
+                </div>
+            </div>
+            <div x-show="syncStatus === 'failed'" class="flex flex-col items-center gap-4">
+                <span class="material-symbols-outlined mat-fill text-red-500" style="font-size: 64px;">cloud_off</span>
+                <div class="text-center">
+                    <p class="font-black text-xl text-[#191c1e]">Sync failed</p>
+                    <p class="text-sm text-[#737685] mt-1">Pending data remains saved locally. Review the error and retry.</p>
                 </div>
             </div>
         </div>

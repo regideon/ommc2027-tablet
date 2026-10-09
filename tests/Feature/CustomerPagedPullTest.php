@@ -7,6 +7,8 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role;
 
@@ -16,6 +18,7 @@ beforeEach(function () {
     config(['sync.server_url' => 'http://portal.test']);
 
     $this->user = User::factory()->create(['api_token' => 'test-token']);
+    DB::table('companies')->insert(['id' => 1, 'name' => 'OMMC', 'code' => 'OMMC', 'created_at' => now(), 'updated_at' => now()]);
     $this->actingAs($this->user);
 
     $this->requests = [];
@@ -31,6 +34,7 @@ beforeEach(function () {
 
     $this->customer = fn (int $id, ?string $name = null): array => [
         'id' => $id,
+        'company_id' => 1,
         'name' => $name ?? "Customer {$id}",
         'is_active' => true,
         'updated_at' => '2026-10-05T00:00:00.000000Z',
@@ -100,7 +104,8 @@ test('a first customer pull fetches locations, pages through customers and recor
     $steps = ($this->runToCompletion)();
 
     expect(collect($steps)->pluck('success')->all())->toBe([true, true, true])
-        ->and(end($steps))->toMatchArray(['done' => true, 'pulled' => 3, 'total' => 3, 'message' => 'Pulled 3 customers.'])
+        ->and(end($steps))->toMatchArray(['done' => true, 'pulled' => 3, 'returned' => 3, 'total' => 3])
+        ->and(end($steps)['message'])->toContain('3 returned; 3 inserted, 0 changed, 0 unchanged, 0 rejected')
         ->and(collect($this->requests)->pluck('path')->all())->toBe(['/api/sync/pull/locations', '/api/sync/pull/customers', '/api/sync/pull/customers'])
         ->and($this->requests[1]['query'])->toBe(['after_id' => '0', 'limit' => '500'])
         ->and(DB::table('municipalities')->count())->toBe(1)
@@ -112,6 +117,126 @@ test('a first customer pull fetches locations, pages through customers and recor
         ->and(DB::table('customer_scopes')->where('user_id', $this->user->id)->orderBy('customer_id')->pluck('customer_id')->all())
         ->toBe(DB::table('customers')->whereIn('server_id', [1, 2, 3, 60])->orderBy('id')->pluck('id')->all())
         ->and(app(SyncService::class)->customerPullPending())->toBeFalse();
+});
+
+test('Customer Pull inserts new Portal Customers and applies changed rows across keyset pages', function () {
+    DB::table('customers')->insert([
+        ['id' => -91002, 'server_id' => 91002, 'company_id' => 1, 'name' => 'Before update', 'is_active' => true, 'sync_status' => 'synced'],
+        ['id' => -91003, 'server_id' => 91003, 'company_id' => 1, 'name' => 'Unchanged customer', 'is_active' => true, 'sync_status' => 'synced'],
+    ]);
+    DB::table('sync_states')->insert([
+        'key' => 'customers.pulled_through.'.$this->user->id,
+        'value' => json_encode('2026-10-09T00:00:00.000000Z'),
+    ]);
+
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [($this->customer)(91001, 'New Portal Customer')],
+            'next_after_id' => 91001,
+            'total' => 3,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => null,
+        ]),
+        91001 => Http::response([
+            'customers' => [
+                ($this->customer)(91002, 'Updated from Portal'),
+                ($this->customer)(91003, 'Unchanged customer'),
+            ],
+            'next_after_id' => null,
+            'total' => null,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [91001, 91002, 91003],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+    $final = end($steps);
+
+    expect($final)->toMatchArray([
+        'success' => true,
+        'done' => true,
+        'returned' => 3,
+        'inserted' => 1,
+        'updated' => 1,
+        'unchanged' => 1,
+        'rejected' => 0,
+    ])->and($final['message'])->toContain('1 inserted, 1 changed, 1 unchanged, 0 rejected')
+        ->and($this->requests[1]['query'])->toMatchArray(['after_id' => '0', 'updated_since' => '2026-10-09T00:00:00.000000Z'])
+        ->and($this->requests[2]['query'])->toMatchArray(['after_id' => '91001'])
+        ->and(DB::table('customers')->where('server_id', 91001)->count())->toBe(1)
+        ->and(DB::table('customers')->where('server_id', 91001)->value('name'))->toBe('New Portal Customer')
+        ->and(DB::table('customers')->where('server_id', 91002)->value('name'))->toBe('Updated from Portal')
+        ->and(DB::table('customers')->where('server_id', 91003)->value('name'))->toBe('Unchanged customer');
+});
+
+test('a successful empty Customer Pull reports success with zero diagnostics counts', function () {
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [],
+            'next_after_id' => null,
+            'total' => 0,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+    $final = end($steps);
+
+    expect($final)->toMatchArray([
+        'success' => true,
+        'done' => true,
+        'customer_pull_succeeded' => true,
+        'returned' => 0,
+        'inserted' => 0,
+        'updated' => 0,
+        'unchanged' => 0,
+        'rejected' => 0,
+    ]);
+});
+
+test('zero changed Customer count means returned Portal data matched local values', function () {
+    $portalCustomer = ($this->customer)(91004, 'Already current');
+    $portalCustomer['local_uuid'] = (string) Str::uuid();
+
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [91004],
+        ]),
+    ]);
+
+    ($this->runToCompletion)();
+    $this->requests = [];
+    DB::table('sync_states')->where('key', 'customers.pulled_through.'.$this->user->id)->update([
+        'value' => json_encode('2026-10-10T01:00:00.000000Z'),
+    ]);
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-10T02:00:00.000000Z',
+            'scope_ids' => [91004],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+    $final = end($steps);
+
+    expect($final)->toMatchArray([
+        'success' => true,
+        'done' => true,
+        'returned' => 1,
+        'inserted' => 0,
+        'updated' => 0,
+        'unchanged' => 1,
+        'rejected' => 0,
+    ])->and($final['message'])->toContain('1 returned; 0 inserted, 0 changed, 1 unchanged, 0 rejected')
+        ->and(DB::table('customers')->where('server_id', 91004)->count())->toBe(1);
 });
 
 test('a later customer pull asks only for changes and fetches customers that re-entered scope', function () {
@@ -135,7 +260,8 @@ test('a later customer pull asks only for changes and fetches customers that re-
 
     $steps = ($this->runToCompletion)();
 
-    expect(end($steps))->toMatchArray(['done' => true, 'pulled' => 2, 'message' => 'Customers up to date (2 updated).'])
+    expect(end($steps))->toMatchArray(['done' => true, 'pulled' => 2, 'returned' => 2, 'updated' => 2])
+        ->and(end($steps)['message'])->toContain('2 changed')
         ->and(collect($this->requests)->pluck('path')->all())->toBe(['/api/sync/pull/locations', '/api/sync/pull/customers', '/api/sync/pull/customers'])
         ->and($this->requests[1]['query'])->toMatchArray(['updated_since' => '2026-10-04T00:00:00.000000Z'])
         ->and($this->requests[2]['query'])->toBe(['ids' => '2'])
@@ -196,7 +322,7 @@ test('an interrupted customer pull resumes from the page that failed', function 
 
     expect($locations)->toMatchArray(['success' => true, 'done' => false, 'pulled' => 0])
         ->and($first)->toMatchArray(['success' => true, 'done' => false, 'pulled' => 1])
-        ->and($failed)->toMatchArray(['success' => false, 'done' => false, 'pulled' => 1, 'message' => 'Pull failed (500).'])
+        ->and($failed)->toMatchArray(['success' => false, 'done' => false, 'pulled' => 1, 'message' => 'Customer Pull failed: Pull failed (500).'])
         ->and(app(SyncService::class)->customerPullPending())->toBeTrue();
 
     $this->requests = [];
@@ -231,6 +357,10 @@ test('the salescall pull uses the schedule endpoint and fetches locations only w
 test('the customers page offers a customer pull and starts it when none has completed', function () {
     Livewire::test(CustomerPage::class)
         ->assertSee('Pull Customers')
+        ->assertSee('Customers are up to date.')
+        ->assertSee('Customer Pull completed successfully.')
+        ->assertSee('Customer Pull failed. Please try again.')
+        ->assertDontSee('Location references could not be refreshed; existing local reference data was preserved.')
         ->assertSeeHtml('$nextTick(() => run())');
 
     DB::table('sync_states')->insert(['key' => 'customers.pulled_through.'.$this->user->id, 'value' => json_encode('2026-10-05T00:00:00.000000Z')]);
@@ -263,7 +393,7 @@ test('reps sharing a tablet each get a full pull and their own customer list', f
 
     $steps = ($this->runToCompletion)();
 
-    expect(end($steps))->toMatchArray(['done' => true, 'message' => 'Pulled 1 customers.'])
+    expect(end($steps))->toMatchArray(['done' => true, 'returned' => 1, 'inserted' => 1])
         ->and($this->requests[1]['query'])->not->toHaveKey('updated_since')
         ->and(DB::table('customers')->where('id', 1)->value('is_active'))->toBeTruthy()
         ->and(DB::table('customer_scopes')->where('user_id', $this->user->id)->pluck('customer_id')->all())->toBe([1])
@@ -320,4 +450,399 @@ test('a step that fails after reading its page is retried from the same page', f
     ]);
 
     expect(app(SyncService::class)->pullCustomersStep())->toMatchArray(['success' => true, 'done' => true, 'pulled' => 1]);
+});
+
+test('pull refreshes a synced Customer by server ID without replacing its negative local key', function () {
+    $localId = -7_166_839_558_920_329_640;
+    $serverId = 98001;
+    $localUuid = (string) Str::uuid();
+    DB::table('customers')->insert([
+        'id' => $localId,
+        'server_id' => $serverId,
+        'local_uuid' => $localUuid,
+        'name' => 'Before pull',
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('salescalls')->insert([
+        'itinerary_id' => 1,
+        'customer_id' => $localId,
+        'visit_date' => now(),
+        'created_by' => $this->user->id,
+        'local_uuid' => (string) Str::uuid(),
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    $portalCustomer = ($this->customer)($serverId, 'After pull');
+    $portalCustomer['local_uuid'] = $localUuid;
+
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-09T01:00:00.000000Z',
+            'scope_ids' => [$serverId],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+    $saved = DB::table('customers')->where('server_id', $serverId)->get();
+
+    expect(end($steps)['success'])->toBeTrue()
+        ->and($saved)->toHaveCount(1)
+        ->and($saved->first()->id)->toBe($localId)
+        ->and($saved->first()->name)->toBe('After pull')
+        ->and(DB::table('salescalls')->where('customer_id', $localId)->exists())->toBeTrue();
+});
+
+test('pull reconciles a Portal-committed Customer by local UUID after a lost push acknowledgment', function () {
+    $localId = -2_291_945_407_554_291_093;
+    $serverId = 98002;
+    $localUuid = (string) Str::uuid();
+    DB::table('customers')->insert([
+        'id' => $localId,
+        'local_uuid' => $localUuid,
+        'name' => 'Tablet value retained',
+        'unique_id' => 'FLEET-RESERVED-IDENTITY',
+        'customer_code_reservation_token' => (string) Str::uuid(),
+        'is_active' => true,
+        'sync_status' => 'failed',
+        'sync_attempts' => 1,
+        'sync_error' => 'Push acknowledgment was not received.',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    $portalCustomer = ($this->customer)($serverId, 'Portal committed value');
+    $portalCustomer['local_uuid'] = $localUuid;
+
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-09T01:00:00.000000Z',
+            'scope_ids' => [$serverId],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+    $saved = DB::table('customers')->where('local_uuid', $localUuid)->get();
+    $customer = $saved->first();
+
+    expect(end($steps)['success'])->toBeTrue()
+        ->and($saved)->toHaveCount(1)
+        ->and($customer->id)->toBe($localId)
+        ->and($customer->server_id)->toBe($serverId)
+        ->and($customer->name)->toBe('Tablet value retained')
+        ->and($customer->unique_id)->toBe('FLEET-RESERVED-IDENTITY')
+        ->and($customer->customer_code_reservation_token)->not->toBeNull()
+        ->and($customer->sync_status)->toBe('failed')
+        ->and(DB::table('customers')->where('server_id', $serverId)->count())->toBe(1);
+});
+
+test('pull fails safely when a local UUID is already bound to another Portal ID', function () {
+    $localId = -2_291_945_407_554_291_093;
+    $localUuid = (string) Str::uuid();
+    DB::table('customers')->insert([
+        'id' => $localId,
+        'server_id' => 98004,
+        'local_uuid' => $localUuid,
+        'name' => 'Identity Conflict Local Value',
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    $portalCustomer = ($this->customer)(98005, 'Conflicting Portal Value');
+    $portalCustomer['local_uuid'] = $localUuid;
+
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-09T01:00:00.000000Z',
+            'scope_ids' => [98005],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+    $saved = DB::table('customers')->where('local_uuid', $localUuid)->get();
+
+    expect(end($steps)['success'])->toBeFalse()
+        ->and($saved)->toHaveCount(1)
+        ->and($saved->first()->id)->toBe($localId)
+        ->and($saved->first()->server_id)->toBe(98004)
+        ->and($saved->first()->name)->toBe('Identity Conflict Local Value');
+});
+
+test('pull fails safely when the incoming UUID and Portal ID resolve to different local Customers', function () {
+    $localUuid = (string) Str::uuid();
+    $serverId = 98006;
+    $pendingLocalId = -3_100_000_000_000_000_006;
+    $alreadyMappedLocalId = -3_100_000_000_000_000_007;
+    DB::table('customers')->insert([
+        [
+            'id' => $pendingLocalId,
+            'server_id' => null,
+            'local_uuid' => $localUuid,
+            'name' => 'Pending UUID match',
+            'is_active' => true,
+            'sync_status' => 'pending',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ],
+        [
+            'id' => $alreadyMappedLocalId,
+            'server_id' => $serverId,
+            'local_uuid' => (string) Str::uuid(),
+            'name' => 'Existing Portal ID match',
+            'is_active' => true,
+            'sync_status' => 'synced',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ],
+    ]);
+    $portalCustomer = ($this->customer)($serverId, 'Portal value');
+    $portalCustomer['local_uuid'] = $localUuid;
+
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-09T01:00:00.000000Z',
+            'scope_ids' => [$serverId],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+
+    expect(end($steps)['success'])->toBeFalse()
+        ->and(DB::table('customers')->where('server_id', $serverId)->count())->toBe(1)
+        ->and(DB::table('customers')->where('id', $pendingLocalId)->value('server_id'))->toBeNull()
+        ->and(DB::table('customers')->where('id', $pendingLocalId)->value('name'))->toBe('Pending UUID match')
+        ->and(DB::table('customers')->where('id', $alreadyMappedLocalId)->value('name'))->toBe('Existing Portal ID match');
+});
+
+test('repeating a Portal Customer pull updates the same Tablet row without a duplicate', function () {
+    $serverId = 98007;
+    $localUuid = (string) Str::uuid();
+    $portalCustomer = ($this->customer)($serverId, 'Pulled Customer');
+    $portalCustomer['local_uuid'] = $localUuid;
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-09T01:00:00.000000Z',
+            'scope_ids' => [$serverId],
+        ]),
+    ]);
+    $firstRun = ($this->runToCompletion)();
+    $firstLocalId = DB::table('customers')->where('server_id', $serverId)->value('id');
+
+    DB::table('sync_states')->whereIn('key', [
+        'customer.pull.watermark.'.$this->user->id,
+        'customer.pull.run.'.$this->user->id,
+    ])->delete();
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-09T01:01:00.000000Z',
+            'scope_ids' => [$serverId],
+        ]),
+    ]);
+    $secondRun = ($this->runToCompletion)();
+
+    expect(end($firstRun)['success'])->toBeTrue()
+        ->and(end($secondRun)['success'])->toBeTrue()
+        ->and(DB::table('customers')->where('server_id', $serverId)->count())->toBe(1)
+        ->and(DB::table('customers')->where('server_id', $serverId)->value('id'))->toBe($firstLocalId)
+        ->and(DB::table('customers')->where('local_uuid', $localUuid)->count())->toBe(1);
+});
+
+test('pull fails safely when a Portal ID is already duplicated across Tablet rows', function () {
+    $serverId = 98008;
+    DB::table('customers')->insert([
+        ['id' => -3_200_000_000_000_000_001, 'server_id' => $serverId, 'local_uuid' => (string) Str::uuid(), 'name' => 'Local duplicate A', 'is_active' => true, 'sync_status' => 'synced'],
+        ['id' => -3_200_000_000_000_000_002, 'server_id' => $serverId, 'local_uuid' => (string) Str::uuid(), 'name' => 'Local duplicate B', 'is_active' => true, 'sync_status' => 'synced'],
+    ]);
+    $portalCustomer = ($this->customer)($serverId, 'Portal customer');
+    $portalCustomer['local_uuid'] = (string) Str::uuid();
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-09T01:00:00.000000Z',
+            'scope_ids' => [$serverId],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+
+    expect(end($steps)['success'])->toBeFalse()
+        ->and(DB::table('customers')->where('server_id', $serverId)->count())->toBe(2)
+        ->and(DB::table('customers')->where('server_id', $serverId)->orderBy('id')->pluck('name')->all())
+        ->toBe(['Local duplicate B', 'Local duplicate A']);
+});
+
+test('an invalid location snapshot is rejected atomically while the independent Customer Pull completes with canonical location IDs intact', function () {
+    Log::spy();
+    DB::table('regions')->insert(['id' => 1, 'code' => 'OLD', 'name' => 'Existing local Region', 'created_at' => now(), 'updated_at' => now()]);
+    $this->locationPayload = ($this->makeLocationPayload)([
+        'regions' => [['id' => 2, 'code' => 'NEW', 'name' => 'Snapshot Region']],
+        'area_clusters' => [['id' => 24, 'region_specific_id' => 53, 'code' => 'AC24', 'name' => 'Cluster 24', 'enabled' => true]],
+    ]);
+    $portalCustomer = ($this->customer)(90001, 'Customer with canonical unavailable location');
+    $portalCustomer['local_uuid'] = (string) Str::uuid();
+    $portalCustomer['region_specific_id'] = 53;
+    $portalCustomer['area_cluster_id'] = 24;
+    $portalCustomer['province_id'] = 77;
+    $portalCustomer['municipality_id'] = 88;
+    $portalCustomer['barangay_id'] = 99;
+
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [90001],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+    $locationStep = $steps[0];
+    $customerStep = end($steps);
+    $saved = DB::table('customers')->where('server_id', 90001)->first();
+
+    expect($locationStep)->toMatchArray([
+        'success' => true,
+        'done' => false,
+        'customer_pull_succeeded' => false,
+        'location_pull_succeeded' => false,
+        'location_refresh_failed' => true,
+        'full_sync_succeeded' => false,
+    ])->and($locationStep['message'])->toContain('Continuing Customer Pull')
+        ->and($customerStep)->toMatchArray([
+            'success' => true,
+            'done' => true,
+            'customer_pull_succeeded' => true,
+            'location_pull_succeeded' => false,
+            'location_refresh_failed' => true,
+            'full_sync_succeeded' => false,
+        ])->and($customerStep['message'])->toContain('Customer Pull succeeded', 'Location references could not be refreshed', 'Full synchronization is incomplete')
+        ->and(collect($this->requests)->pluck('path')->all())->toBe(['/api/sync/pull/locations', '/api/sync/pull/customers'])
+        ->and(DB::table('regions')->where('id', 1)->value('name'))->toBe('Existing local Region')
+        ->and(DB::table('regions')->where('id', 2)->exists())->toBeFalse()
+        ->and(DB::table('area_clusters')->where('id', 24)->exists())->toBeFalse()
+        ->and($saved)->not->toBeNull()
+        ->and($saved->server_id)->toBe(90001)
+        ->and($saved->region_specific_id)->toBe(53)
+        ->and($saved->area_cluster_id)->toBe(24)
+        ->and($saved->province_id)->toBe(77)
+        ->and($saved->municipality_id)->toBe(88)
+        ->and($saved->barangay_id)->toBe(99)
+        ->and(DB::table('customers')->where('server_id', 90001)->count())->toBe(1);
+
+    Log::shouldHaveReceived('warning')->once()->with('sync:pull:locations:failed', Mockery::on(
+        fn (array $context): bool => $context['error_code'] === 'exception'
+            && str_contains($context['message'], 'area_clusters.region_specific_id parent')
+    ));
+});
+
+test('Customer Pull rejects a Customer whose required Company reference is unresolved locally', function () {
+    $portalCustomer = ($this->customer)(90002, 'Customer with unresolved Company');
+    $portalCustomer['company_id'] = 999;
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [90002],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+    $customerFailure = end($steps);
+
+    expect($customerFailure)->toMatchArray([
+        'success' => false,
+        'done' => false,
+        'customer_pull_succeeded' => false,
+        'location_pull_succeeded' => true,
+        'location_refresh_failed' => false,
+        'full_sync_succeeded' => false,
+    ])->and($customerFailure['message'])->toContain('required Company is unavailable on this device')
+        ->and($customerFailure)->toMatchArray(['returned' => 1, 'inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'rejected' => 1])
+        ->and(DB::table('customers')->where('server_id', 90002)->exists())->toBeFalse();
+});
+
+test('Customer Pull and location refresh failures are independently reported', function () {
+    $this->locationPayload = ($this->makeLocationPayload)([
+        'area_clusters' => [['id' => 24, 'region_specific_id' => 53, 'code' => 'AC24', 'name' => 'Cluster 24', 'enabled' => true]],
+    ]);
+    ($this->fakePortal)([
+        0 => Http::response(['message' => 'Portal Customer endpoint unavailable.'], 500),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+    $customerFailure = end($steps);
+
+    expect($steps[0]['location_refresh_failed'])->toBeTrue()
+        ->and($customerFailure)->toMatchArray([
+            'success' => false,
+            'done' => false,
+            'customer_pull_succeeded' => false,
+            'location_pull_succeeded' => false,
+            'location_refresh_failed' => true,
+            'full_sync_succeeded' => false,
+        ])->and($customerFailure['message'])->toContain('Customer Pull failed', 'Location refresh also failed')
+        ->and(DB::table('customers')->count())->toBe(0);
+});
+
+test('a pre-existing interrupted pages-phase run is treated as having completed its location refresh', function () {
+    DB::table('sync_states')->insert([
+        'key' => 'customers.pull_run.'.$this->user->id,
+        'value' => json_encode([
+            'phase' => 'pages',
+            'since' => null,
+            'after_id' => 0,
+            'server_time' => null,
+            'total' => null,
+            'pulled' => 0,
+            'missing' => [],
+        ]),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [($this->customer)(90003)],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [90003],
+        ]),
+    ]);
+
+    $result = app(SyncService::class)->pullCustomersStep();
+
+    expect($result)->toMatchArray([
+        'success' => true,
+        'done' => true,
+        'customer_pull_succeeded' => true,
+        'location_pull_succeeded' => true,
+        'location_refresh_failed' => false,
+        'full_sync_succeeded' => true,
+    ]);
 });

@@ -406,16 +406,4 @@ class CustomerCreatePage extends Page
 
         return true;
     }
-
-    protected function validateScopedPortalRules(string $profileType): bool
-    {
-        $accessIds = array_filter($this->access_user_ids);
-        if (User::whereIn('id', $accessIds)->whereNull('rsm_id')->exists()) {
-            $this->addError('access_user_ids', 'Each assigned Access user must have an RSM relationship.');
-
-            return false;
-        }
-
-        return true;
-    }
 }

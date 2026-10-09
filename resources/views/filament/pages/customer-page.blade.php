@@ -44,7 +44,7 @@
             @endphp
             <button
                 type="button"
-                wire:click="viewCustomer({{ $customer->id }})"
+                wire:click="viewCustomer('{{ $customer->id }}')"
                 class="w-full flex items-center gap-3 px-4 py-3 bg-white rounded-2xl shadow-sm text-left hover:bg-gray-50 transition-colors">
                 <div class="flex-1 min-w-0">
                     <p class="font-semibold text-[#191c1e] text-sm truncate">{{ $customerCode !== '' ? $customerCode.' - '.$customer->name : $customer->name }}</p>
@@ -113,6 +113,10 @@
                             <p><span class="font-bold">Address:</span> {{ $customerDetail['customer']['address'] ?? '—' }}</p>
                             <p><span class="font-bold">Contact Person:</span> {{ $customerDetail['customer']['contact_person'] ?? '—' }}</p>
                             <p><span class="font-bold">Contact Number:</span> {{ $customerDetail['customer']['contact_number'] ?? '—' }}</p>
+                            <p><span class="font-bold">Business Landline:</span> {{ $customerDetail['customer']['business_landline_number'] ?? '—' }}</p>
+                            <p><span class="font-bold">Business Mobile:</span> {{ $customerDetail['customer']['business_mobile_number'] ?? '—' }}</p>
+                            <p><span class="font-bold">Date Established:</span> {{ $customerDetail['customer']['date_established'] ?? '—' }}</p>
+                            <p><span class="font-bold">Person in Charge:</span> {{ $customerDetail['customer']['person_in_charge'] ?? '—' }}</p>
                             <p><span class="font-bold">Physical Region:</span> {{ $customerDetail['customer']['physical_region'] ?? '—' }}</p>
                             <p><span class="font-bold">Province:</span> {{ $customerDetail['customer']['province'] ?? 'Not applicable' }}</p>
                             <p><span class="font-bold">Municipality:</span> {{ $customerDetail['customer']['municipality'] ?? '—' }}</p>
@@ -130,10 +134,34 @@
                             @endforeach
                             @if(($customerDetail['customer']['sync_status'] ?? null) === 'failed' && (int) ($customerDetail['customer']['sync_attempts'] ?? 0) >= 3)
                                 <p class="text-xs text-[#737685]">Automatic retries are exhausted. Correct and save a value before making one explicit retry.</p>
-                                <button type="button" wire:click="retryCustomerPush({{ $selectedCustomer->id }})" wire:loading.attr="disabled" class="fi-btn fi-btn-size-sm fi-btn-color-primary" @disabled($retryingCustomerId === $selectedCustomer->id)>
+                                <button type="button" wire:click="retryCustomerPush('{{ $selectedCustomer->id }}')" wire:loading.attr="disabled" class="fi-btn fi-btn-size-sm fi-btn-color-primary" @disabled((string) $retryingCustomerId === (string) $selectedCustomer->id)>
                                     {{ $retryingCustomerId === $selectedCustomer->id ? 'Retrying…' : 'Retry Customer' }}
                                 </button>
                             @endif
+                        </div>
+                    </div>
+
+                    <div>
+                        <h3 class="text-xs font-extrabold text-[#737685] uppercase tracking-wider mb-2">Customer Access</h3>
+                        <div class="bg-[#f3f4f6] rounded-2xl p-4 space-y-1.5 text-xs text-[#434654]">
+                            <p class="font-bold">Access</p>
+                            @forelse($customerDetail['access_users'] ?? [] as $accessUser)
+                                <p>{{ $accessUser['name'] }}</p>
+                            @empty
+                                <p>None assigned</p>
+                            @endforelse
+                            <p class="font-bold mt-2">DRM</p>
+                            @forelse($customerDetail['drm_users'] ?? [] as $drmUser)
+                                <p>{{ $drmUser['name'] }}</p>
+                            @empty
+                                <p>None assigned</p>
+                            @endforelse
+                            <p class="font-bold mt-2">RSM</p>
+                            @forelse($customerDetail['rsm_users'] ?? [] as $rsmUser)
+                                <p>{{ $rsmUser['name'] }}</p>
+                            @empty
+                                <p>None assigned</p>
+                            @endforelse
                         </div>
                     </div>
 
@@ -152,8 +180,32 @@
                                 @if(($trade['motiv_user'] ?? null) !== null)<p><span class="font-bold">MOTIV User:</span> {{ $trade['motiv_user'] ? 'Yes' : 'No' }}</p>@endif
                                 @if($trade['delivery_method'] ?? null)<p><span class="font-bold">Delivery Method:</span> {{ $trade['delivery_method'] }}</p>@endif
                                 @if($trade['ulab'] ?? null)<p><span class="font-bold">ULAB:</span> {{ $trade['ulab'] }}</p>@endif
-                                @foreach(is_array($trade['profile_data']['active'] ?? null) ? $trade['profile_data']['active'] : [] as $key => $value)
-                                    @if(is_scalar($value) && $value !== null && $value !== '')<p><span class="font-bold">{{ str_replace('_', ' ', ucfirst($key)) }}:</span> {{ $value }}</p>@endif
+                                @php($activeProfile = is_array($trade['profile_data']['active'] ?? null) ? $trade['profile_data']['active'] : [])
+                                @foreach($activeProfile as $key => $value)
+                                    @if($key !== 'owner' && is_scalar($value) && $value !== null && $value !== '')<p><span class="font-bold">{{ str_replace('_', ' ', ucfirst($key)) }}:</span> {{ $value }}</p>@endif
+                                @endforeach
+                            </div>
+                        </div>
+                    @endif
+
+                    @php($ownerProfile = is_array($customerDetail['trade_profile']['profile_data']['active']['owner'] ?? null) ? $customerDetail['trade_profile']['profile_data']['active']['owner'] : [])
+                    @if($ownerProfile !== [])
+                        <div>
+                            <h3 class="text-xs font-extrabold text-[#737685] uppercase tracking-wider mb-2">Owner Profile</h3>
+                            <div class="bg-[#f3f4f6] rounded-2xl p-4 space-y-1.5 text-xs text-[#434654]">
+                                @foreach([
+                                    'name' => 'Name of Owner',
+                                    'birthday' => 'Birthday',
+                                    'nickname' => 'Nickname',
+                                    'successor_name' => 'Successor Name',
+                                    'successor_birthday' => 'Successor Birthday',
+                                    'relationship' => 'Relationship with the Owner',
+                                    'generation' => 'Generation',
+                                    'hobbies' => 'Hobbies',
+                                ] as $key => $label)
+                                    @if(isset($ownerProfile[$key]) && is_scalar($ownerProfile[$key]) && $ownerProfile[$key] !== '')
+                                        <p><span class="font-bold">{{ $label }}:</span> {{ $ownerProfile[$key] }}</p>
+                                    @endif
                                 @endforeach
                             </div>
                         </div>
@@ -270,7 +322,7 @@
                                 Photos @if($customerDetail['photo_count'] ?? 0) ({{ $customerDetail['photo_count'] }}) @endif
                             </h3>
                             @if(($customerDetail['photo_count'] ?? 0) > 0 && !$showPhotos)
-                                <button wire:click="loadCustomerPhotos({{ $selectedCustomerId }})" class="text-xs font-bold text-[#890f00]">
+                                <button wire:click="loadCustomerPhotos('{{ $selectedCustomerId }}')" class="text-xs font-bold text-[#890f00]">
                                     Show Photos
                                 </button>
                             @endif
