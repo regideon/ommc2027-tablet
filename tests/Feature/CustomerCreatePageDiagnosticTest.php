@@ -77,6 +77,18 @@ function validCustomerCreateState(): array
     ];
 }
 
+function cacheCustomerAccessMapping(string $scope, string $key, array $users, bool $complete = true): void
+{
+    DB::table('customer_access_mappings')->insert([
+        'scope' => $scope,
+        'mapping_key' => $key,
+        'is_complete' => $complete,
+        'user_references' => json_encode($users, JSON_THROW_ON_ERROR),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+}
+
 test('customer add page renders against the complete migrated sqlite schema', function () {
     $user = seedCustomerCreateFixtures();
     $this->actingAs($user);
@@ -97,7 +109,6 @@ test('customer add page renders against the complete migrated sqlite schema', fu
         ->set('trade.entry_detail', 'AB')
         ->assertOk()
         ->assertSee('OMMC')
-        ->assertSee('NCR')
         ->assertSee('Mixed Outlet')
         ->assertSee('Store Name')
         ->assertSee('Customer Code')
@@ -133,7 +144,6 @@ test('customer add page renders against the complete migrated sqlite schema', fu
         ->assertSee('x-model="$wire.categories[\'ab\'][2018]"', false)
         ->assertDontSee('x-model="$wire.categories.ab.2018"', false)
         ->assertSee('OMMC')
-        ->assertSee('NCR')
         ->assertSee('Metro Manila');
 
     $component->set('physical_region_id', 1)
@@ -143,7 +153,7 @@ test('customer add page renders against the complete migrated sqlite schema', fu
         ->assertSee('Quezon City');
 
     $component->set('physical_region_id', null)
-        ->assertSet('region_specific_id', 1)
+        ->assertSet('region_specific_id', null)
         ->assertSet('province_id', null)
         ->assertSet('municipality_id', null);
 
@@ -377,8 +387,8 @@ test('customer add location dependencies keep physical and commercial hierarchie
         ->assertSet('province_id', null)
         ->assertSet('municipality_id', null)
         ->assertSet('barangay_id', null)
-        ->assertSet('region_specific_id', 1)
-        ->assertSet('area_cluster_id', 1)
+        ->assertSet('region_specific_id', null)
+        ->assertSet('area_cluster_id', null)
         ->set('physical_region_id', 1)
         ->set('province_id', 1)
         ->set('municipality_id', 1)
@@ -386,12 +396,374 @@ test('customer add location dependencies keep physical and commercial hierarchie
         ->assertSet('physical_region_id', 1)
         ->assertSet('province_id', 1)
         ->assertSet('municipality_id', 1)
-        ->assertSet('area_cluster_id', null);
+        ->assertSet('area_cluster_id', 2);
 
     expect($component->html())
         ->toContain('Commercial Region 2')
         ->toContain('Cluster 2')
         ->toContain('Metro Manila');
+});
+
+test('physical Region filters Specific Regions and selecting one auto-selects its only enabled Area Cluster and mapped Access', function () {
+    $user = seedCustomerCreateFixtures();
+    $mappedUser = User::factory()->create(['email' => 'mapped.gma@example.test']);
+    DB::table('regions')->insert(['id' => 2, 'code' => 'R2', 'psgc_code' => '020000000', 'name' => 'Region 2', 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('region_specifics')->insert(['id' => 2, 'region_id' => 2, 'name' => 'Specific Region 2', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('area_clusters')->insert(['id' => 2, 'region_specific_id' => 2, 'code' => 'cluster-2', 'name' => 'Cluster 2', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    cacheCustomerAccessMapping('region_specific', '1', [['email' => $mappedUser->email, 'name' => $mappedUser->name]]);
+    $this->actingAs($user);
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set('physical_region_id', 1)
+        ->assertSee('NCR')
+        ->assertDontSee('Specific Region 2')
+        ->set('region_specific_id', 1)
+        ->assertSet('area_cluster_id', 1)
+        ->assertSet('access_user_ids', [$mappedUser->id])
+        ->assertSet('accessMappingWarning', null);
+
+    $component->set('access_user_ids', [$user->id])
+        ->assertSet('access_user_ids', [$user->id]);
+});
+
+test('same and repeated Add controller updates preserve manual Access while real changes use complete mappings', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('companies')->insert([
+        ['id' => 2, 'name' => 'OE', 'code' => 'OE', 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 3, 'name' => 'IB', 'code' => 'IB', 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    DB::table('region_specifics')->insert([
+        ['id' => 2, 'region_id' => 1, 'name' => 'Complete Destination', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 3, 'region_id' => 1, 'name' => 'Incomplete Destination', 'sort' => 3, 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    $geographicUser = User::factory()->create(['email' => 'same-geographic@example.test']);
+    $oeUser = User::factory()->create(['email' => 'same-oe@example.test']);
+    $ibUser = User::factory()->create(['email' => 'same-ib@example.test']);
+    $manualUser = User::factory()->create(['email' => 'same-manual@example.test']);
+    cacheCustomerAccessMapping('region_specific', '1', [['email' => $user->email, 'name' => $user->name]]);
+    cacheCustomerAccessMapping('region_specific', '2', [['email' => $geographicUser->email, 'name' => $geographicUser->name]]);
+    cacheCustomerAccessMapping('region_specific', '3', [['email' => $geographicUser->email, 'name' => $geographicUser->name]], false);
+    cacheCustomerAccessMapping('company', 'OE', [['email' => $oeUser->email, 'name' => $oeUser->name]]);
+    cacheCustomerAccessMapping('company', 'IB', [['email' => $ibUser->email, 'name' => $ibUser->name]]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('company_id', 1)
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$user->id])
+        ->set('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('access_user_ids', [])
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [])
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [])
+        ->set('region_specific_id', 2)
+        ->assertSet('access_user_ids', [$geographicUser->id])
+        ->set('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 2)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 3)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('company_id', 2)
+        ->assertSet('access_user_ids', [$oeUser->id])
+        ->set('access_user_ids', [$manualUser->id])
+        ->set('company_id', 2)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('company_id', 3)
+        ->assertSet('access_user_ids', [$ibUser->id])
+        ->set('access_user_ids', [$manualUser->id])
+        ->set('company_id', 3)
+        ->assertSet('access_user_ids', [$manualUser->id]);
+});
+
+test('Edit hydration and same or repeated Specific Region updates preserve manual Access', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('companies')->insert([
+        ['id' => 2, 'name' => 'OE', 'code' => 'OE', 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 3, 'name' => 'IB', 'code' => 'IB', 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    DB::table('region_specifics')->insert([
+        ['id' => 2, 'region_id' => 1, 'name' => 'Complete Edit Destination', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 3, 'region_id' => 1, 'name' => 'Incomplete Edit Destination', 'sort' => 3, 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    $mappedUser = User::factory()->create(['email' => 'same-edit-mapped@example.test']);
+    $manualUser = User::factory()->create(['email' => 'same-edit-manual@example.test']);
+    $oeUser = User::factory()->create(['email' => 'same-edit-oe@example.test']);
+    $partialCompanyUser = User::factory()->create(['email' => 'same-edit-partial-company@example.test']);
+    cacheCustomerAccessMapping('region_specific', '1', [['email' => $user->email, 'name' => $user->name]]);
+    cacheCustomerAccessMapping('region_specific', '2', [['email' => $mappedUser->email, 'name' => $mappedUser->name]]);
+    cacheCustomerAccessMapping('region_specific', '3', [['email' => $mappedUser->email, 'name' => $mappedUser->name]], false);
+    cacheCustomerAccessMapping('company', 'OE', [['email' => $oeUser->email, 'name' => $oeUser->name]]);
+    cacheCustomerAccessMapping('company', 'IB', [['email' => $partialCompanyUser->email, 'name' => $partialCompanyUser->name]], false);
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'Same Value Edit Customer',
+        'company_id' => 1,
+        'region_specific_id' => 1,
+        'province_id' => 1,
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_user')->insert(['customer_id' => $customerId, 'user_id' => $manualUser->id, 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customerId])
+        ->assertSet('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 2)
+        ->assertSet('access_user_ids', [$mappedUser->id])
+        ->set('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 2)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 3)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('company_id', 2)
+        ->assertSet('access_user_ids', [$oeUser->id])
+        ->set('access_user_ids', [$manualUser->id])
+        ->set('company_id', 2)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('company_id', 3)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->assertSet('accessMappingWarning', 'Customer Access mapping is missing or incomplete offline. Existing Access is preserved.');
+});
+
+test('multiple enabled Area Clusters are filtered by Specific Region without automatic selection', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('region_specifics')->insert(['id' => 2, 'region_id' => 1, 'name' => 'Specific Region 2', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('area_clusters')->insert([
+        ['id' => 2, 'region_specific_id' => 1, 'code' => 'cluster-1b', 'name' => 'Cluster 1B', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 3, 'region_specific_id' => 2, 'code' => 'cluster-2', 'name' => 'Cluster 2', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('physical_region_id', 1)
+        ->set('region_specific_id', 1)
+        ->assertSet('area_cluster_id', null)
+        ->assertSee('Cluster 1')
+        ->assertSee('Cluster 1B')
+        ->assertDontSee('Cluster 2');
+});
+
+test('incomplete offline mapping preserves the current Add Access selection and displays a warning', function () {
+    $user = seedCustomerCreateFixtures();
+    $partialUser = User::factory()->create(['email' => 'partial.mapping@example.test']);
+    cacheCustomerAccessMapping('region_specific', '1', [['email' => $partialUser->email, 'name' => $partialUser->name]], false);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('physical_region_id', 1)
+        ->set('region_specific_id', 1)
+        ->assertSet('area_cluster_id', 1)
+        ->assertSet('access_user_ids', [$user->id])
+        ->assertSet('accessMappingWarning', 'Customer Access mapping is missing or incomplete offline. Existing Access is preserved.')
+        ->assertSee('Existing Access is preserved.');
+});
+
+test('Add form shows no mapping warning without a controller when the mapping cache table is absent', function () {
+    $user = seedCustomerCreateFixtures();
+    Schema::drop('customer_access_mappings');
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('region_specific_id', null)
+        ->assertSet('access_user_ids', [$user->id])
+        ->assertSet('accessMappingWarning', null)
+        ->assertDontSee('Customer Access mappings are unavailable offline.');
+});
+
+test('Add form shows no mapping warning without a controller when the cache has only unrelated incomplete mappings', function () {
+    $user = seedCustomerCreateFixtures();
+    cacheCustomerAccessMapping('region_specific', '999', [], false);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('region_specific_id', null)
+        ->assertSet('access_user_ids', [$user->id])
+        ->assertSet('accessMappingWarning', null)
+        ->assertDontSee('mapping is missing or incomplete offline');
+});
+
+test('Add form preserves manual Access and reports a missing cache when a geographic controller is selected', function () {
+    $user = seedCustomerCreateFixtures();
+    Schema::drop('customer_access_mappings');
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$user->id])
+        ->assertSet('accessMappingWarning', 'Customer Access mappings are unavailable offline. Existing Access is preserved.');
+});
+
+test('Edit hydration shows no mapping warning without a controller when the mapping cache table is absent', function () {
+    $user = seedCustomerCreateFixtures();
+    $manualUser = User::factory()->create(['email' => 'no-controller-edit-manual@example.test']);
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'No Controller Customer',
+        'company_id' => 1,
+        'region_specific_id' => null,
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_user')->insert(['customer_id' => $customerId, 'user_id' => $manualUser->id, 'created_at' => now(), 'updated_at' => now()]);
+    Schema::drop('customer_access_mappings');
+    $this->actingAs($user);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customerId])
+        ->assertSet('region_specific_id', null)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->assertSet('accessMappingWarning', null)
+        ->assertDontSee('Customer Access mappings are unavailable offline.');
+});
+
+test('Edit hydration shows no mapping warning without a controller when cached mappings are incomplete', function () {
+    $user = seedCustomerCreateFixtures();
+    $manualUser = User::factory()->create(['email' => 'no-controller-incomplete-edit-manual@example.test']);
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'No Controller Incomplete Mapping Customer',
+        'company_id' => 1,
+        'region_specific_id' => null,
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_user')->insert(['customer_id' => $customerId, 'user_id' => $manualUser->id, 'created_at' => now(), 'updated_at' => now()]);
+    cacheCustomerAccessMapping('region_specific', '999', [], false);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customerId])
+        ->assertSet('region_specific_id', null)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->assertSet('accessMappingWarning', null)
+        ->assertDontSee('mapping is missing or incomplete offline');
+});
+
+test('OE and IB Company selections resolve their cached mappings by Company code', function (string $code, string $profile) {
+    $user = seedCustomerCreateFixtures();
+    $companyId = 2;
+    DB::table('companies')->insert(['id' => $companyId, 'name' => $code, 'code' => $code, 'created_at' => now(), 'updated_at' => now()]);
+    $mappedUser = User::factory()->create(['email' => "mapped.{$code}@example.test"]);
+    cacheCustomerAccessMapping('company', $code, [['email' => $mappedUser->email, 'name' => $mappedUser->name]]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('company_id', $companyId)
+        ->assertSet('access_user_ids', [$mappedUser->id])
+        ->assertSet('accessMappingWarning', null)
+        ->assertSee(ucfirst($profile).' Profile');
+})->with([
+    ['OE', 'oe'],
+    ['IB', 'ib'],
+]);
+
+test('Add form preserves manual Access and warns for incomplete OE and IB Company mappings', function (string $code) {
+    $user = seedCustomerCreateFixtures();
+    DB::table('companies')->insert(['id' => 2, 'name' => $code, 'code' => $code, 'created_at' => now(), 'updated_at' => now()]);
+    $partialUser = User::factory()->create(['email' => "partial.{$code}@example.test"]);
+    cacheCustomerAccessMapping('company', $code, [['email' => $partialUser->email, 'name' => $partialUser->name]], false);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('access_user_ids', [$partialUser->id])
+        ->set('company_id', 2)
+        ->assertSet('access_user_ids', [$partialUser->id])
+        ->assertSet('accessMappingWarning', 'Customer Access mapping is missing or incomplete offline. Existing Access is preserved.');
+})->with(['OE', 'IB']);
+
+test('editing an unchanged Specific Region preserves manual Access during mapping hydration', function () {
+    $user = seedCustomerCreateFixtures();
+    $mappedUser = User::factory()->create(['email' => 'mapped.edit@example.test']);
+    cacheCustomerAccessMapping('region_specific', '1', [['email' => $mappedUser->email, 'name' => $mappedUser->name]]);
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'Existing Customer',
+        'company_id' => 1,
+        'region_specific_id' => 1,
+        'province_id' => 1,
+        'municipality_id' => 1,
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_user')->insert(['customer_id' => $customerId, 'user_id' => $user->id, 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customerId])
+        ->assertSet('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$user->id])
+        ->assertSet('accessMappingWarning', null);
+
+    expect(DB::table('customer_user')->where('customer_id', $customerId)->pluck('user_id')->all())->toBe([$user->id]);
+});
+
+test('editing a changed Specific Region replaces Access only for a complete offline mapping', function () {
+    $user = seedCustomerCreateFixtures();
+    $mappedUser = User::factory()->create(['email' => 'mapped.changed@example.test']);
+    DB::table('region_specifics')->insert(['id' => 2, 'region_id' => 1, 'name' => 'Specific Region 2', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('area_clusters')->insert(['id' => 2, 'region_specific_id' => 2, 'code' => 'cluster-2', 'name' => 'Cluster 2', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    cacheCustomerAccessMapping('region_specific', '2', [['email' => $mappedUser->email, 'name' => $mappedUser->name]]);
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'Existing Customer',
+        'company_id' => 1,
+        'region_specific_id' => 1,
+        'province_id' => 1,
+        'municipality_id' => 1,
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_user')->insert(['customer_id' => $customerId, 'user_id' => $user->id, 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+
+    $component = Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customerId])
+        ->set('region_specific_id', 2)
+        ->assertSet('area_cluster_id', 2)
+        ->assertSet('access_user_ids', [$mappedUser->id])
+        ->assertSet('accessMappingWarning', null);
+    $component->call('saveCustomer')->assertHasNoErrors();
+
+    expect(DB::table('customer_user')->where('customer_id', $customerId)->pluck('user_id')->all())->toBe([$mappedUser->id]);
+});
+
+test('editing a changed Specific Region preserves Access and warns when offline mapping is incomplete', function () {
+    $user = seedCustomerCreateFixtures();
+    $partialUser = User::factory()->create(['email' => 'partial.edit@example.test']);
+    DB::table('region_specifics')->insert(['id' => 2, 'region_id' => 1, 'name' => 'Specific Region 2', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()]);
+    cacheCustomerAccessMapping('region_specific', '2', [['email' => $partialUser->email, 'name' => $partialUser->name]], false);
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'Existing Customer',
+        'company_id' => 1,
+        'region_specific_id' => 1,
+        'province_id' => 1,
+        'municipality_id' => 1,
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_user')->insert(['customer_id' => $customerId, 'user_id' => $user->id, 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customerId])
+        ->set('region_specific_id', 2)
+        ->assertSet('access_user_ids', [$user->id])
+        ->assertSet('accessMappingWarning', 'Customer Access mapping is missing or incomplete offline. Existing Access is preserved.')
+        ->assertSee('Existing Access is preserved.');
+
+    expect(DB::table('customer_user')->where('customer_id', $customerId)->pluck('user_id')->all())->toBe([$user->id]);
 });
 
 test('an exhausted failed Customer can be corrected in the existing edit page without changing its code or local identity', function () {

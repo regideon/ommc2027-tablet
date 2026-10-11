@@ -255,6 +255,7 @@ class SyncService
 
         try {
             $this->validateLocationSnapshot($data);
+            $data['customer_access_mappings'] ??= [];
 
             DB::transaction(function () use ($data, $user): void {
                 $this->applyPullPayload($data, $user);
@@ -344,6 +345,10 @@ class SyncService
             throw new \RuntimeException('Portal location response count metadata does not match its required sections.');
         }
 
+        if (array_key_exists('customer_access_mappings', $data)) {
+            $this->validateCustomerAccessMappings($data['customer_access_mappings'], $ids['region_specifics']);
+        }
+
         $idSets = array_map(fn (array $sectionIds): array => array_fill_keys($sectionIds, true), $ids);
         foreach ($sections as $section) {
             foreach ($data[$section] as $row) {
@@ -365,6 +370,62 @@ class SyncService
             }
         }
 
+    }
+
+    /**
+     * @param  list<int>  $regionSpecificIds
+     */
+    private function validateCustomerAccessMappings(mixed $rows, array $regionSpecificIds): void
+    {
+        if (! is_array($rows) || ! array_is_list($rows)) {
+            throw new \RuntimeException('Portal Customer Access mapping references are incomplete or malformed.');
+        }
+
+        $mappingKeys = [];
+        foreach ($rows as $row) {
+            if (! is_array($row) || ! is_bool($row['is_complete'] ?? null) || ! is_array($row['users'] ?? null) || ! array_is_list($row['users'])) {
+                throw new \RuntimeException('Portal returned an invalid Customer Access mapping row.');
+            }
+
+            if (($row['scope'] ?? null) === 'region_specific') {
+                $mappingKey = $row['region_specific_id'] ?? null;
+                if (! is_int($mappingKey) || $mappingKey < 1 || ! in_array($mappingKey, $regionSpecificIds, true)
+                    || ! is_string($row['group_code'] ?? null) || trim($row['group_code']) === '') {
+                    throw new \RuntimeException('Portal returned an invalid Specific Region Access mapping reference.');
+                }
+                $mappingKey = (string) $mappingKey;
+            } elseif (($row['scope'] ?? null) === 'company') {
+                $mappingKey = $row['company_code'] ?? null;
+                if (! is_string($mappingKey) || ! in_array($mappingKey, ['OE', 'IB'], true)) {
+                    throw new \RuntimeException('Portal returned an invalid Company Access mapping reference.');
+                }
+            } else {
+                throw new \RuntimeException('Portal returned an unsupported Customer Access mapping scope.');
+            }
+
+            $scope = $row['scope'];
+            if (isset($mappingKeys[$scope][$mappingKey])) {
+                throw new \RuntimeException('Portal returned duplicate Customer Access mapping keys.');
+            }
+            $mappingKeys[$scope][$mappingKey] = true;
+
+            $emails = [];
+            foreach ($row['users'] as $reference) {
+                if (! is_array($reference) || ! is_string($reference['email'] ?? null)
+                    || filter_var($reference['email'], FILTER_VALIDATE_EMAIL) === false
+                    || ! is_string($reference['name'] ?? null) || trim($reference['name']) === '') {
+                    throw new \RuntimeException('Portal returned an invalid mapped User identity.');
+                }
+                if (in_array($reference['email'], $emails, true)) {
+                    throw new \RuntimeException('Portal returned a duplicate mapped User email.');
+                }
+                $emails[] = $reference['email'];
+            }
+
+            if ($row['is_complete'] && $emails === []) {
+                throw new \RuntimeException('Portal marked an empty Customer Access mapping complete.');
+            }
+        }
     }
 
     /**
@@ -878,6 +939,56 @@ class SyncService
             }
 
             $localUserIdsByEmail[$email] = (int) $local->id;
+        }
+
+        if (array_key_exists('customer_access_mappings', $data)) {
+            $mappings = [];
+            foreach ($data['customer_access_mappings'] as $mapping) {
+                $scope = $mapping['scope'];
+                $mappingKey = $scope === 'region_specific'
+                    ? (string) $mapping['region_specific_id']
+                    : $mapping['company_code'];
+
+                foreach ($mapping['users'] as $reference) {
+                    $email = $reference['email'];
+                    if (! array_key_exists($email, $localUserIdsByEmail)) {
+                        $matches = User::query()->get(['id', 'email'])
+                            ->filter(fn (User $candidate): bool => $candidate->email === $email)
+                            ->values();
+
+                        if ($matches->count() > 1) {
+                            throw new \RuntimeException('Portal returned a mapped User email that matches multiple local Users.');
+                        }
+
+                        $local = $matches->first();
+                        if (! $local) {
+                            $local = User::create([
+                                'name' => $reference['name'],
+                                'email' => $email,
+                                'password' => Str::random(64),
+                            ]);
+                        } elseif ($local->name !== $reference['name']) {
+                            $local->update(['name' => $reference['name']]);
+                        }
+
+                        $localUserIdsByEmail[$email] = (int) $local->id;
+                    }
+                }
+
+                $mappings[] = [
+                    'scope' => $scope,
+                    'mapping_key' => $mappingKey,
+                    'is_complete' => $mapping['is_complete'],
+                    'user_references' => json_encode($mapping['users'], JSON_THROW_ON_ERROR),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ];
+            }
+
+            DB::table('customer_access_mappings')->delete();
+            foreach (array_chunk($mappings, 400) as $chunk) {
+                DB::table('customer_access_mappings')->insert($chunk);
+            }
         }
 
         // Refresh the logged-in rep's itinerary base location from the pulled

@@ -12,6 +12,7 @@ use App\Models\Province;
 use App\Models\Region;
 use App\Models\RegionSpecific;
 use App\Models\User;
+use App\Services\CustomerAccessMappingResolver;
 use App\Services\CustomerProfileFormService;
 use App\Services\PhilippineAddressResolver;
 use App\Services\SyncService;
@@ -57,6 +58,8 @@ class CustomerCreatePage extends Page
 
     public ?string $locationError = null;
 
+    public ?string $accessMappingWarning = null;
+
     public ?int $general_category_id = null;
 
     public ?int $competitor_volume = null;
@@ -91,6 +94,14 @@ class CustomerCreatePage extends Page
 
     protected ?string $companyChangeOldProfile = null;
 
+    protected ?string $companyChangeOldCode = null;
+
+    protected ?int $companyChangeOldId = null;
+
+    protected ?int $initialRegionSpecificId = null;
+
+    protected ?int $regionSpecificIdBeforeUpdate = null;
+
     public function mount(?int $customerId = null): void
     {
         $this->trade = [
@@ -119,12 +130,23 @@ class CustomerCreatePage extends Page
 
     protected function getViewData(): array
     {
+        $regionSpecifics = RegionSpecific::query()
+            ->when(
+                $this->physical_region_id,
+                fn ($query) => $query->where('region_id', $this->physical_region_id),
+                fn ($query) => $query->whereKey($this->region_specific_id ?? 0),
+            )
+            ->orderBy('name')
+            ->get();
+
         return [
             'companies' => Company::orderBy('name')->get(),
             'regions' => Region::where(fn ($query) => $query->whereNotNull('psgc_code')->orWhere('id', $this->physical_region_id))->orderBy('name')->get(),
-            'regionSpecifics' => RegionSpecific::orderBy('name')->get(),
+            'regionSpecifics' => $regionSpecifics,
             'areaClusters' => $this->region_specific_id
-                ? AreaCluster::where(fn ($query) => $query->where('region_specific_id', $this->region_specific_id)->where('enabled', true)->orWhere('id', $this->area_cluster_id))->orderBy('name')->get()
+                ? AreaCluster::where('region_specific_id', $this->region_specific_id)
+                    ->where(fn ($query) => $query->where('enabled', true)->orWhere('id', $this->area_cluster_id))
+                    ->orderBy('name')->get()
                 : collect(),
             'provinces' => Province::where(fn ($query) => $query->where('enabled', true)->orWhere('id', $this->province_id))->orderBy('name')->get(),
             'municipalities' => Municipality::where(fn ($query) => $query->where('enabled', true)->orWhere('id', $this->municipality_id))->orderBy('name')->get(),
@@ -143,11 +165,23 @@ class CustomerCreatePage extends Page
 
     public function updatingCompanyId(): void
     {
+        $this->companyChangeOldId = $this->company_id;
         $this->companyChangeOldProfile = $this->profileType();
+        $this->companyChangeOldCode = Company::find($this->company_id)?->code;
     }
 
     public function updatedCompanyId(): void
     {
+        $companyChanged = $this->companyChangeOldId !== $this->company_id;
+        $this->companyChangeOldId = null;
+
+        if (! $companyChanged) {
+            $this->companyChangeOldProfile = null;
+            $this->companyChangeOldCode = null;
+
+            return;
+        }
+
         $this->resetValidation();
         $this->unique_id = null;
         $this->customer_code_reservation_token = null;
@@ -161,23 +195,42 @@ class CustomerCreatePage extends Page
         }
 
         $profile = $this->profileType();
-
-        if ($this->companyChangeOldProfile !== null && $this->companyChangeOldProfile === $profile) {
-            $this->companyChangeOldProfile = null;
-
-            return;
+        $profileChanged = $this->companyChangeOldProfile !== $profile;
+        if ($profileChanged) {
+            $this->trade = [];
+            $this->active = [];
+            $this->categories = $profile ? CustomerProfileFormService::defaultCategories($profile) : [];
+            $this->person_in_charge_id = null;
         }
 
-        $this->trade = [];
-        $this->active = [];
-        $this->categories = $profile ? CustomerProfileFormService::defaultCategories($profile) : [];
-        $this->person_in_charge_id = null;
+        $newCode = Company::find($this->company_id)?->code;
+        $companyAccessChanged = $this->companyChangeOldCode !== $newCode
+            && (in_array($this->companyChangeOldProfile, ['oe', 'ib'], true)
+                || in_array($profile, ['oe', 'ib'], true));
         $this->companyChangeOldProfile = null;
+        $this->companyChangeOldCode = null;
+
+        if ($companyAccessChanged) {
+            $this->recalculateAccessForCurrentControls();
+        }
     }
 
     public function updatedRegionSpecificId(): void
     {
-        $this->area_cluster_id = null;
+        if ($this->regionSpecificIdBeforeUpdate === $this->region_specific_id) {
+            $this->regionSpecificIdBeforeUpdate = null;
+            $this->inspectAccessMappingAvailability();
+
+            return;
+        }
+
+        $this->regionSpecificIdBeforeUpdate = null;
+        $this->applySpecificRegionChange();
+    }
+
+    public function updatingRegionSpecificId(): void
+    {
+        $this->regionSpecificIdBeforeUpdate = $this->region_specific_id;
     }
 
     public function updatedPhysicalRegionId(): void
@@ -185,6 +238,15 @@ class CustomerCreatePage extends Page
         $this->province_id = null;
         $this->municipality_id = null;
         $this->barangay_id = null;
+
+        $specificRegion = $this->region_specific_id ? RegionSpecific::find($this->region_specific_id) : null;
+        if ($this->region_specific_id && (! $specificRegion || (int) $specificRegion->region_id !== (int) ($this->physical_region_id ?? 0))) {
+            $this->region_specific_id = null;
+            $this->area_cluster_id = null;
+            if (! in_array($this->profileType(), ['oe', 'ib'], true)) {
+                $this->applyAccessMappingForChangedController();
+            }
+        }
     }
 
     public function updatedGeneralCategoryId(): void
@@ -227,7 +289,8 @@ class CustomerCreatePage extends Page
 
         $this->locationError = null;
 
-        foreach (['region_specific_id', 'province_id', 'municipality_id', 'barangay_id', 'area_cluster_id', 'address'] as $field) {
+        $previousRegionSpecificId = $this->region_specific_id;
+        foreach (['region_specific_id', 'province_id', 'municipality_id', 'barangay_id', 'address'] as $field) {
             if ($result[$field] !== null) {
                 $this->{$field} = $result[$field];
             }
@@ -236,6 +299,10 @@ class CustomerCreatePage extends Page
         $this->physical_region_id = $this->municipality_id
             ? Municipality::find($this->municipality_id)?->region_id
             : null;
+
+        if ((int) ($previousRegionSpecificId ?? 0) !== (int) ($this->region_specific_id ?? 0)) {
+            $this->applySpecificRegionChange();
+        }
     }
 
     public function categoryOptions(string $stream): array
@@ -253,7 +320,7 @@ class CustomerCreatePage extends Page
             'unique_id' => 'nullable|string|max:50',
             'company_id' => 'required|exists:companies,id',
             'access_user_ids' => 'nullable|array',
-            'access_user_ids.*' => 'integer|exists:users,id',
+            'access_user_ids.*' => 'integer|distinct|exists:users,id',
             'region_specific_id' => 'nullable|exists:region_specifics,id',
             'physical_region_id' => 'nullable|exists:regions,id',
             'province_id' => 'nullable|exists:provinces,id',
@@ -394,6 +461,19 @@ class CustomerCreatePage extends Page
 
     protected function commercialGeographyIsValid(): bool
     {
+        $specificRegionChanged = $this->initialRegionSpecificId === null
+            || (int) ($this->initialRegionSpecificId ?? 0) !== (int) ($this->region_specific_id ?? 0);
+
+        if ($specificRegionChanged && $this->region_specific_id) {
+            $specificRegion = RegionSpecific::find($this->region_specific_id);
+            if (! $this->physical_region_id || ! $specificRegion
+                || (int) $specificRegion->region_id !== (int) $this->physical_region_id) {
+                $this->addError('region_specific_id', 'Select a Specific Region that belongs to the selected physical Region.');
+
+                return false;
+            }
+        }
+
         if (! $this->area_cluster_id) {
             return true;
         }
@@ -405,5 +485,48 @@ class CustomerCreatePage extends Page
         }
 
         return true;
+    }
+
+    protected function applySpecificRegionChange(): void
+    {
+        $clusters = $this->region_specific_id
+            ? AreaCluster::query()->where('region_specific_id', $this->region_specific_id)->where('enabled', true)->orderBy('id')->pluck('id')
+            : collect();
+        $this->area_cluster_id = $clusters->count() === 1 ? (int) $clusters->first() : null;
+
+        if (! in_array($this->profileType(), ['oe', 'ib'], true)) {
+            $this->applyAccessMappingForChangedController();
+        }
+    }
+
+    protected function applyAccessMappingForChangedController(): void
+    {
+        $this->recalculateAccessForCurrentControls();
+    }
+
+    protected function recalculateAccessForCurrentControls(): void
+    {
+        $mapping = app(CustomerAccessMappingResolver::class)->forCustomer(
+            $this->company_id,
+            $this->region_specific_id,
+        );
+
+        if (! $mapping['complete']) {
+            $this->accessMappingWarning = $mapping['warning'];
+
+            return;
+        }
+
+        $this->access_user_ids = array_values(array_unique($mapping['user_ids']));
+        $this->accessMappingWarning = null;
+    }
+
+    protected function inspectAccessMappingAvailability(): void
+    {
+        $mapping = app(CustomerAccessMappingResolver::class)->forCustomer(
+            $this->company_id,
+            $this->region_specific_id,
+        );
+        $this->accessMappingWarning = $mapping['complete'] ? null : $mapping['warning'];
     }
 }

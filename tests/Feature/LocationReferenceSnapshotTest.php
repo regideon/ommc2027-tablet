@@ -4,6 +4,7 @@ use App\Filament\Pages\CustomerCreatePage;
 use App\Filament\Pages\CustomerPage;
 use App\Models\Customer;
 use App\Models\User;
+use App\Services\CustomerAccessMappingResolver;
 use App\Services\SyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -63,6 +64,92 @@ test('a complete location response applies validated references without changing
         ->and(DB::table('regions')->where('id', 1)->value('name'))->toBe('Historical Region')
         ->and(DB::table('customers')->where('id', -60)->value('region_specific_id'))->toBe(20)
         ->and(DB::table('sync_states')->where('key', 'location_reference_snapshot_complete')->exists())->toBeTrue();
+});
+
+test('location pull caches Access mappings and resolves their Users by exact email identity', function (): void {
+    $payload = ($this->snapshot)([
+        'regions' => [['id' => 2, 'code' => 'R2', 'name' => 'Region 2']],
+        'region_specifics' => [['id' => 20, 'region_id' => 2, 'name' => 'Specific 20']],
+    ]);
+    $payload['customer_access_mappings'] = [
+        [
+            'scope' => 'region_specific',
+            'region_specific_id' => 20,
+            'group_code' => 'GMA',
+            'is_complete' => true,
+            'users' => [['email' => 'mapped.access@example.test', 'name' => 'Mapped Access User']],
+        ],
+        [
+            'scope' => 'company',
+            'company_code' => 'OE',
+            'is_complete' => true,
+            'users' => [['email' => 'mapped.oe@example.test', 'name' => 'Mapped OE User']],
+        ],
+    ];
+    Http::fake(['portal.test/api/sync/pull/locations' => Http::response($payload)]);
+
+    $result = syncLocationSnapshot()->pullLocations();
+
+    $mapping = DB::table('customer_access_mappings')->where('scope', 'region_specific')->first();
+    expect($result->success)->toBeTrue($result->message)
+        ->and($mapping->mapping_key)->toBe('20')
+        ->and((bool) $mapping->is_complete)->toBeTrue()
+        ->and(json_decode($mapping->user_references, true))->toBe([['email' => 'mapped.access@example.test', 'name' => 'Mapped Access User']])
+        ->and(User::query()->where('email', 'mapped.access@example.test')->exists())->toBeTrue()
+        ->and(User::query()->where('email', 'mapped.oe@example.test')->exists())->toBeTrue();
+
+    $resolved = app(CustomerAccessMappingResolver::class)->forCustomer(1, 20);
+    expect($resolved['complete'])->toBeTrue()
+        ->and($resolved['user_ids'])->toBe([User::query()->where('email', 'mapped.access@example.test')->value('id')]);
+});
+
+test('legacy location snapshots without mapping section clear stale mapping cache but retain strict base validation', function (): void {
+    DB::table('customer_access_mappings')->insert([
+        'scope' => 'region_specific',
+        'mapping_key' => '77',
+        'is_complete' => true,
+        'user_references' => json_encode([['email' => 'old@example.test', 'name' => 'Old User']]),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    Http::fake(['portal.test/api/sync/pull/locations' => Http::response(($this->snapshot)([
+        'regions' => [['id' => 78, 'code' => 'R78', 'name' => 'New Region']],
+    ]))]);
+
+    $result = syncLocationSnapshot()->pullLocations();
+
+    expect($result->success)->toBeTrue($result->message)
+        ->and(DB::table('customer_access_mappings')->count())->toBe(0)
+        ->and(DB::table('regions')->where('id', 78)->exists())->toBeTrue();
+});
+
+test('invalid Access mapping references reject the full snapshot and preserve the prior cache', function (): void {
+    DB::table('customer_access_mappings')->insert([
+        'scope' => 'region_specific',
+        'mapping_key' => '77',
+        'is_complete' => true,
+        'user_references' => json_encode([['email' => 'old@example.test', 'name' => 'Old User']]),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    $payload = ($this->snapshot)([
+        'regions' => [['id' => 2, 'code' => 'R2', 'name' => 'Region 2']],
+    ]);
+    $payload['customer_access_mappings'] = [[
+        'scope' => 'region_specific',
+        'region_specific_id' => 99,
+        'group_code' => 'GMA',
+        'is_complete' => true,
+        'users' => [['email' => 'mapped@example.test', 'name' => 'Mapped User']],
+    ]];
+    Http::fake(['portal.test/api/sync/pull/locations' => Http::response($payload)]);
+
+    $result = syncLocationSnapshot()->pullLocations();
+
+    expect($result->success)->toBeFalse()
+        ->and(DB::table('customer_access_mappings')->count())->toBe(1)
+        ->and(DB::table('customer_access_mappings')->value('mapping_key'))->toBe('77')
+        ->and(DB::table('regions')->where('id', 2)->exists())->toBeFalse();
 });
 
 test('a complete location pull succeeds when the historical membership table is empty or absent', function (): void {
@@ -208,6 +295,7 @@ test('Portal rejection of a locally selectable stale reference leaves a recovera
     Livewire::test(CustomerCreatePage::class)
         ->set('company_id', 1)
         ->set('name', 'Stale Specific Region Customer')
+        ->set('physical_region_id', 1)
         ->set('region_specific_id', 53)
         ->assertSee('Locally Retained Specific Region')
         ->call('saveCustomer')

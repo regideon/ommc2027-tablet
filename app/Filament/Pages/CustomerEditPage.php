@@ -20,7 +20,7 @@ class CustomerEditPage extends CustomerCreatePage
     public function mount(?int $customerId = null): void
     {
         abort_unless($customerId !== null, 404);
-        $customer = Customer::with(['company', 'municipality.region', 'municipality.province', 'users', 'tradeProfile', 'categoryHistories'])->findOrFail($customerId);
+        $customer = Customer::with(['company', 'municipality.region', 'municipality.province', 'province.region', 'regionSpecific', 'users', 'tradeProfile', 'categoryHistories'])->findOrFail($customerId);
         $state = CustomerProfileFormService::hydrate($customer);
 
         foreach ($state as $key => $value) {
@@ -28,11 +28,15 @@ class CustomerEditPage extends CustomerCreatePage
                 $this->{$key} = $value;
             }
         }
-        $this->physical_region_id = $customer->municipality?->region_id;
+        $this->physical_region_id = $customer->municipality?->region_id
+            ?? $customer->province?->region_id
+            ?? $customer->regionSpecific?->region_id;
+        $this->initialRegionSpecificId = $customer->region_specific_id ? (int) $customer->region_specific_id : null;
         $this->trade = array_merge($this->trade, $state['trade'] ?? []);
         $this->active = $state['active'] ?? [];
         $this->categories = $state['categories'] ?? [];
         $this->customerId = (string) $customer->id;
+        $this->inspectAccessMappingAvailability();
     }
 
     public function saveCustomer(): void
