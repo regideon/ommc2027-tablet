@@ -5,10 +5,28 @@
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div class="md:col-span-2"><label class="fi-fo-field-wrp-label">{{ match($this->profileType()) { 'fleet' => 'Fleet Account Name', 'oe' => 'OE Account Name', 'ib' => 'IB Account Name', default => 'Store Name' } }} *</label><x-filament::input wire:model="name" />@error('name')<p class="text-danger-600 text-sm">{{ $message }}</p>@enderror</div>
                 <div><label class="fi-fo-field-wrp-label">Customer Code</label><x-filament::input wire:model="unique_id" readonly /></div>
-                <div><label class="fi-fo-field-wrp-label">Company *</label><select wire:model.live="company_id" @disabled($this instanceof \App\Filament\Pages\CustomerEditPage) class="fi-input w-full"><option value="">Select company</option>@foreach($companies as $company)<option value="{{ $company->id }}">{{ $company->name }}</option>@endforeach</select></div>
+                <div><label class="fi-fo-field-wrp-label">Company *</label><select wire:model.live="company_id" @disabled($this instanceof \App\Filament\Pages\CustomerEditPage) class="fi-input w-full"><option value="">Select company</option>@foreach($companies as $company)<option value="{{ $company->id }}">{{ $company->name }}</option>@endforeach @if($companyReferenceUnavailable)<option value="{{ $company_id }}">Unavailable saved Company reference (ID {{ $company_id }})</option>@endif</select>@if($companyReferenceUnavailable)<p class="mt-1 text-sm text-warning-700" role="status">The saved Company reference is unavailable offline. Its stored value is being preserved.</p>@endif</div>
                 <div><label class="fi-fo-field-wrp-label">General Category</label><select wire:model.live="general_category_id" class="fi-input w-full"><option value="">Select category</option>@foreach($generalCategories as $category)<option value="{{ $category->id }}">{{ $category->name }}</option>@endforeach</select></div>
                 @if((int) $general_category_id === 1)<div><label class="fi-fo-field-wrp-label">Competitor Volume</label><select wire:model="competitor_volume" class="fi-input w-full"><option value="">Not specified</option><option value="1">High</option><option value="2">Medium</option><option value="3">Low</option></select></div>@endif
-                <div><label class="fi-fo-field-wrp-label">Access</label><select wire:model="access_user_ids" multiple class="fi-input w-full h-24">@foreach($users as $user)<option value="{{ $user->id }}" @selected(in_array($user->id, $access_user_ids))>{{ $user->name }}</option>@endforeach</select>@if($accessMappingWarning)<p class="mt-1 text-sm text-warning-700">{{ $accessMappingWarning }}</p>@endif</div>
+                <div x-data="{ search: '' }" class="space-y-2">
+                    <label class="fi-fo-field-wrp-label" for="customer-access-search">Access</label>
+                    <input id="customer-access-search" type="search" x-model="search" placeholder="Search Users" aria-label="Search Access Users" class="fi-input w-full">
+                    <div class="fi-input max-h-48 space-y-1 overflow-y-auto p-2" role="group" aria-label="Access Users">
+                        @foreach($users as $user)
+                            <label x-show="$el.textContent.toLowerCase().includes(search.toLowerCase())" class="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-gray-50">
+                                <input type="checkbox" wire:model="access_user_ids" value="{{ $user->id }}" class="rounded">
+                                <span>{{ $user->name }}</span>
+                            </label>
+                        @endforeach
+                    </div>
+                    <div class="flex flex-wrap gap-1" aria-live="polite">
+                        @foreach($users->whereIn('id', $access_user_ids) as $selectedAccessUser)
+                            <span class="rounded-full bg-gray-100 px-2 py-1 text-xs">{{ $selectedAccessUser->name }}</span>
+                        @endforeach
+                    </div>
+                    <p class="text-sm text-gray-600">{{ count($access_user_ids) }} User{{ count($access_user_ids) === 1 ? '' : 's' }} selected</p>
+                    @if($accessMappingWarning)<p class="mt-1 text-sm text-warning-700" role="status">{{ $accessMappingWarning }}</p>@endif
+                </div>
                 @if($this->profileType() === 'outlet')<div><label class="fi-fo-field-wrp-label">Person in Charge</label><select wire:model="person_in_charge_id" class="fi-input w-full"><option value="">Select person</option>@foreach($users as $user)<option value="{{ $user->id }}">{{ $user->name }}</option>@endforeach</select></div>@endif
                 <div class="md:col-span-3"><label class="fi-fo-field-wrp-label">Address</label><textarea wire:model="address" data-location-address="address" class="fi-input w-full" rows="3"></textarea></div>
                 <div><label class="fi-fo-field-wrp-label">Contact Person</label><x-filament::input wire:model="contact_person" /></div>
@@ -23,7 +41,7 @@
             <h2 class="font-extrabold">Location</h2>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div><label class="fi-fo-field-wrp-label">Region</label><select wire:model.live="physical_region_id" class="fi-input w-full"><option value="">Select region</option>@foreach($regions as $region)<option value="{{ $region->id }}">{{ $region->name }}</option>@endforeach</select></div>
-                <div><label class="fi-fo-field-wrp-label">Specific Region</label><select wire:model.live="region_specific_id" class="fi-input w-full"><option value="">Select specific region</option>@foreach($regionSpecifics as $region)<option value="{{ $region->id }}">{{ $region->name }}</option>@endforeach</select></div>
+                <div><label class="fi-fo-field-wrp-label">Specific Region</label><select wire:model.live="region_specific_id" class="fi-input w-full"><option value="">Select specific region</option>@foreach($regionSpecifics as $region)<option value="{{ $region->id }}">{{ $region->name }}</option>@endforeach @if($regionSpecificReferenceUnavailable)<option value="{{ $region_specific_id }}">Unavailable saved Specific Region reference (ID {{ $region_specific_id }})</option>@endif</select>@if($regionSpecificReferenceUnavailable)<p class="mt-1 text-sm text-warning-700" role="status">The saved Specific Region reference is unavailable offline. Its stored value is being preserved.</p>@endif</div>
                 <div><label class="fi-fo-field-wrp-label">Area Cluster</label><select wire:model="area_cluster_id" class="fi-input w-full"><option value="">Select area cluster</option>@foreach($areaClusters as $cluster)<option value="{{ $cluster->id }}">{{ $cluster->name }}</option>@endforeach</select></div>
                 <div><label class="fi-fo-field-wrp-label">Province</label><select wire:model.live="province_id" class="fi-input w-full"><option value="">No province / independent locality</option>@foreach($provinces->where('region_id', $physical_region_id) as $province)<option value="{{ $province->id }}">{{ $province->name }}</option>@endforeach</select></div>
                 <div><label class="fi-fo-field-wrp-label">City / Municipality</label><select wire:model.live="municipality_id" class="fi-input w-full"><option value="">Select municipality</option>@foreach($municipalities->where('region_id', $physical_region_id)->where('province_id', $province_id) as $municipality)<option value="{{ $municipality->id }}">{{ $municipality->name }}</option>@endforeach</select></div>

@@ -330,6 +330,57 @@ test('customer add page defaults the current local user into access without requ
         ->and(DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->exists())->toBeTrue();
 });
 
+test('Access is searchable and supports multiple local Users without changing the Add default', function () {
+    $user = seedCustomerCreateFixtures();
+    $otherUser = User::factory()->create(['name' => 'Searchable Access User']);
+    $this->actingAs($user);
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->assertSee('Search Access Users')
+        ->assertSee('Search Users')
+        ->assertSee('x-model="search"', false)
+        ->assertSee('x-show="$el.textContent.toLowerCase().includes(search.toLowerCase())"', false)
+        ->assertSee('wire:model="access_user_ids"', false)
+        ->assertDontSee('<select wire:model="access_user_ids" multiple', false);
+
+    expect($component->get('access_user_ids'))->toBe([$user->id]);
+
+    $component->set('access_user_ids', [$user->id, $otherUser->id]);
+
+    expect($component->get('access_user_ids'))->toBe([$user->id, $otherUser->id]);
+});
+
+test('Edit displays unavailable saved Company and Specific Region references without changing their IDs or Access', function () {
+    $user = seedCustomerCreateFixtures();
+    $manualUser = User::factory()->create(['email' => 'unavailable-reference-access@example.test']);
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'Unavailable Reference Customer',
+        'company_id' => 1,
+        'region_specific_id' => 1,
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_user')->insert(['customer_id' => $customerId, 'user_id' => $manualUser->id, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('companies')->where('id', 1)->delete();
+    DB::table('region_specifics')->where('id', 1)->delete();
+    $this->actingAs($user);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customerId])
+        ->assertSet('company_id', 1)
+        ->assertSet('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->assertSee('Unavailable saved Company reference (ID 1)')
+        ->assertSee('Unavailable saved Specific Region reference (ID 1)')
+        ->assertSee('The saved Company reference is unavailable offline. Its stored value is being preserved.')
+        ->assertSee('The saved Specific Region reference is unavailable offline. Its stored value is being preserved.');
+
+    expect(DB::table('customers')->where('id', $customerId)->value('company_id'))->toBe(1)
+        ->and(DB::table('customers')->where('id', $customerId)->value('region_specific_id'))->toBe(1)
+        ->and(DB::table('customer_user')->where('customer_id', $customerId)->pluck('user_id')->all())->toBe([$manualUser->id]);
+});
+
 test('customer add page preserves the default current user when adding another access user', function () {
     $user = seedCustomerCreateFixtures();
     $otherUser = User::factory()->create();

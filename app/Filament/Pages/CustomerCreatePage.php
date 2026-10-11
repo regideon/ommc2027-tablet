@@ -142,8 +142,10 @@ class CustomerCreatePage extends Page
 
         return [
             'companies' => Company::orderBy('name')->get(),
+            'companyReferenceUnavailable' => $this->company_id !== null && ! Company::whereKey($this->company_id)->exists(),
             'regions' => Region::where(fn ($query) => $query->whereNotNull('psgc_code')->orWhere('id', $this->physical_region_id))->orderBy('name')->get(),
             'regionSpecifics' => $regionSpecifics,
+            'regionSpecificReferenceUnavailable' => $this->region_specific_id !== null && ! RegionSpecific::whereKey($this->region_specific_id)->exists(),
             'areaClusters' => $this->region_specific_id
                 ? AreaCluster::where('region_specific_id', $this->region_specific_id)
                     ->where(fn ($query) => $query->where('enabled', true)->orWhere('id', $this->area_cluster_id))
