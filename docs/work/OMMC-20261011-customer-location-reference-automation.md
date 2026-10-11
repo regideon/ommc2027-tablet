@@ -283,4 +283,13 @@ Exclude the separate Customer Access Activation artifacts, Customer Add Form Con
 
 Deferred decisions remain: approved production location mappings and personnel Access assignments; live authenticated synchronization; physical iPad validation; NCR parent reconciliation; NIR representation; unresolved Quezon City Barangay assignments; Maguindanao; and future production reference/mapping rollout. No real-data mapping activation is claimed.
 
-**Current Work state: `READY_FOR_TERMINAL_REVIEW`. Awaiting separate Human `TERMINAL GO`.**
+## Terminal delivery (2026-10-12)
+
+Human `TERMINAL GO` received. The reviewed location automation and disposable E2E evidence were delivered in one commit per repository and pushed to the existing `origin/main` branches:
+
+- Portal: `e677acc` (`feat(customer): add location area cluster automation`)
+- Tablet: `ab15839` (`feat(customer): add location area cluster automation`)
+
+Both pushes succeeded. Deferred limitations remain unchanged: no real location mapping activation, real personnel Access activation, production synchronization, deployment, or physical iPad validation is claimed. Real mappings and personnel assignments remain pending approval, and unresolved NCR, NIR, Quezon City Barangay, and Maguindanao location decisions remain deferred.
+
+**Current Work state: `TERMINAL_DELIVERED`.**
