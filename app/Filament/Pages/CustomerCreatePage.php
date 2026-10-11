@@ -300,25 +300,38 @@ class CustomerCreatePage extends Page
         $this->locationError = null;
 
         $previousRegionSpecificId = $this->region_specific_id;
-        foreach (['region_specific_id', 'area_cluster_id', 'province_id', 'municipality_id', 'barangay_id', 'address'] as $field) {
+        if ($result['region_id'] !== null) {
+            $this->physical_region_id = $result['region_id'];
+        }
+
+        foreach (['province_id', 'municipality_id', 'barangay_id', 'address'] as $field) {
             if ($result[$field] !== null) {
                 $this->{$field} = $result[$field];
             }
         }
 
-        $this->physical_region_id = $this->municipality_id
-            ? Municipality::find($this->municipality_id)?->region_id
-            : null;
-
-        if ((int) ($previousRegionSpecificId ?? 0) !== (int) ($this->region_specific_id ?? 0)) {
-            $this->applySpecificRegionChange();
+        if ($result['area_cluster_id'] !== null && $result['region_specific_id'] !== null) {
+            $this->applyResolvedLocationAreaClusterMapping([
+                'decision' => 'mapped',
+                'area_cluster_id' => $result['area_cluster_id'],
+                'region_specific_id' => $result['region_specific_id'],
+                'source_level' => null,
+            ]);
         }
     }
 
     protected function applyLocationAreaClusterMapping(): void
     {
         $resolution = app(LocationAreaClusterMappingResolver::class)->resolve($this->province_id, $this->municipality_id, $this->barangay_id);
-        if ($resolution['decision'] !== 'mapped') {
+        $this->applyResolvedLocationAreaClusterMapping($resolution);
+    }
+
+    /** @param array{decision: string, area_cluster_id: ?int, region_specific_id: ?int, source_level: ?string} $resolution */
+    protected function applyResolvedLocationAreaClusterMapping(array $resolution): void
+    {
+        if ($resolution['decision'] !== 'mapped'
+            || ! $resolution['area_cluster_id']
+            || ! $resolution['region_specific_id']) {
             return;
         }
 
@@ -331,7 +344,10 @@ class CustomerCreatePage extends Page
         // Access recalculation for the Specific Region can reset Area Cluster
         // to the single available option. A mapped location is already an
         // explicit, validated choice, so restore it after that recalculation.
-        $this->area_cluster_id = $resolution['area_cluster_id'];
+        if (AreaCluster::query()->whereKey($resolution['area_cluster_id'])
+            ->where('region_specific_id', $resolution['region_specific_id'])->exists()) {
+            $this->area_cluster_id = $resolution['area_cluster_id'];
+        }
     }
 
     public function categoryOptions(string $stream): array
