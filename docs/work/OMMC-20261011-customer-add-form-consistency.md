@@ -1,6 +1,6 @@
 # OMMC-20261011-customer-add-form-consistency
 
-- **State:** READY_FOR_HUMAN_REVIEW
+- **State:** TERMINAL_DELIVERED
 - **Mode:** Bounded implementation
 - **Predecessor:** OMMC-20261011-customer-region-access-automation (TERMINAL_DELIVERED)
 - **Repositories:** Portal `ommc2027`; Tablet `ommc2027-tablet`
@@ -60,4 +60,8 @@ The Tablet suite also covers existing no-controller/no-cache warning behavior, m
 
 The Human authorized terminal delivery. Final focused validation in this terminalization run passed: Portal `CustomerAccessMappingFormTest` plus the Access foundation seeder suite: **21 tests / 94 assertions**; Tablet `CustomerCreatePageDiagnosticTest`: **37 tests / 296 assertions**. Pint passed in both repositories. No tests used retained databases. No physical iPad or deployed-build validation is claimed.
 
-Implementation is complete and the Work is **READY_FOR_TERMINAL_REVIEW** pending its scoped commits and pushes. Real Access mapping activation and reference restoration remain deferred.
+## Terminal delivery (2026-10-12)
+
+The Human authorized terminal delivery. Portal commit `a3435ff` and Tablet commit `646a38f` were pushed successfully to their existing `origin/main` branches. No retained database writes, production access, mapping activation, User provisioning, deployment, or physical iPad validation occurred.
+
+**Current Work state: `TERMINAL_DELIVERED`.** Real Access mapping activation and location-reference restoration remain deferred.
