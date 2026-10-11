@@ -14,6 +14,7 @@ use App\Models\RegionSpecific;
 use App\Models\User;
 use App\Services\CustomerAccessMappingResolver;
 use App\Services\CustomerProfileFormService;
+use App\Services\LocationAreaClusterMappingResolver;
 use App\Services\PhilippineAddressResolver;
 use App\Services\SyncService;
 use BackedEnum;
@@ -260,11 +261,18 @@ class CustomerCreatePage extends Page
     {
         $this->municipality_id = null;
         $this->barangay_id = null;
+        $this->applyLocationAreaClusterMapping();
     }
 
     public function updatedMunicipalityId(): void
     {
         $this->barangay_id = null;
+        $this->applyLocationAreaClusterMapping();
+    }
+
+    public function updatedBarangayId(): void
+    {
+        $this->applyLocationAreaClusterMapping();
     }
 
     public function resolveLocation(?float $latitude = null, ?float $longitude = null): void
@@ -290,7 +298,7 @@ class CustomerCreatePage extends Page
         $this->locationError = null;
 
         $previousRegionSpecificId = $this->region_specific_id;
-        foreach (['region_specific_id', 'province_id', 'municipality_id', 'barangay_id', 'address'] as $field) {
+        foreach (['region_specific_id', 'area_cluster_id', 'province_id', 'municipality_id', 'barangay_id', 'address'] as $field) {
             if ($result[$field] !== null) {
                 $this->{$field} = $result[$field];
             }
@@ -303,6 +311,25 @@ class CustomerCreatePage extends Page
         if ((int) ($previousRegionSpecificId ?? 0) !== (int) ($this->region_specific_id ?? 0)) {
             $this->applySpecificRegionChange();
         }
+    }
+
+    protected function applyLocationAreaClusterMapping(): void
+    {
+        $resolution = app(LocationAreaClusterMappingResolver::class)->resolve($this->province_id, $this->municipality_id, $this->barangay_id);
+        if ($resolution['decision'] !== 'mapped') {
+            return;
+        }
+
+        $previousRegionSpecificId = $this->region_specific_id;
+        $this->region_specific_id = $resolution['region_specific_id'];
+        if ((int) ($previousRegionSpecificId ?? 0) !== (int) ($this->region_specific_id ?? 0)) {
+            $this->applySpecificRegionChange();
+        }
+
+        // Access recalculation for the Specific Region can reset Area Cluster
+        // to the single available option. A mapped location is already an
+        // explicit, validated choice, so restore it after that recalculation.
+        $this->area_cluster_id = $resolution['area_cluster_id'];
     }
 
     public function categoryOptions(string $stream): array

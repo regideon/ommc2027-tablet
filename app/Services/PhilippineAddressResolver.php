@@ -2,12 +2,10 @@
 
 namespace App\Services;
 
-use App\Models\AreaCluster;
 use App\Models\Barangay;
 use App\Models\Municipality;
 use App\Models\Province;
 use App\Models\Region;
-use App\Models\RegionSpecific;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -72,17 +70,9 @@ class PhilippineAddressResolver
             $provinceId ??= $municipality->province_id;
         }
 
-        $regionSpecificId = $this->match(RegionSpecific::class, $stateTokens, $regionId ? ['region_id' => $regionId] : []);
-
-        if ($regionSpecificId === null && $provinceId) {
-            $regionSpecificId = Province::query()->whereKey($provinceId)->value('region_specific_id');
-        }
-
-        if ($regionSpecificId === null && $regionId) {
-            $regionSpecificId = $this->onlyRegionSpecificId($regionId);
-        }
-
-        $areaClusterId = $regionSpecificId ? $this->uniqueAreaClusterId($regionSpecificId) : null;
+        $locationMapping = app(LocationAreaClusterMappingResolver::class)->resolve($provinceId, $municipalityId, $barangayId);
+        $regionSpecificId = $locationMapping['decision'] === 'mapped' ? $locationMapping['region_specific_id'] : null;
+        $areaClusterId = $locationMapping['decision'] === 'mapped' ? $locationMapping['area_cluster_id'] : null;
 
         $street = trim(((string) ($components['house_number'] ?? '')).' '.((string) ($components['road'] ?? '')));
         $address = $street !== '' ? $street : $display;
@@ -148,23 +138,6 @@ class PhilippineAddressResolver
         $ids = array_values(array_unique($ids));
 
         return count($ids) === 1 ? $ids[0] : null;
-    }
-
-    private function uniqueAreaClusterId(int $regionSpecificId): ?int
-    {
-        $ids = AreaCluster::query()
-            ->where('region_specific_id', $regionSpecificId)
-            ->where('enabled', true)
-            ->pluck('id');
-
-        return $ids->count() === 1 ? (int) $ids->first() : null;
-    }
-
-    private function onlyRegionSpecificId(int $regionId): ?int
-    {
-        $ids = RegionSpecific::query()->where('region_id', $regionId)->pluck('id');
-
-        return $ids->count() === 1 ? (int) $ids->first() : null;
     }
 
     /**

@@ -348,6 +348,9 @@ class SyncService
         if (array_key_exists('customer_access_mappings', $data)) {
             $this->validateCustomerAccessMappings($data['customer_access_mappings'], $ids['region_specifics']);
         }
+        if (array_key_exists('location_area_cluster_mappings', $data)) {
+            $this->validateLocationAreaClusterMappings($data['location_area_cluster_mappings'], $data);
+        }
 
         $idSets = array_map(fn (array $sectionIds): array => array_fill_keys($sectionIds, true), $ids);
         foreach ($sections as $section) {
@@ -424,6 +427,66 @@ class SyncService
 
             if ($row['is_complete'] && $emails === []) {
                 throw new \RuntimeException('Portal marked an empty Customer Access mapping complete.');
+            }
+        }
+    }
+
+    /** @param array<string, mixed> $snapshot */
+    private function validateLocationAreaClusterMappings(mixed $rows, array $snapshot): void
+    {
+        if (! is_array($rows) || ! array_is_list($rows)) {
+            throw new \RuntimeException('Portal location mapping references are incomplete or malformed.');
+        }
+
+        $provinces = collect($snapshot['provinces'])->keyBy('id');
+        $municipalities = collect($snapshot['municipalities'])->keyBy('id');
+        $barangays = collect($snapshot['barangays'])->keyBy('id');
+        $regionSpecifics = collect($snapshot['region_specifics'])->keyBy('id');
+        $areaClusters = collect($snapshot['area_clusters'])->keyBy('id');
+        $keys = [];
+
+        foreach ($rows as $row) {
+            if (! is_array($row) || ! is_int($row['id'] ?? null) || $row['id'] < 1
+                || ! in_array($row['location_level'] ?? null, ['province', 'municipality', 'barangay'], true)
+                || ! is_int($row['location_id'] ?? null) || $row['location_id'] < 1
+                || ! in_array($row['decision'] ?? null, ['mapped', 'unresolved', 'requires_finer_location'], true)) {
+                throw new \RuntimeException('Portal returned an invalid location mapping row.');
+            }
+
+            $level = $row['location_level'];
+            $locationId = $row['location_id'];
+            $location = match ($level) {
+                'province' => $provinces->get($locationId),
+                'municipality' => $municipalities->get($locationId),
+                'barangay' => $barangays->get($locationId),
+            };
+            $key = $level.':'.$locationId;
+            if (! $location || isset($keys[$key]) || isset($keys['id:'.$row['id']])) {
+                throw new \RuntimeException('Portal returned a missing or duplicate location mapping key.');
+            }
+            $keys[$key] = true;
+            $keys['id:'.$row['id']] = true;
+
+            if ($row['decision'] !== 'mapped') {
+                if (($row['area_cluster_id'] ?? null) !== null) {
+                    throw new \RuntimeException('A blocked location mapping cannot include an Area Cluster.');
+                }
+
+                continue;
+            }
+
+            $clusterId = $row['area_cluster_id'] ?? null;
+            $cluster = is_int($clusterId) ? $areaClusters->get($clusterId) : null;
+            $specificRegion = $cluster ? $regionSpecifics->get($cluster['region_specific_id']) : null;
+            $physicalRegionId = match ($level) {
+                'province' => $location['region_id'] ?? null,
+                'municipality' => $location['region_id'] ?? null,
+                'barangay' => $municipalities->get($location['municipality_id'])['region_id'] ?? null,
+            };
+
+            if (! $cluster || ! $cluster['enabled'] || ! $specificRegion || ! is_int($physicalRegionId)
+                || (int) $specificRegion['region_id'] !== $physicalRegionId) {
+                throw new \RuntimeException('Portal returned a location mapping with an invalid Area Cluster or physical Region.');
             }
         }
     }
@@ -1094,6 +1157,21 @@ class SyncService
             'name' => $areaCluster['name'],
             'enabled' => $areaCluster['enabled'] ?? true,
         ], $data['area_clusters'] ?? []));
+
+        if (array_key_exists('location_area_cluster_mappings', $data)) {
+            DB::table('location_area_cluster_mappings')->delete();
+            foreach (array_chunk(array_map(fn (array $mapping): array => [
+                'id' => $mapping['id'],
+                'location_level' => $mapping['location_level'],
+                'location_id' => $mapping['location_id'],
+                'decision' => $mapping['decision'],
+                'area_cluster_id' => $mapping['area_cluster_id'] ?? null,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ], $data['location_area_cluster_mappings']), 400) as $chunk) {
+                DB::table('location_area_cluster_mappings')->insert($chunk);
+            }
+        }
 
         $protectedStatuses = self::PROTECTED_CUSTOMER_STATUSES;
         $serverToLocalCustomer = [];

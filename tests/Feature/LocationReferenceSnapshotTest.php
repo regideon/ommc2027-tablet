@@ -66,6 +66,99 @@ test('a complete location response applies validated references without changing
         ->and(DB::table('sync_states')->where('key', 'location_reference_snapshot_complete')->exists())->toBeTrue();
 });
 
+test('location mapping references are strictly validated and cached with the snapshot', function (): void {
+    $payload = ($this->snapshot)([
+        'regions' => [['id' => 2, 'code' => 'R2', 'name' => 'Region 2']],
+        'region_specifics' => [['id' => 20, 'region_id' => 2, 'name' => 'Commercial Region']],
+        'area_clusters' => [['id' => 30, 'region_specific_id' => 20, 'code' => 'A30', 'name' => 'Cluster', 'enabled' => true]],
+        'provinces' => [['id' => 40, 'region_id' => 2, 'name' => 'Province', 'enabled' => true]],
+    ]);
+    $payload['location_area_cluster_mappings'] = [[
+        'id' => 1, 'location_level' => 'province', 'location_id' => 40,
+        'decision' => 'mapped', 'area_cluster_id' => 30,
+    ]];
+    Http::fake(['portal.test/api/sync/pull/locations' => Http::response($payload)]);
+
+    $result = syncLocationSnapshot()->pullLocations();
+    expect($result->success)->toBeTrue($result->message)
+        ->and(DB::table('location_area_cluster_mappings')->where('location_id', 40)->value('area_cluster_id'))->toBe(30);
+
+    $payload['location_area_cluster_mappings'][0]['area_cluster_id'] = 999;
+    Http::fake(['portal.test/api/sync/pull/locations' => Http::response($payload)]);
+    $rejected = syncLocationSnapshot()->pullLocations();
+    expect($rejected->success)->toBeFalse()
+        ->and(DB::table('location_area_cluster_mappings')->where('location_id', 40)->value('area_cluster_id'))->toBe(30);
+});
+
+test('the restored Specific Region manifest and all 34 dependent Area Clusters pass strict snapshot validation', function (): void {
+    $regions = [];
+    foreach (range(1, 19) as $id) {
+        $regions[] = ['id' => $id, 'code' => "R{$id}", 'name' => "Physical Region {$id}"];
+    }
+
+    $manifest = [
+        ['id' => 52, 'name' => 'Region IV-A (Cavite, Rizal)', 'region_id' => 7, 'area_cluster_count' => 2],
+        ['id' => 53, 'name' => 'Region IV-A (Laguna, Batangas, Quezon)', 'region_id' => 7, 'area_cluster_count' => 1],
+        ['id' => 54, 'name' => 'Region III (Central Luzon)', 'region_id' => 6, 'area_cluster_count' => 3],
+        ['id' => 55, 'name' => 'Region XI (Davao Region)', 'region_id' => 16, 'area_cluster_count' => 1],
+        ['id' => 56, 'name' => 'Region X (Northern Mindanao)', 'region_id' => 15, 'area_cluster_count' => 1],
+        ['id' => 57, 'name' => 'Region IX (Zamboanga Peninsula)', 'region_id' => 14, 'area_cluster_count' => 1],
+        ['id' => 58, 'name' => 'Region XII (SOCCSKSARGEN)', 'region_id' => 17, 'area_cluster_count' => 1],
+        ['id' => 59, 'name' => 'Region XIII (Caraga)', 'region_id' => 18, 'area_cluster_count' => 1],
+        ['id' => 60, 'name' => 'Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)', 'region_id' => 19, 'area_cluster_count' => 3],
+        ['id' => 61, 'name' => 'Region II (Cagayan Valley)', 'region_id' => 5, 'area_cluster_count' => 1],
+        ['id' => 62, 'name' => 'Cordillera Administrative Region (CAR)', 'region_id' => 3, 'area_cluster_count' => 2],
+        ['id' => 63, 'name' => 'Region I (Ilocos Region)', 'region_id' => 4, 'area_cluster_count' => 3],
+        ['id' => 64, 'name' => 'Region V (Bicol Region)', 'region_id' => 9, 'area_cluster_count' => 1],
+        ['id' => 65, 'name' => 'Region IV-B (MIMAROPA)', 'region_id' => 8, 'area_cluster_count' => 3],
+        ['id' => 66, 'name' => 'Region VII (Central Visayas)', 'region_id' => 12, 'area_cluster_count' => 3],
+        ['id' => 67, 'name' => 'Region VIII (Eastern Visayas)', 'region_id' => 13, 'area_cluster_count' => 3],
+        ['id' => 68, 'name' => 'Region VI (Western Visayas)', 'region_id' => 10, 'area_cluster_count' => 4],
+    ];
+    $regionSpecifics = [['id' => 1, 'region_id' => 1, 'name' => 'National Capital Region (NCR)', 'sort' => 0]];
+    $areaClusterCounts = [1 => 10];
+
+    foreach ($manifest as $reference) {
+        $regionSpecifics[] = [
+            'id' => $reference['id'],
+            'region_id' => $reference['region_id'],
+            'name' => $reference['name'],
+            'sort' => 0,
+        ];
+        $areaClusterCounts[$reference['id']] = $reference['area_cluster_count'];
+    }
+
+    $areaClusters = [];
+    $areaClusterId = 1;
+    foreach ($areaClusterCounts as $regionSpecificId => $count) {
+        for ($index = 1; $index <= $count; $index++) {
+            $areaClusters[] = [
+                'id' => $areaClusterId,
+                'region_specific_id' => $regionSpecificId,
+                'code' => "CLUSTER-{$regionSpecificId}-{$index}",
+                'name' => "Cluster {$regionSpecificId}-{$index}",
+                'enabled' => true,
+            ];
+            $areaClusterId++;
+        }
+    }
+
+    Http::fake(['portal.test/api/sync/pull/locations' => Http::response(($this->snapshot)([
+        'regions' => $regions,
+        'region_specifics' => $regionSpecifics,
+        'area_clusters' => $areaClusters,
+    ]))]);
+
+    $result = syncLocationSnapshot()->pullLocations();
+
+    expect($result->success)->toBeTrue($result->message)
+        ->and(DB::table('regions')->count())->toBe(19)
+        ->and(DB::table('region_specifics')->count())->toBe(18)
+        ->and(DB::table('area_clusters')->count())->toBe(44)
+        ->and(DB::table('area_clusters')->whereNotIn('region_specific_id', DB::table('region_specifics')->select('id'))->count())->toBe(0)
+        ->and(DB::table('sync_states')->where('key', 'location_reference_snapshot_complete')->exists())->toBeTrue();
+});
+
 test('location pull caches Access mappings and resolves their Users by exact email identity', function (): void {
     $payload = ($this->snapshot)([
         'regions' => [['id' => 2, 'code' => 'R2', 'name' => 'Region 2']],
