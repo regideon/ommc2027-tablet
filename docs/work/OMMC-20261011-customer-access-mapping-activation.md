@@ -1,6 +1,6 @@
 # OMMC-20261011-customer-access-mapping-activation
 
-- **State:** ACTIVE
+- **State:** TERMINAL_DELIVERED (inactive foundation only)
 - **Mode:** Bounded local database execution
 - **Repositories:** Portal `ommc2027`; Tablet `ommc2027-tablet`
 - **Authorization:** Human authorized the Portal foundation seeder against the named local database. No manual Tablet cache population, production access, deployment, staging, commit, or push.
@@ -44,4 +44,8 @@ No Tablet cache data was written and no production activation is claimed.
 
 The inactive foundation implementation is complete for delivery: Portal seeder plus disposable regression tests, with the mapping schema/resolver and Tablet cache contract already delivered in the predecessor Customer Access foundation commit. In this terminalization run, the combined Portal focused suites passed **21 tests / 94 assertions**, including the seeder suite (**3 tests / 18 assertions**); Pint passed. The existing seven local configuration rows remain incomplete and no Access assignments or Specific Region mappings were added.
 
-This Work's terminal scope is the inactive configuration foundation only. **Real Customer Access activation is not complete or claimed.** Candidate identities remain unapproved; the Specific Region-to-group mappings and real User assignment pivots remain empty. No Users were provisioned, no Tablet cache was manually populated, and no production operation occurred. Foundation code is **READY_FOR_TERMINAL_REVIEW** pending the scoped Portal and mirrored documentation delivery.
+## Foundation terminal delivery (2026-10-12)
+
+The inactive configuration foundation was delivered in Portal commit `247f3eb` and Tablet documentation commit `adf8bec`; both were pushed successfully to the existing `origin/main` branches. The Portal implementation commit contains only the inactive seeder, its disposable test, and its mirrored Work note. No Tablet application or cache data changed.
+
+**Current Work state: `TERMINAL_DELIVERED` for the inactive foundation only. Real Customer Access activation is not complete or claimed.** Candidate identities remain unapproved; the Specific Region-to-group mappings and real User assignment pivots remain empty. The seven retained local configuration rows remain incomplete. No Users were provisioned, no Tablet cache was manually populated, and no production operation occurred.
