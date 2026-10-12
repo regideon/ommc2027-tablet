@@ -1,16 +1,16 @@
 # OMMC-20261012-customer-access-by-creator-group
 
-- **State:** READY_FOR_TERMINAL_REVIEW
-- **Mode:** Terminal review preparation completed; awaiting separate Human terminal authorization.
+- **State:** TERMINAL_DELIVERED
+- **Mode:** Local terminal delivery accepted; documentation-only follow-up records final acceptance. No push or deployment.
 - **Repositories:** Portal `ommc2027`; Tablet `ommc2027-tablet`
 - **Objective:** Default Person in Charge to the authenticated User for every Customer profile, derive new Customer Access from all configured Access groups containing the authenticated creator, and display complete User names.
-- **Authorization:** Human accepted Phase A and authorized Phase B local implementation and validation. A later explicit Batch 1 GO authorized only the 16 named creator REG membership additions in the retained local Portal database; that batch is complete. No User or Customer changes, Customer Push/Pull, Tablet Pull/Push or retained Tablet writes, unrelated migrations, staging, commit, push, or deployment are authorized.
+- **Authorization:** Human accepted Phase A and authorized Phase B local implementation and validation. A later explicit Batch 1 GO authorized only the 16 named creator REG membership additions in the retained local Portal database; that batch is complete. No User or Customer changes, Customer Push/Pull, Tablet Pull/Push or retained Tablet writes, unrelated migrations, push, or deployment are authorized. The final Human decision accepts the implementation commits and authorizes local documentation-only follow-up commits.
 - **Accepted behavior:** Add defaults editable Person in Charge to the authenticated User and persists the final selection for Outlet, Fleet, OE, and IB. Edit hydrates stored Person in Charge. Access is independent of Company and geography. Resolve every creator group, union resolvable assigned Users, deduplicate, and always include the creator during initial population. Include resolvable memberships even where a group is incomplete; warn about incomplete/unresolved memberships and permit manual edits. Missing/incomplete offline snapshot falls back to creator only. Preserve existing Edit Access behavior and Portal Push omission semantics. Reconcile Tablet Users by email and retain existing IDs.
 - **Implementation notes:** Portal serializers and Add selectors use the creator-group resolver; Tablet consumes standalone `scope=group` rows in the existing Access mapping cache. Existing region/company mappings remain. User labels combine `name` and `last_name`. Tablet sync writes surname independently when `users.last_name` exists. This bounded follow-up adds one nullable `users.last_name` column through an additive Tablet migration; Portal schema is unchanged.
-- **Constraints:** Existing tables, identity relationships, mapping cache, and sync contracts only. The single additive Tablet `users.last_name` migration and the explicitly authorized 16-pair Portal Batch 1 activation are recorded below; no other migration or data activation was performed. No staging, commit, push, or deployment.
+- **Constraints:** Existing tables, identity relationships, mapping cache, and sync contracts only. The single additive Tablet `users.last_name` migration and the explicitly authorized 16-pair Portal Batch 1 activation are recorded below; no other migration or data activation was performed. No application-code staging or commits beyond the accepted implementation commits and authorized documentation-only follow-up; no push or deployment.
 - **Initial repository state:** Tablet `main` was clean and tracking `origin/main`. Portal `main` was clean and three commits behind its tracking ref; those upstream-only commits change unrelated Trade Request and Training controller scoping. No local unrelated worktree changes were present.
 - **Owned files:** Portal: `CustomerForm.php`, `ResolvesCustomerLocation.php`, `ViewCustomer.php`, `SyncController.php`, `User.php`, `CustomerAccessMappingService.php`, `TabletSyncPayload.php`. Tablet: `CustomerCreatePage.php`, `CustomerEditPage.php`, `CustomerPage.php`, customer create Blade view, `User.php`, `CustomerAccessMappingResolver.php`, `SyncService.php`.
-- **Delivery evidence:** No staging, commit, push, or deployment performed.
+- **Delivery evidence:** Human accepted Portal commit f314d91dd65bf27d8a3ed078716b74a010721a3a and Tablet commit 62becc7bf5369948e5c1908a792d4244bd97cf4e. No push or deployment.
 
 ## Phase B validation (2026-10-12)
 
@@ -425,3 +425,16 @@ Business function/title is roster data only; it does not establish a Portal role
 - Tablet focused tests: 111 passed, 926 assertions; four login/surname tests passed, 19 assertions. Three previously documented reachability tests in `FirstLoginPersistenceTest.php` still call undefined `SyncService::lastError()`; they were not included in this passing rerun and remain unrelated to this Work.
 - PHP lint passed for every staged PHP file in both repositories. Pint passed in both repositories. Cached diff checks passed.
 - The reviewed staged file lists remain the 13 Portal and 22 Tablet paths recorded above. Nullable-Company implementation and tests remain unstaged.
+
+
+## Final terminal delivery acceptance (2026-10-13, Asia/Manila)
+
+- **State: TERMINAL_DELIVERED. Human acceptance received.** The Human accepts the verified local implementation commits listed below. This acceptance authorizes local documentation-only follow-up commits to record the final checkpoint.
+- **Portal implementation commit:** f314d91dd65bf27d8a3ed078716b74a010721a3a.
+- **Tablet implementation commit:** 62becc7bf5369948e5c1908a792d4244bd97cf4e.
+- **Human-observed acceptance:** After manual synchronization, Customer Add for Jay-Ar Moreno showed exactly eight GMA Users, including Mico Ortiz and Jed San Miguel; Jay-Ar remained Person in Charge; the incomplete GMA warning was absent. No Customer was saved.
+- **Validation evidence:** Portal focused tests passed (77 tests, 681 assertions). Tablet focused tests passed (111 tests, 926 assertions), plus four login/surname tests (19 assertions). PHP lint passed for staged PHP files in both repositories; Pint and cached diff checks passed in both.
+- **Known unrelated test failures:** Three existing Tablet FirstLoginPersistenceTest reachability checks call undefined SyncService::lastError() at lines 135, 152, and 164. They are outside this accepted Work and remain unresolved.
+- **Known nullable-Company blocker:** The separate nullable-Company Customer Pull compatibility implementation and tests were excluded from the implementation commits and remain unstaged. Retained Customer-data reconciliation and successful retained Customer Pull were not verified; Company-less Customer Edit/Push policy remains unresolved.
+- **Client prerequisite:** Before first-time Customer creation on Tablet, complete the required Customer/reference synchronization and confirm it succeeds.
+- **Preservation:** The excluded Portal nullable-Company test remains unstaged in tests/Feature/TabletSplitPullTest.php. The excluded Tablet nullable-Company implementation/test hunks remain unstaged in app/Services/SyncService.php and tests/Feature/CustomerPagedPullTest.php. Both indexes were clean before this note update. No other worktree changes were present.
