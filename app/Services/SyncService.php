@@ -15,6 +15,8 @@ use App\Models\Forms\CRR\CrrAttachment;
 use App\Models\Forms\Giveaway\Giveaway;
 use App\Models\Forms\Giveaway\GiveawaySignature;
 use App\Models\Forms\Marketing\Marketing;
+use App\Models\Forms\Repair\Repair;
+use App\Models\Forms\Repair\RepairAttachment;
 use App\Models\Forms\TradeCheck\TradeCheck;
 use App\Models\Forms\TradeCheck\TradeCheckAttachment;
 use App\Models\Itinerary;
@@ -86,6 +88,8 @@ class SyncService
             || $pendingOrRetryable(TradeCheckAttachment::query())->exists()
             || $pendingOrRetryable(Giveaway::query())->exists()
             || $pendingOrRetryable(GiveawaySignature::query())->exists()
+            || $pendingOrRetryable(Repair::query())->exists()
+            || $pendingOrRetryable(RepairAttachment::query())->exists()
             || $pendingOrRetryable(CustomerNote::query())->exists();
     }
 
@@ -1786,6 +1790,20 @@ class SyncService
         return $this->readGiveawaysWithStatus()['giveaways'];
     }
 
+    /** @return array{repairs: array<int, array<string, mixed>>, failed: bool} */
+    public function readRepairsWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/sync/forms/repair/pull', 'repairs');
+
+        return ['repairs' => $result['rows'], 'failed' => $result['failed']];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public function readRepairs(): array
+    {
+        return $this->readRepairsWithStatus()['repairs'];
+    }
+
     /** @return array{rows: array<int, array<string, mixed>>, failed: bool} */
     private function requestFormRows(string $path, string $key): array
     {
@@ -2364,6 +2382,81 @@ class SyncService
                 }
 
                 $result = $this->pushGiveawaySignatureItem($client, $signature);
+
+                if ($result instanceof SyncResult) {
+                    return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
+                }
+
+                if ($result['success']) {
+                    $pushed++;
+                } else {
+                    $failed++;
+                    $retryable++;
+                    $failureReasons[$result['reason']] = true;
+                }
+            }
+
+            $pendingRepairs = Repair::with('salescall')
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingRepairs as $repair) {
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/forms/repair/push", [
+                        'server_id' => $repair->server_id,
+                        'salescall_uuid' => $repair->salescall?->local_uuid,
+                        'plate_number' => $repair->plate_number,
+                        'invoice_number' => $repair->invoice_number,
+                        'details' => $repair->details,
+                        'amount' => $repair->amount,
+                        'remarks' => $repair->remarks,
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    $serverId = $response->json('server_id');
+                    if ($response->successful() && $serverId !== null) {
+                        $this->markSynced($repair, [
+                            'server_id' => $serverId,
+                            'synced_at' => now(),
+                        ]);
+                        $pushed++;
+                    } else {
+                        $this->recordItemFailure($repair, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
+                            'stage' => 'repair:portal',
+                            'endpoint' => '/api/sync/forms/repair/push',
+                            'http_status' => $response->status(),
+                        ]);
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordUnexpectedItemFailure($repair, $e, 'repair:unexpected');
+                    $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
+                }
+            }
+
+            $pendingRepairAttachments = RepairAttachment::with('repair')
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingRepairAttachments as $attachment) {
+                if (! $attachment->repair?->server_id) {
+                    continue; // wait for the Repair to sync first
+                }
+
+                $result = $this->pushRepairAttachmentItem($client, $attachment);
 
                 if ($result instanceof SyncResult) {
                     return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
@@ -3519,6 +3612,80 @@ class SyncService
                 'stage' => 'giveaway-signature:unexpected',
                 'endpoint' => '/api/sync/forms/giveaway/attach',
                 'local_path' => $signature->local_path,
+            ]);
+
+            return ['success' => false, 'reason' => $classification];
+        }
+    }
+
+    /**
+     * @return array{success: bool, reason?: string}|SyncResult
+     */
+    private function pushRepairAttachmentItem(PendingRequest $client, RepairAttachment $attachment): array|SyncResult
+    {
+        try {
+            if (! $this->isReadableLocalFile($attachment->local_path)) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'repair-attachment:local-file',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            $stream = fopen($attachment->local_path, 'r');
+
+            if ($stream === false) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: unable to open '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'repair-attachment:local-open',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            try {
+                $response = $client
+                    ->attach('file', $stream, basename($attachment->local_path))
+                    ->post("{$this->serverUrl}/api/sync/forms/repair/attach", [
+                        'server_id' => $attachment->repair->server_id,
+                        'type' => $attachment->type->value,
+                    ]);
+            } finally {
+                fclose($stream);
+            }
+
+            if ($response->status() === 401) {
+                return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired');
+            }
+
+            $serverId = $response->json('server_id') ?? $response->json('uploaded_file_id');
+            if (! $response->successful() || $serverId === null) {
+                $failure = $response->failed() && $response->status() >= 500
+                    ? 'portal_upload_failed'
+                    : 'portal_rejected';
+
+                $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
+                    'stage' => 'repair-attachment:portal',
+                    'endpoint' => '/api/sync/forms/repair/attach',
+                    'http_status' => $response->status(),
+                ]);
+
+                return ['success' => false, 'reason' => $failure];
+            }
+
+            $this->markSynced($attachment, [
+                'server_id' => $serverId,
+                'synced_at' => now(),
+            ]);
+
+            return ['success' => true];
+        } catch (Throwable $e) {
+            $classification = $this->classifyBinaryThrowable($e);
+            $this->recordThrowableFailure($attachment, $classification, $e, [
+                'stage' => 'repair-attachment:unexpected',
+                'endpoint' => '/api/sync/forms/repair/attach',
+                'local_path' => $attachment->local_path,
             ]);
 
             return ['success' => false, 'reason' => $classification];
