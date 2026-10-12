@@ -1,7 +1,7 @@
 # OMMC-20261012-customer-mapping-activation
 
-State: READY_FOR_HUMAN_REVIEW<br>
-Mode: Bounded authenticated Access preservation correction<br>
+State: TERMINAL_DELIVERED<br>
+Mode: Terminal delivery completed<br>
 Updated: 2026-10-12
 
 ## Scope
@@ -92,4 +92,8 @@ No real Customer was created or edited, no Push ran, and no production/remote AP
 
 ## Terminal delivery status — 2026-10-12
 
-Human issued Terminal GO for this Work. Before reconciliation, all modified and untracked files in both repositories were copied to a recoverable local snapshot; patch checksums and file manifests are recorded with that snapshot. An authorized `git fetch origin` confirmed both local `main` branches match their `origin/main` tracking refs; no upstream-only commits or fast-forward were needed. Tablet focused validation passed **39 tests / 309 assertions**, and Pint passed. The Portal focused validation rerun passed **77 tests / 707 assertions** (the earlier accepted focused run was **62 / 599**), with Pint passed. The three unused Portal Customer Code reservations 49–51 are acknowledged and retained. Human accepted that no Customer Edit rendered save/reload, physical iPad test, or authenticated Customer Push E2E is required; no such validation is claimed. State remains `READY_FOR_HUMAN_REVIEW` pending successful commits and pushes.
+Human issued Terminal GO for this Work. Before reconciliation, all modified and untracked files in both repositories were copied to a recoverable local snapshot; patch checksums and file manifests are recorded with that snapshot. An authorized `git fetch origin` confirmed both local `main` branches match their `origin/main` tracking refs; no upstream-only commits or fast-forward were needed. Tablet focused validation passed **39 tests / 309 assertions**, and Pint passed. The Portal focused validation rerun passed **77 tests / 707 assertions** (the earlier accepted focused run was **62 / 599**), with Pint passed. The three unused Portal Customer Code reservations 49–51 are acknowledged and retained. Human accepted that no Customer Edit rendered save/reload, physical iPad test, or authenticated Customer Push E2E is required; no such validation is claimed. Both implementation commits have been pushed; this note records the final Work state and accepted limitations.
+
+## Terminal delivery confirmation — 2026-10-12
+
+**Final Work state: `TERMINAL_DELIVERED`.** Portal implementation commit `05a2216` and Tablet implementation commit `6da4eb5` were pushed successfully to their existing `origin/main` branches. The Portal and Tablet mirrored Work notes were updated after push confirmation; separate documentation commits record terminal state. No production activation is claimed. Actual initial personnel assignments exist only in the retained local Portal database. Thirty-five roster identities remain deferred; OE/IB assignments remain incomplete. Customer Edit rendered save/reload, physical iPad testing, and authenticated Customer Push E2E were not performed and were accepted as not required for this Work. Customer Code reservation IDs 49–51 remain untouched as acknowledged.
