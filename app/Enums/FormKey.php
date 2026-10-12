@@ -53,7 +53,7 @@ enum FormKey: string
             self::TRADE_REQUEST->value => [
                 'title' => 'Trade Request',
                 'icon' => 'heroicon-o-shopping-bag',
-                'available' => false,
+                'available' => true,
             ],
             self::TRAINING->value => [
                 'title' => 'Training',

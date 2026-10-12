@@ -46,4 +46,15 @@ class TradeRequest extends Model
     {
         return $this->hasMany(TradeRequestAttachment::class);
     }
+
+    /**
+     * A trade request may be edited only while it is still fully pending; once
+     * any approver has acted the tablet treats it as read-only.
+     */
+    public function isEditable(): bool
+    {
+        return $this->rsm_status === RSMStatus::PENDING
+            && $this->tdh_status === TDHStatus::PENDING
+            && $this->tds_status === TDSStatus::PENDING;
+    }
 }

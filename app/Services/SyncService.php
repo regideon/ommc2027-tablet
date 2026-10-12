@@ -21,6 +21,8 @@ use App\Models\Forms\Repair\Repair;
 use App\Models\Forms\Repair\RepairAttachment;
 use App\Models\Forms\TradeCheck\TradeCheck;
 use App\Models\Forms\TradeCheck\TradeCheckAttachment;
+use App\Models\Forms\TradeRequest\TradeRequest;
+use App\Models\Forms\TradeRequest\TradeRequestAttachment;
 use App\Models\Itinerary;
 use App\Models\Salescall;
 use App\Models\SalescallBrand;
@@ -94,6 +96,8 @@ class SyncService
             || $pendingOrRetryable(RepairAttachment::query())->exists()
             || $pendingOrRetryable(Signage::query())->exists()
             || $pendingOrRetryable(SignageAttachment::query())->exists()
+            || $pendingOrRetryable(TradeRequest::query())->exists()
+            || $pendingOrRetryable(TradeRequestAttachment::query())->exists()
             || $pendingOrRetryable(CustomerNote::query())->exists();
     }
 
@@ -1838,6 +1842,36 @@ class SyncService
         return $this->readSignagesWithStatus()['signages'];
     }
 
+    /** @return array{products: array<int, array<string, mixed>>, failed: bool} */
+    public function readTradeRequestProductsWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/sync/forms/trade-request/products', 'trade_products');
+
+        return ['products' => $result['rows'], 'failed' => $result['failed']];
+    }
+
+    /** @return array{types: array<int, array<string, mixed>>, failed: bool} */
+    public function readTradeRequestTypesWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/sync/forms/trade-request/types', 'trade_types');
+
+        return ['types' => $result['rows'], 'failed' => $result['failed']];
+    }
+
+    /** @return array{trade_requests: array<int, array<string, mixed>>, failed: bool} */
+    public function readTradeRequestsWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/sync/forms/trade-request/pull', 'trade_requests');
+
+        return ['trade_requests' => $result['rows'], 'failed' => $result['failed']];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public function readTradeRequests(): array
+    {
+        return $this->readTradeRequestsWithStatus()['trade_requests'];
+    }
+
     /** @return array{rows: array<int, array<string, mixed>>, failed: bool} */
     private function requestFormRows(string $path, string $key): array
     {
@@ -2565,6 +2599,87 @@ class SyncService
                 }
 
                 $result = $this->pushSignageAttachmentItem($client, $attachment);
+
+                if ($result instanceof SyncResult) {
+                    return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
+                }
+
+                if ($result['success']) {
+                    $pushed++;
+                } else {
+                    $failed++;
+                    $retryable++;
+                    $failureReasons[$result['reason']] = true;
+                }
+            }
+
+            $pendingTradeRequests = TradeRequest::with(['product', 'items.tradeType', 'salescall'])
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingTradeRequests as $tradeRequest) {
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/forms/trade-request/push", [
+                        'server_id' => $tradeRequest->server_id,
+                        'salescall_uuid' => $tradeRequest->salescall?->local_uuid,
+                        'product_id' => $tradeRequest->product?->server_id,
+                        'items' => $tradeRequest->items
+                            ->sortBy('id')
+                            ->values()
+                            ->map(fn ($item): array => [
+                                'trade_type_id' => $item->tradeType?->server_id,
+                                'quantity' => $item->quantity,
+                                'size' => $item->size?->value,
+                                'description' => $item->description,
+                            ])
+                            ->all(),
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    $serverId = $response->json('server_id');
+                    if ($response->successful() && $serverId !== null) {
+                        $this->markSynced($tradeRequest, [
+                            'server_id' => $serverId,
+                            'synced_at' => now(),
+                        ]);
+                        $pushed++;
+                    } else {
+                        $this->recordItemFailure($tradeRequest, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
+                            'stage' => 'trade-request:portal',
+                            'endpoint' => '/api/sync/forms/trade-request/push',
+                            'http_status' => $response->status(),
+                        ]);
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordUnexpectedItemFailure($tradeRequest, $e, 'trade-request:unexpected');
+                    $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
+                }
+            }
+
+            $pendingTradeRequestAttachments = TradeRequestAttachment::with('tradeRequest')
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingTradeRequestAttachments as $attachment) {
+                if (! $attachment->tradeRequest?->server_id) {
+                    continue; // wait for the Trade Request to sync first
+                }
+
+                $result = $this->pushTradeRequestAttachmentItem($client, $attachment);
 
                 if ($result instanceof SyncResult) {
                     return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
@@ -3867,6 +3982,80 @@ class SyncService
             $this->recordThrowableFailure($attachment, $classification, $e, [
                 'stage' => 'signage-attachment:unexpected',
                 'endpoint' => '/api/sync/forms/crr-signage/attach',
+                'local_path' => $attachment->local_path,
+            ]);
+
+            return ['success' => false, 'reason' => $classification];
+        }
+    }
+
+    /**
+     * @return array{success: bool, reason?: string}|SyncResult
+     */
+    private function pushTradeRequestAttachmentItem(PendingRequest $client, TradeRequestAttachment $attachment): array|SyncResult
+    {
+        try {
+            if (! $this->isReadableLocalFile($attachment->local_path)) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'trade-request-attachment:local-file',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            $stream = fopen($attachment->local_path, 'r');
+
+            if ($stream === false) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: unable to open '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'trade-request-attachment:local-open',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            try {
+                $response = $client
+                    ->attach('file', $stream, basename($attachment->local_path))
+                    ->post("{$this->serverUrl}/api/sync/forms/trade-request/attach", [
+                        'server_id' => $attachment->tradeRequest->server_id,
+                        'type' => $attachment->type->value,
+                    ]);
+            } finally {
+                fclose($stream);
+            }
+
+            if ($response->status() === 401) {
+                return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired');
+            }
+
+            $serverId = $response->json('server_id') ?? $response->json('uploaded_file_id');
+            if (! $response->successful() || $serverId === null) {
+                $failure = $response->failed() && $response->status() >= 500
+                    ? 'portal_upload_failed'
+                    : 'portal_rejected';
+
+                $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
+                    'stage' => 'trade-request-attachment:portal',
+                    'endpoint' => '/api/sync/forms/trade-request/attach',
+                    'http_status' => $response->status(),
+                ]);
+
+                return ['success' => false, 'reason' => $failure];
+            }
+
+            $this->markSynced($attachment, [
+                'server_id' => $serverId,
+                'synced_at' => now(),
+            ]);
+
+            return ['success' => true];
+        } catch (Throwable $e) {
+            $classification = $this->classifyBinaryThrowable($e);
+            $this->recordThrowableFailure($attachment, $classification, $e, [
+                'stage' => 'trade-request-attachment:unexpected',
+                'endpoint' => '/api/sync/forms/trade-request/attach',
                 'local_path' => $attachment->local_path,
             ]);
 
