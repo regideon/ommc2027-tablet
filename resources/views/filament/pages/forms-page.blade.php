@@ -37,6 +37,8 @@
                 @include('filament.pages.forms-giveaway')
             @elseif ($selectedForm === 'repair')
                 @include('filament.pages.forms-repair')
+            @elseif ($selectedForm === 'crr-signage')
+                @include('filament.pages.forms-signage')
             @else
                 <div class="flex min-h-64 items-center justify-center rounded-2xl border border-dashed border-gray-300 bg-white px-6 text-center">
                     <p class="text-sm text-[#737685]">This form is coming soon.</p>
