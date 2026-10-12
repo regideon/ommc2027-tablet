@@ -36,6 +36,7 @@ class CustomerEditPage extends CustomerCreatePage
         $this->active = $state['active'] ?? [];
         $this->categories = $state['categories'] ?? [];
         $this->customerId = (string) $customer->id;
+        $this->initializeAutomaticAccessUserIds();
         $this->inspectAccessMappingAvailability();
     }
 
