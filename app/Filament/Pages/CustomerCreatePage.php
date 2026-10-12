@@ -9,8 +9,8 @@ use App\Models\Customer;
 use App\Models\GeneralCategory;
 use App\Models\Municipality;
 use App\Models\Province;
-use App\Models\RegionSpecific;
 use App\Models\Region;
+use App\Models\RegionSpecific;
 use App\Models\User;
 use App\Services\CustomerProfileFormService;
 use App\Services\PhilippineAddressResolver;
@@ -36,31 +36,57 @@ class CustomerCreatePage extends Page
     protected static ?string $title = 'Add Customer';
 
     public string $name = '';
+
     public ?string $unique_id = null;
+
     public ?string $customer_code_reservation_token = null;
+
     public ?int $company_id = null;
+
     public ?int $region_specific_id = null;
+
     public ?int $physical_region_id = null;
+
     public ?int $province_id = null;
+
     public ?int $municipality_id = null;
+
     public ?int $barangay_id = null;
+
     public ?int $area_cluster_id = null;
+
     public ?string $locationError = null;
+
     public ?int $general_category_id = null;
+
     public ?int $competitor_volume = null;
+
     public string $address = '';
+
     public ?string $latitude = null;
+
     public ?string $longitude = null;
+
     public ?string $contact_person = null;
+
     public ?string $contact_number = null;
+
     public ?string $business_landline_number = null;
+
     public ?string $business_mobile_number = null;
+
     public ?string $date_established = null;
+
     public ?int $person_in_charge_id = null;
+
     public array $access_user_ids = [];
+
     public bool $is_active = true;
+
     public array $trade = [];
+
     public array $active = [];
+
     public array $categories = [];
 
     protected ?string $companyChangeOldProfile = null;
@@ -137,6 +163,7 @@ class CustomerCreatePage extends Page
 
         if ($this->companyChangeOldProfile !== null && $this->companyChangeOldProfile === $profile) {
             $this->companyChangeOldProfile = null;
+
             return;
         }
 
@@ -254,6 +281,7 @@ class CustomerCreatePage extends Page
             foreach ($this->categories[$stream] ?? [] as $year => $category) {
                 if ($category !== null && $category !== '' && ! array_key_exists($category, $this->categoryOptions($stream))) {
                     $this->addError('categories', "Every {$stream} annual category must be selected from the allowed options.");
+
                     return;
                 }
             }
@@ -349,6 +377,7 @@ class CustomerCreatePage extends Page
         $accessIds = array_filter($this->access_user_ids);
         if (User::whereIn('id', $accessIds)->whereNull('rsm_id')->exists()) {
             $this->addError('access_user_ids', 'Each assigned Access user must have an RSM relationship.');
+
             return false;
         }
 

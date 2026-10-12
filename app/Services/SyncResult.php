@@ -24,8 +24,7 @@ class SyncResult
         int $failedCount = 0,
         int $retryableCount = 0,
         array $failureReasons = [],
-    ): self
-    {
+    ): self {
         return new self(true, $message, null, $syncedCount, $failedCount, $retryableCount, $failureReasons);
     }
 
@@ -39,8 +38,7 @@ class SyncResult
         int $failedCount = 0,
         int $retryableCount = 0,
         array $failureReasons = [],
-    ): self
-    {
+    ): self {
         return new self(false, $message, $errorCode, $syncedCount, $failedCount, $retryableCount, $failureReasons);
     }
 }

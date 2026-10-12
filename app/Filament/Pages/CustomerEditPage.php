@@ -74,6 +74,7 @@ class CustomerEditPage extends CustomerCreatePage
             foreach ($this->categories[$stream] ?? [] as $category) {
                 if ($category !== null && $category !== '' && ! array_key_exists($category, $this->categoryOptions($stream))) {
                     $this->addError('categories', "Every {$stream} annual category must be selected from the allowed options.");
+
                     return;
                 }
             }

@@ -140,55 +140,54 @@ class CustomerPage extends Page
      */
     public function viewCustomer(int $customerId): void
     {
-            $this->selectedCustomerId = $customerId;
-            $this->showPhotos = false;
-            $this->customerPhotos = [];
+        $this->selectedCustomerId = $customerId;
+        $this->showPhotos = false;
+        $this->customerPhotos = [];
 
-            
-            $profile = CustomerProfile::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))
-                ->latest('created_at')
-                ->first();
+        $profile = CustomerProfile::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))
+            ->latest('created_at')
+            ->first();
 
-            $brands = CustomerBrand::where('customer_id', $customerId)
-                ->with(['materialGroup', 'brand'])
-                ->get();
+        $brands = CustomerBrand::where('customer_id', $customerId)
+            ->with(['materialGroup', 'brand'])
+            ->get();
 
-            $category = CustomerCategory::where('customer_id', $customerId)
-                ->with(['category', 'subCategory'])
-                ->first();
+        $category = CustomerCategory::where('customer_id', $customerId)
+            ->with(['category', 'subCategory'])
+            ->first();
 
-            $notes = CustomerNote::where('customer_id', $customerId)
-                ->where('created_by', auth()->id())
-                ->latest('created_at')
-                ->limit(self::RECENT_LIMIT)
-                ->get();
+        $notes = CustomerNote::where('customer_id', $customerId)
+            ->where('created_by', auth()->id())
+            ->latest('created_at')
+            ->limit(self::RECENT_LIMIT)
+            ->get();
 
-            // DRMs see only their own visits; RSMs see every rep's visits to this
-            // customer (mirrors the "RSM sees all DRMs under them" visibility used
-            // elsewhere in the app — see mountVp()/CustomerPage's commented role logic).
-            $visitsQuery = Salescall::where('customer_id', $customerId)
-                ->with(['salescallStatus', 'createdBy']);
+        // DRMs see only their own visits; RSMs see every rep's visits to this
+        // customer (mirrors the "RSM sees all DRMs under them" visibility used
+        // elsewhere in the app — see mountVp()/CustomerPage's commented role logic).
+        $visitsQuery = Salescall::where('customer_id', $customerId)
+            ->with(['salescallStatus', 'createdBy']);
 
-            if (! auth()->user()?->hasRole('rsm')) {
-                $visitsQuery->where('created_by', auth()->id());
-            }
+        if (! auth()->user()?->hasRole('rsm')) {
+            $visitsQuery->where('created_by', auth()->id());
+        }
 
-            $visits = $visitsQuery
-                ->orderByRaw('COALESCE(actual_in, visit_date) DESC')
-                ->limit(self::RECENT_LIMIT)
-                ->get();
+        $visits = $visitsQuery
+            ->orderByRaw('COALESCE(actual_in, visit_date) DESC')
+            ->limit(self::RECENT_LIMIT)
+            ->get();
 
-            $photoCount = SalescallImage::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))->count();
+        $photoCount = SalescallImage::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))->count();
 
-            $customer = Customer::with(['company', 'tradeProfile', 'categoryHistories', 'province', 'barangay', 'areaCluster', 'municipality.region', 'municipality.province'])->findOrFail($customerId);
-            $physicalRegion = $customer->municipality?->region?->name;
-            $province = $customer->province?->name ?? $customer->municipality?->province?->name;
-            $municipality = $customer->municipality?->name;
-            $specificRegion = $customer->region_specific_id
-                ? DB::table('region_specifics')->where('id', $customer->region_specific_id)->value('name')
-                : null;
+        $customer = Customer::with(['company', 'tradeProfile', 'categoryHistories', 'province', 'barangay', 'areaCluster', 'municipality.region', 'municipality.province'])->findOrFail($customerId);
+        $physicalRegion = $customer->municipality?->region?->name;
+        $province = $customer->province?->name ?? $customer->municipality?->province?->name;
+        $municipality = $customer->municipality?->name;
+        $specificRegion = $customer->region_specific_id
+            ? DB::table('region_specifics')->where('id', $customer->region_specific_id)->value('name')
+            : null;
 
-            $this->customerDetail = [
+        $this->customerDetail = [
             'customer' => [
                 'unique_id' => $customer->unique_id,
                 'company' => $customer->company?->name,
@@ -204,7 +203,9 @@ class CustomerPage extends Page
                 'latitude' => $customer->latitude,
                 'longitude' => $customer->longitude,
                 'general_category' => $customer->generalCategory?->name,
-                'competitor_volume' => match ($customer->competitor_volume) { 1 => 'High', 2 => 'Medium', 3 => 'Low', default => null },
+                'competitor_volume' => match ($customer->competitor_volume) {
+                    1 => 'High', 2 => 'Medium', 3 => 'Low', default => null
+                },
                 'is_active' => $customer->is_active,
                 'sync_status' => $customer->sync_status,
                 'sync_error' => $customer->sync_error,
@@ -224,46 +225,48 @@ class CustomerPage extends Page
                 'working_days' => $customer->tradeProfile->working_days,
                 'operating_hours' => $customer->tradeProfile->operating_hours,
                 'motiv_user' => $customer->tradeProfile->motiv_user,
-                'delivery_method' => match ($customer->tradeProfile->delivery_method) { 'resq_hub' => 'ResQ Hub', 'own_delivery' => 'Own Delivery', default => null },
+                'delivery_method' => match ($customer->tradeProfile->delivery_method) {
+                    'resq_hub' => 'ResQ Hub', 'own_delivery' => 'Own Delivery', default => null
+                },
                 'ulab' => $customer->tradeProfile->ulab,
                 'profile_data' => $customer->tradeProfile->profile_data,
-            ] : null,
+                ] : null,
             'category_histories' => $customer->categoryHistories->map(fn ($history) => [
                 'year' => $history->category_year,
                 'profile_type' => $history->profile_type,
                 'stream' => $history->stream,
                 'category' => $history->category,
-            ])->all(),
+                ])->all(),
             'profile' => $profile ? [
                 'registered_name' => $profile->registered_name,
                 'owner_name' => $profile->owner_name,
                 'classification' => $profile->classification,
                 'mobile' => $profile->mobile,
                 'submitted_at' => $profile->created_at->diffForHumans(),
-            ] : null,
+                ] : null,
 
             'brands' => $brands->map(fn (CustomerBrand $b) => [
                 'material_group' => $b->materialGroup?->name ?? '—',
                 'brand' => $b->brand?->name ?? $b->brand_other ?? '—',
                 'quantity' => $b->quantity,
-            ])->all(),
+                ])->all(),
 
             'category' => $category ? [
                 'category' => $category->category?->name,
                 'sub_category' => $category->subCategory?->name,
-            ] : null,
+                ] : null,
 
             'notes' => $notes->map(fn (CustomerNote $n) => [
                 'title' => $n->title,
                 'body' => $n->body,
                 'created_at' => $n->created_at->diffForHumans(),
-            ])->all(),
+                ])->all(),
 
             'visits' => $visits->map(fn (Salescall $s) => [
                 'date' => $s->visit_date->format('M j, Y'),
                 'status' => $s->status,
                 'visited_by' => $s->createdBy?->name ?? '—',
-            ])->all(),
+                ])->all(),
 
             'photo_count' => $photoCount,
         ];

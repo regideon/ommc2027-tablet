@@ -2,7 +2,6 @@
 
 use App\Services\StartupMigrationService;
 use App\Support\StartupMigrationArtifact;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Schema;

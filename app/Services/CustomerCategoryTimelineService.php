@@ -27,6 +27,7 @@ class CustomerCategoryTimelineService
             if ($this->canonical($existing) !== $this->canonicalPayload($customer, $payload, $effectiveAt)) {
                 throw ValidationException::withMessages(['event_key' => 'Event key is already used for different category data.']);
             }
+
             return $existing;
         }
 
@@ -68,16 +69,20 @@ class CustomerCategoryTimelineService
         foreach (range(1, 12) as $month) {
             $cutoff = CarbonImmutable::create($year, $month, 1, 0, 0, 0, config('app.timezone'))->endOfMonth();
             foreach ($events as $event) {
-                if ($event->effective_at->lte($cutoff)) $state = $event->category;
+                if ($event->effective_at->lte($cutoff)) {
+                    $state = $event->category;
+                }
             }
             $result[$month] = $state;
         }
+
         return $result;
     }
 
     public function eventsForCustomers(array $customerIds, string $profileType, string $stream, int $year)
     {
         $end = CarbonImmutable::create($year, 12, 31, 23, 59, 59, config('app.timezone'));
+
         return CustomerCategoryEvent::whereIn('customer_id', $customerIds)
             ->where('profile_type', $profileType)->where('stream', $stream)
             ->where('effective_at', '<=', $end)

@@ -21,6 +21,10 @@
 /public/build
 /public/hot
 /public/storage
+/public/crr_attachments
+/public/expense_attachments
+/public/customer_profile_attachments
+/public/salescall_images
 /storage/*.key
 /storage/pail
 /vendor

@@ -2,10 +2,10 @@
 
 namespace App\Providers;
 
+use App\Console\Commands\StartupMigrateCommand;
 use App\Console\Commands\SyncLoginCommand;
 use App\Console\Commands\SyncPullCommand;
 use App\Console\Commands\SyncPushCommand;
-use App\Console\Commands\StartupMigrateCommand;
 use App\Listeners\HandleLocationReceived;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\View;

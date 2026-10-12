@@ -228,7 +228,7 @@ class BuildDeployCommand extends Command
     private function applyIosRuntimePatches(): void
     {
         $sourceDir = base_path('packages/ommc2027/ios-runtime');
-        
+
         foreach (self::IOS_RUNTIME_PATCHES as $patch) {
             $source = $sourceDir.'/'.$patch['source'];
 
