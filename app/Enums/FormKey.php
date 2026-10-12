@@ -58,7 +58,7 @@ enum FormKey: string
             self::TRAINING->value => [
                 'title' => 'Training',
                 'icon' => 'heroicon-o-academic-cap',
-                'available' => false,
+                'available' => true,
             ],
         ];
     }

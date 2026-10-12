@@ -30,6 +30,7 @@
 /public/repair_attachments
 /public/signage_attachments
 /public/trade_request_attachments
+/public/training_attachments
 /public/staged_attachments
 /storage/*.key
 /storage/pail

@@ -23,6 +23,8 @@ use App\Models\Forms\TradeCheck\TradeCheck;
 use App\Models\Forms\TradeCheck\TradeCheckAttachment;
 use App\Models\Forms\TradeRequest\TradeRequest;
 use App\Models\Forms\TradeRequest\TradeRequestAttachment;
+use App\Models\Forms\Training\Training;
+use App\Models\Forms\Training\TrainingAttachment;
 use App\Models\Itinerary;
 use App\Models\Salescall;
 use App\Models\SalescallBrand;
@@ -98,6 +100,8 @@ class SyncService
             || $pendingOrRetryable(SignageAttachment::query())->exists()
             || $pendingOrRetryable(TradeRequest::query())->exists()
             || $pendingOrRetryable(TradeRequestAttachment::query())->exists()
+            || $pendingOrRetryable(Training::query())->exists()
+            || $pendingOrRetryable(TrainingAttachment::query())->exists()
             || $pendingOrRetryable(CustomerNote::query())->exists();
     }
 
@@ -1872,6 +1876,36 @@ class SyncService
         return $this->readTradeRequestsWithStatus()['trade_requests'];
     }
 
+    /** @return array{topics: array<int, array<string, mixed>>, failed: bool} */
+    public function readTrainingTopicsWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/sync/forms/training/topics', 'training_topics');
+
+        return ['topics' => $result['rows'], 'failed' => $result['failed']];
+    }
+
+    /** @return array{positions: array<int, array<string, mixed>>, failed: bool} */
+    public function readTrainingPositionsWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/sync/forms/training/positions', 'training_positions');
+
+        return ['positions' => $result['rows'], 'failed' => $result['failed']];
+    }
+
+    /** @return array{trainings: array<int, array<string, mixed>>, failed: bool} */
+    public function readTrainingsWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/sync/forms/training/pull', 'trainings');
+
+        return ['trainings' => $result['rows'], 'failed' => $result['failed']];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public function readTrainings(): array
+    {
+        return $this->readTrainingsWithStatus()['trainings'];
+    }
+
     /** @return array{rows: array<int, array<string, mixed>>, failed: bool} */
     private function requestFormRows(string $path, string $key): array
     {
@@ -2680,6 +2714,89 @@ class SyncService
                 }
 
                 $result = $this->pushTradeRequestAttachmentItem($client, $attachment);
+
+                if ($result instanceof SyncResult) {
+                    return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
+                }
+
+                if ($result['success']) {
+                    $pushed++;
+                } else {
+                    $failed++;
+                    $retryable++;
+                    $failureReasons[$result['reason']] = true;
+                }
+            }
+
+            $pendingTrainings = Training::with(['topic', 'participants.position', 'salescall'])
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingTrainings as $training) {
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/forms/training/push", [
+                        'server_id' => $training->server_id,
+                        'salescall_uuid' => $training->salescall?->local_uuid,
+                        'topic_id' => $training->topic?->server_id,
+                        'other_topic' => $training->other_topic,
+                        'preferred_at' => $training->preferred_at?->toDateTimeString(),
+                        'omcc_volume' => $training->omcc_volume,
+                        'competitor_volume' => $training->competitor_volume,
+                        'participants' => $training->participants
+                            ->sortBy('id')
+                            ->values()
+                            ->map(fn ($participant): array => [
+                                'name' => $participant->name,
+                                'position_id' => $participant->position?->server_id,
+                            ])
+                            ->all(),
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    $serverId = $response->json('server_id');
+                    if ($response->successful() && $serverId !== null) {
+                        $this->markSynced($training, [
+                            'server_id' => $serverId,
+                            'synced_at' => now(),
+                        ]);
+                        $pushed++;
+                    } else {
+                        $this->recordItemFailure($training, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
+                            'stage' => 'training:portal',
+                            'endpoint' => '/api/sync/forms/training/push',
+                            'http_status' => $response->status(),
+                        ]);
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordUnexpectedItemFailure($training, $e, 'training:unexpected');
+                    $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
+                }
+            }
+
+            $pendingTrainingAttachments = TrainingAttachment::with('training')
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingTrainingAttachments as $attachment) {
+                if (! $attachment->training?->server_id) {
+                    continue; // wait for the Training to sync first
+                }
+
+                $result = $this->pushTrainingAttachmentItem($client, $attachment);
 
                 if ($result instanceof SyncResult) {
                     return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
@@ -4056,6 +4173,80 @@ class SyncService
             $this->recordThrowableFailure($attachment, $classification, $e, [
                 'stage' => 'trade-request-attachment:unexpected',
                 'endpoint' => '/api/sync/forms/trade-request/attach',
+                'local_path' => $attachment->local_path,
+            ]);
+
+            return ['success' => false, 'reason' => $classification];
+        }
+    }
+
+    /**
+     * @return array{success: bool, reason?: string}|SyncResult
+     */
+    private function pushTrainingAttachmentItem(PendingRequest $client, TrainingAttachment $attachment): array|SyncResult
+    {
+        try {
+            if (! $this->isReadableLocalFile($attachment->local_path)) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'training-attachment:local-file',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            $stream = fopen($attachment->local_path, 'r');
+
+            if ($stream === false) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: unable to open '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'training-attachment:local-open',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            try {
+                $response = $client
+                    ->attach('file', $stream, basename($attachment->local_path))
+                    ->post("{$this->serverUrl}/api/sync/forms/training/attach", [
+                        'server_id' => $attachment->training->server_id,
+                        'type' => $attachment->type->value,
+                    ]);
+            } finally {
+                fclose($stream);
+            }
+
+            if ($response->status() === 401) {
+                return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired');
+            }
+
+            $serverId = $response->json('server_id') ?? $response->json('uploaded_file_id');
+            if (! $response->successful() || $serverId === null) {
+                $failure = $response->failed() && $response->status() >= 500
+                    ? 'portal_upload_failed'
+                    : 'portal_rejected';
+
+                $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
+                    'stage' => 'training-attachment:portal',
+                    'endpoint' => '/api/sync/forms/training/attach',
+                    'http_status' => $response->status(),
+                ]);
+
+                return ['success' => false, 'reason' => $failure];
+            }
+
+            $this->markSynced($attachment, [
+                'server_id' => $serverId,
+                'synced_at' => now(),
+            ]);
+
+            return ['success' => true];
+        } catch (Throwable $e) {
+            $classification = $this->classifyBinaryThrowable($e);
+            $this->recordThrowableFailure($attachment, $classification, $e, [
+                'stage' => 'training-attachment:unexpected',
+                'endpoint' => '/api/sync/forms/training/attach',
                 'local_path' => $attachment->local_path,
             ]);
 
