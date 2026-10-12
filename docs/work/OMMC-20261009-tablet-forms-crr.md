@@ -34,9 +34,9 @@ authorization: none. No commit or push performed.
 
 Tablet:
 
-- `app/Services/Forms/CrrReadService.php` — local + server merge, program cache.
-- `app/Services/Forms/LocalCrrCreationService.php` — create/update/adopt,
-  validation, attachments.
+- `app/Services/Forms/CrrService.php` — the CRR form's single service: program
+  cache, local + server submission merge, create/update/adopt, validation, and
+  attachments (merged from the former `CrrReadService` + `LocalCrrCreationService`).
 - `app/Services/SyncService.php` — CRR/CRR-attachment read, push, and
   `hasPendingChanges`.
 - `app/Models/Forms/CRR/Crr.php` — `isEditable()`.
@@ -87,6 +87,12 @@ modified.
   reload the list. Saving a CRR still stores locally (offline-first); the user
   syncs explicitly. CLI `sync:push` can target a stale-token user when run
   without an authenticated session — the in-app path uses the logged-in user.
+- **Deletion reconciliation (2026-10-12):** after a **successful** CRR pull,
+  local CRRs that have a `server_id` absent from the response are deleted
+  (row + attachment rows + local/preview files) — this propagates admin-side
+  soft deletes, which the pull simply omits. Local unsynced rows (no
+  `server_id`) and failed pulls are never purged. The CRR pull is unpaginated
+  and scoped to the user's own submissions, so absence means deleted.
 
 ## Validation evidence
 

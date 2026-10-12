@@ -5,8 +5,7 @@ namespace App\Filament\Pages;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrProgram;
 use App\Models\Salescall;
-use App\Services\Forms\CrrReadService;
-use App\Services\Forms\LocalCrrCreationService;
+use App\Services\Forms\CrrService;
 use App\Support\NativeMediaPath;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
@@ -62,9 +61,9 @@ class CrrFormPage extends Page
     /** @var array<string, bool> */
     public array $pendingAttachment = [];
 
-    public function mount(CrrReadService $read): void
+    public function mount(CrrService $service): void
     {
-        $this->programs = $read->crrPrograms()
+        $this->programs = $service->programs()
             ->map(fn (CrrProgram $program): array => [
                 'id' => $program->id,
                 'name' => $program->name,
@@ -72,7 +71,7 @@ class CrrFormPage extends Page
             ->values()
             ->all();
 
-        $this->programLoadError = $read->programReadFailed()
+        $this->programLoadError = $service->programReadFailed()
             ? 'CRR programs could not be loaded. Reconnect and reopen this form.'
             : '';
 
@@ -117,7 +116,7 @@ class CrrFormPage extends Page
         $this->date_implemented = now()->toDateString();
     }
 
-    public function save(LocalCrrCreationService $service): void
+    public function save(CrrService $service): void
     {
         $this->formErrors = [];
 

@@ -7,10 +7,10 @@ use App\Models\Forms\CRR\CrrProgram;
 use App\Models\Itinerary;
 use App\Models\Salescall;
 use App\Models\User;
-use App\Services\Forms\CrrReadService;
-use App\Services\Forms\LocalCrrCreationService;
+use App\Services\Forms\CrrService;
 use App\Services\SyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -54,10 +54,10 @@ test('creating a CRR validates the amount and program', function () {
     $user = crrWorkflowUser();
     $program = crrWorkflowProgram();
 
-    expect(fn () => app(LocalCrrCreationService::class)->create($user, crrValidInput($program, ['amount' => '0'])))
+    expect(fn () => app(CrrService::class)->create($user, crrValidInput($program, ['amount' => '0'])))
         ->toThrow(ValidationException::class);
 
-    expect(fn () => app(LocalCrrCreationService::class)->create($user, crrValidInput($program, ['crr_program_id' => 9999])))
+    expect(fn () => app(CrrService::class)->create($user, crrValidInput($program, ['crr_program_id' => 9999])))
         ->toThrow(ValidationException::class);
 });
 
@@ -65,7 +65,7 @@ test('creating a CRR persists it locally with a pending sync status', function (
     $user = crrWorkflowUser();
     $program = crrWorkflowProgram();
 
-    $crr = app(LocalCrrCreationService::class)->create($user, crrValidInput($program));
+    $crr = app(CrrService::class)->create($user, crrValidInput($program));
 
     expect($crr->exists)->toBeTrue()
         ->and($crr->submitted_by)->toBe($user->id)
@@ -81,7 +81,7 @@ test('creating a CRR stores attachments on the local disk', function () {
     $user = crrWorkflowUser();
     $program = crrWorkflowProgram();
 
-    $crr = app(LocalCrrCreationService::class)->create($user, crrValidInput($program, [
+    $crr = app(CrrService::class)->create($user, crrValidInput($program, [
         'attachments' => [['data' => crrPngDataUri(), 'original_name' => 'support.png']],
     ]));
 
@@ -96,7 +96,7 @@ test('creating a CRR stores attachments on the local disk', function () {
 test('a CRR can only be edited while all statuses are pending', function () {
     $user = crrWorkflowUser();
     $program = crrWorkflowProgram();
-    $service = app(LocalCrrCreationService::class);
+    $service = app(CrrService::class);
 
     $crr = $service->create($user, crrValidInput($program));
     $updated = $service->update($crr, crrValidInput($program, ['amount' => '99.99']));
@@ -155,7 +155,7 @@ test('the CRR read service merges local and server rows with the server winning'
 
     $this->actingAs($user);
 
-    $rows = app(CrrReadService::class)->crrForCurrentUser();
+    $rows = app(CrrService::class)->submissions();
 
     expect($rows)->toHaveCount(2)
         ->and(collect($rows)->firstWhere('server_id', 900)['amount'])->toBe('555.00')
@@ -180,8 +180,8 @@ test('the CRR read service keeps local rows when the server read fails', functio
     Http::fake(['*/api/sync/forms/crr/pull' => Http::response([], 500)]);
 
     $this->actingAs($user);
-    $service = app(CrrReadService::class);
-    $rows = $service->crrForCurrentUser();
+    $service = app(CrrService::class);
+    $rows = $service->submissions();
 
     expect($rows)->toHaveCount(1)
         ->and($service->globalReadFailed())->toBeTrue();
@@ -200,7 +200,7 @@ test('the CRR read service upserts programs from the server', function () {
     ]);
 
     $this->actingAs($user);
-    $programs = app(CrrReadService::class)->crrPrograms();
+    $programs = app(CrrService::class)->programs();
 
     expect($programs)->toHaveCount(2)
         ->and(CrrProgram::where('server_id', 10)->value('name'))->toBe('Price Support');
@@ -332,7 +332,7 @@ test('a pulled server CRR can be adopted locally for editing', function () {
     $user = crrWorkflowUser();
     $program = crrWorkflowProgram(serverId: 55);
 
-    $crr = app(LocalCrrCreationService::class)->adopt($user, [
+    $crr = app(CrrService::class)->adopt($user, [
         'server_id' => 901,
         'crr_program_id' => 55,
         'amount' => '200.00',
@@ -353,8 +353,8 @@ test('the CRR read service flags a failed program pull', function () {
     config(['sync.server_url' => 'http://portal.test']);
     Http::fake(['*/api/sync/forms/crr/programs' => Http::response([], 500)]);
 
-    $service = app(CrrReadService::class);
-    $service->crrPrograms();
+    $service = app(CrrService::class);
+    $service->programs();
 
     expect($service->programReadFailed())->toBeTrue();
 });
@@ -367,11 +367,107 @@ test('the CRR read service clears the program failure flag on a successful pull'
         'crr_programs' => [['id' => 1, 'name' => 'Price Support']],
     ], 200)]);
 
-    $service = app(CrrReadService::class);
-    $service->crrPrograms();
+    $service = app(CrrService::class);
+    $service->programs();
 
     expect($service->programReadFailed())->toBeFalse()
         ->and(CrrProgram::where('server_id', 1)->value('name'))->toBe('Price Support');
+});
+
+test('a CRR deleted on the server is purged locally on the next successful pull', function () {
+    Storage::fake('local');
+    $user = crrWorkflowUser();
+    $program = crrWorkflowProgram(serverId: 55);
+
+    $crr = Crr::create([
+        'local_uuid' => (string) Str::uuid(),
+        'server_id' => 900,
+        'submitted_by' => $user->id,
+        'crr_program_id' => $program->id,
+        'amount' => '10.00',
+        'rsm_status' => 1,
+        'sps_status' => 1,
+        'spm_status' => 1,
+        'sync_status' => 'synced',
+    ]);
+
+    Storage::disk('local')->put('crr_attachments/a.png', 'bytes');
+
+    $attachment = CrrAttachment::create([
+        'local_uuid' => (string) Str::uuid(),
+        'server_id' => 88,
+        'crr_id' => $crr->id,
+        'local_path' => Storage::disk('local')->path('crr_attachments/a.png'),
+        'original_name' => 'a.png',
+        'mime_type' => 'image/png',
+        'extension' => 'png',
+        'byte_size' => 5,
+        'sync_status' => 'synced',
+    ]);
+
+    $previewPath = public_path('crr_attachments/'.$attachment->local_uuid.'.png');
+    File::ensureDirectoryExists(dirname($previewPath));
+    file_put_contents($previewPath, 'bytes');
+
+    Http::fake(['*/api/sync/forms/crr/pull' => Http::response(['crrs' => []], 200)]);
+    $this->actingAs($user);
+
+    $rows = app(CrrService::class)->submissions();
+
+    expect($rows)->toHaveCount(0)
+        ->and(Crr::find($crr->id))->toBeNull()
+        ->and(CrrAttachment::find($attachment->id))->toBeNull()
+        ->and(is_file($attachment->local_path))->toBeFalse()
+        ->and(is_file($previewPath))->toBeFalse();
+});
+
+test('a local unsynced CRR survives a successful pull that does not include it', function () {
+    $user = crrWorkflowUser();
+    $program = crrWorkflowProgram();
+
+    $crr = Crr::create([
+        'local_uuid' => (string) Str::uuid(),
+        'submitted_by' => $user->id,
+        'crr_program_id' => $program->id,
+        'amount' => '10.00',
+        'rsm_status' => 1,
+        'sps_status' => 1,
+        'spm_status' => 1,
+        'sync_status' => 'pending',
+    ]);
+
+    Http::fake(['*/api/sync/forms/crr/pull' => Http::response(['crrs' => []], 200)]);
+    $this->actingAs($user);
+
+    $rows = app(CrrService::class)->submissions();
+
+    expect($rows)->toHaveCount(1)
+        ->and(Crr::find($crr->id))->not->toBeNull();
+});
+
+test('a failed pull does not purge local synced CRRs', function () {
+    $user = crrWorkflowUser();
+    $program = crrWorkflowProgram(serverId: 55);
+
+    $crr = Crr::create([
+        'local_uuid' => (string) Str::uuid(),
+        'server_id' => 900,
+        'submitted_by' => $user->id,
+        'crr_program_id' => $program->id,
+        'amount' => '10.00',
+        'rsm_status' => 1,
+        'sps_status' => 1,
+        'spm_status' => 1,
+        'sync_status' => 'synced',
+    ]);
+
+    Http::fake(['*/api/sync/forms/crr/pull' => Http::response([], 500)]);
+    $this->actingAs($user);
+
+    $rows = app(CrrService::class)->submissions();
+
+    expect($rows)->toHaveCount(1)
+        ->and(Crr::find($crr->id))->not->toBeNull();
 });
 
 function crrWorkflowSalescall(User $user): Salescall
