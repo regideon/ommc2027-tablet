@@ -802,7 +802,196 @@ test('an invalid location snapshot is rejected atomically while the independent 
     ));
 });
 
-test('Customer Pull rejects a Customer whose required Company reference is unresolved locally', function () {
+test('Customer Pull accepts null Company IDs across mixed pages without changing Customer identities or Access', function () {
+    $now = now();
+    DB::table('customers')->insert([
+        'id' => -90012,
+        'server_id' => 90012,
+        'company_id' => 1,
+        'name' => 'Existing Company-less Customer',
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    DB::table('customer_user')->insert([
+        'customer_id' => -90012,
+        'user_id' => $this->user->id,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    $itineraryId = DB::table('itineraries')->insertGetId([
+        'created_by' => $this->user->id,
+        'sync_status' => 'synced',
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    DB::table('salescalls')->insert([
+        'itinerary_id' => $itineraryId,
+        'customer_id' => -90012,
+        'created_by' => $this->user->id,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+
+    $this->locationPayload = ($this->makeLocationPayload)();
+    $this->locationPayload['customer_access_mappings'] = [[
+        'scope' => 'group',
+        'group_code' => 'NULL-COMPANY-CREATOR',
+        'is_complete' => true,
+        'users' => [[
+            'email' => $this->user->email,
+            'name' => $this->user->name,
+            'last_name' => null,
+        ]],
+    ]];
+
+    $companyLessCustomer = function (int $id, ?string $name = null): array {
+        $customer = ($this->customer)($id, $name);
+        $customer['company_id'] = null;
+
+        return $customer;
+    };
+    $firstCustomer = ($this->customer)(90010, 'Valid Company Customer');
+    $mixedPage = [($this->customer)(90011), $companyLessCustomer(90012), $companyLessCustomer(90013), $companyLessCustomer(90014), $companyLessCustomer(90015)];
+    $lastCustomer = ($this->customer)(90016, 'Customer after Company-less records');
+
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$firstCustomer],
+            'next_after_id' => 90010,
+            'total' => 7,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => null,
+        ]),
+        90010 => Http::response([
+            'customers' => $mixedPage,
+            'next_after_id' => 90015,
+            'total' => null,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => null,
+        ]),
+        90015 => Http::response([
+            'customers' => [$lastCustomer],
+            'next_after_id' => null,
+            'total' => null,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [90010, 90011, 90012, 90013, 90014, 90015, 90016],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+
+    expect(collect($steps)->pluck('success')->every(fn (bool $success): bool => $success))->toBeTrue()
+        ->and(end($steps)['done'])->toBeTrue()
+        ->and(DB::table('customers')->whereIn('server_id', [90010, 90011, 90012, 90013, 90014, 90015, 90016])->count())->toBe(7)
+        ->and(DB::table('customers')->whereIn('server_id', [90012, 90013, 90014, 90015])->whereNull('company_id')->count())->toBe(4)
+        ->and(DB::table('customers')->whereIn('server_id', [90010, 90011, 90016])->where('company_id', 1)->count())->toBe(3)
+        ->and(DB::table('companies')->count())->toBe(1)
+        ->and(DB::table('customers')->where('id', -90012)->value('server_id'))->toBe(90012)
+        ->and(DB::table('customer_user')->where('customer_id', -90012)->pluck('user_id')->all())->toBe([$this->user->id])
+        ->and(DB::table('salescalls')->where('customer_id', -90012)->count())->toBe(1)
+        ->and(DB::table('customer_access_mappings')->where('scope', 'group')->where('mapping_key', 'NULL-COMPANY-CREATOR')->exists())->toBeTrue()
+        ->and(app(CustomerAccessMappingResolver::class)->forCreator($this->user->id)['user_ids'])->toBe([$this->user->id])
+        ->and(array_column($this->requests, 'path'))->toBe([
+            '/api/sync/pull/locations',
+            '/api/sync/pull/customers',
+            '/api/sync/pull/customers',
+            '/api/sync/pull/customers',
+        ]);
+});
+
+test('Customer Pull rejects a Customer with a missing Company ID field instead of treating omission as null', function () {
+    $portalCustomer = ($this->customer)(90001, 'Customer missing Company field');
+    unset($portalCustomer['company_id']);
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [90001],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+    $failure = end($steps);
+
+    expect($failure['success'])->toBeFalse()
+        ->and($failure['message'])->toContain('omitted the Company ID field')
+        ->and(DB::table('customers')->where('server_id', 90001)->exists())->toBeFalse();
+});
+
+test('Customer Pull rejects malformed non-null Company IDs before persisting the Customer', function (mixed $companyId) {
+    $portalCustomer = ($this->customer)(90003, 'Customer with malformed Company ID');
+    $portalCustomer['company_id'] = $companyId;
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [90003],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+    $failure = end($steps);
+
+    expect($failure['success'])->toBeFalse()
+        ->and($failure['message'])->toContain('no valid required Company ID')
+        ->and(DB::table('customers')->where('server_id', 90003)->exists())->toBeFalse();
+})->with([
+    'negative integer' => [-1],
+    'nonnumeric string' => ['not-a-company-id'],
+]);
+
+test('Customer Pull rolls back a page with an invalid non-null Company without changing cached Customer or Access', function () {
+    $now = now();
+    DB::table('customers')->insert([
+        'id' => -90020,
+        'server_id' => 90020,
+        'company_id' => 1,
+        'name' => 'Cached Customer',
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    DB::table('customer_user')->insert([
+        'customer_id' => -90020,
+        'user_id' => $this->user->id,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    $portalCustomer = ($this->customer)(90020, 'Rejected Changed Name');
+    $portalCustomer['company_id'] = 999;
+    $portalCustomer['access_user_emails'] = [];
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [90020],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+    $failure = end($steps);
+
+    expect($failure['success'])->toBeFalse()
+        ->and($failure['message'])->toContain('required Company is unavailable on this device')
+        ->and(DB::table('customers')->where('id', -90020)->first())->toMatchArray([
+            'server_id' => 90020,
+            'company_id' => 1,
+            'name' => 'Cached Customer',
+            'sync_status' => 'synced',
+        ])
+        ->and(DB::table('customer_user')->where('customer_id', -90020)->pluck('user_id')->all())->toBe([$this->user->id]);
+});
+
+test('Customer Pull rejects a Customer whose non-null Company reference is unresolved locally', function () {
     $portalCustomer = ($this->customer)(90002, 'Customer with unresolved Company');
     $portalCustomer['company_id'] = 999;
     ($this->fakePortal)([

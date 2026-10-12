@@ -988,7 +988,14 @@ class SyncService
 
         $companyIds = [];
         foreach ($customers as $customer) {
-            $companyId = $customer['company_id'] ?? null;
+            if (! array_key_exists('company_id', $customer)) {
+                throw new \RuntimeException('Portal Customer response omitted the Company ID field.');
+            }
+
+            $companyId = $customer['company_id'];
+            if ($companyId === null) {
+                continue;
+            }
             if ((! is_int($companyId) && (! is_string($companyId) || ! ctype_digit($companyId))) || (int) $companyId < 1) {
                 throw new \RuntimeException('A Portal Customer has no valid required Company ID.');
             }
