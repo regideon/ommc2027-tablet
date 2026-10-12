@@ -48,7 +48,7 @@ enum FormKey: string
             self::SIGNAGE->value => [
                 'title' => 'CRR Signage',
                 'icon' => 'heroicon-o-photo',
-                'available' => false,
+                'available' => true,
             ],
             self::TRADE_REQUEST->value => [
                 'title' => 'Trade Request',

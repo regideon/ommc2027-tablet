@@ -114,7 +114,8 @@ test('form key exposes the eight form slugs and availability', function () {
         ->and(FormKey::MARKETING->available())->toBeTrue()
         ->and(FormKey::TRADE_CHECK->available())->toBeTrue()
         ->and(FormKey::GIVEAWAY->available())->toBeTrue()
-        ->and(FormKey::REPAIR->available())->toBeTrue();
+        ->and(FormKey::REPAIR->available())->toBeTrue()
+        ->and(FormKey::SIGNAGE->available())->toBeTrue();
 
     foreach (FormKey::cases() as $form) {
         expect($form->label())->not->toBe('')

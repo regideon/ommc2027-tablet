@@ -48,4 +48,15 @@ class Signage extends Model
     {
         return $this->hasMany(SignageAttachment::class);
     }
+
+    /**
+     * A signage may be edited only while it is still fully pending; once any
+     * approver has acted the tablet treats it as read-only.
+     */
+    public function isEditable(): bool
+    {
+        return $this->rsm_status === RSMStatus::PENDING
+            && $this->tdh_status === TDHStatus::PENDING
+            && $this->tds_status === TDSStatus::PENDING;
+    }
 }

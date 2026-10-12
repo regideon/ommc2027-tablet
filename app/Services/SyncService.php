@@ -12,6 +12,8 @@ use App\Models\Expense;
 use App\Models\ExpenseAttachment;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrAttachment;
+use App\Models\Forms\CRRSignage\Signage;
+use App\Models\Forms\CRRSignage\SignageAttachment;
 use App\Models\Forms\Giveaway\Giveaway;
 use App\Models\Forms\Giveaway\GiveawaySignature;
 use App\Models\Forms\Marketing\Marketing;
@@ -90,6 +92,8 @@ class SyncService
             || $pendingOrRetryable(GiveawaySignature::query())->exists()
             || $pendingOrRetryable(Repair::query())->exists()
             || $pendingOrRetryable(RepairAttachment::query())->exists()
+            || $pendingOrRetryable(Signage::query())->exists()
+            || $pendingOrRetryable(SignageAttachment::query())->exists()
             || $pendingOrRetryable(CustomerNote::query())->exists();
     }
 
@@ -1804,6 +1808,36 @@ class SyncService
         return $this->readRepairsWithStatus()['repairs'];
     }
 
+    /** @return array{products: array<int, array<string, mixed>>, failed: bool} */
+    public function readSignageProductsWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/sync/forms/crr-signage/products', 'signage_products');
+
+        return ['products' => $result['rows'], 'failed' => $result['failed']];
+    }
+
+    /** @return array{types: array<int, array<string, mixed>>, failed: bool} */
+    public function readSignageTypesWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/sync/forms/crr-signage/types', 'signage_types');
+
+        return ['types' => $result['rows'], 'failed' => $result['failed']];
+    }
+
+    /** @return array{signages: array<int, array<string, mixed>>, failed: bool} */
+    public function readSignagesWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/sync/forms/crr-signage/pull', 'signages');
+
+        return ['signages' => $result['rows'], 'failed' => $result['failed']];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public function readSignages(): array
+    {
+        return $this->readSignagesWithStatus()['signages'];
+    }
+
     /** @return array{rows: array<int, array<string, mixed>>, failed: bool} */
     private function requestFormRows(string $path, string $key): array
     {
@@ -2457,6 +2491,80 @@ class SyncService
                 }
 
                 $result = $this->pushRepairAttachmentItem($client, $attachment);
+
+                if ($result instanceof SyncResult) {
+                    return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
+                }
+
+                if ($result['success']) {
+                    $pushed++;
+                } else {
+                    $failed++;
+                    $retryable++;
+                    $failureReasons[$result['reason']] = true;
+                }
+            }
+
+            $pendingSignages = Signage::with(['product', 'type', 'salescall'])
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingSignages as $signage) {
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/forms/crr-signage/push", [
+                        'server_id' => $signage->server_id,
+                        'salescall_uuid' => $signage->salescall?->local_uuid,
+                        'product_id' => $signage->product?->server_id,
+                        'type_id' => $signage->type?->server_id,
+                        'category' => $signage->category->value,
+                        'name' => $signage->name,
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    $serverId = $response->json('server_id');
+                    if ($response->successful() && $serverId !== null) {
+                        $this->markSynced($signage, [
+                            'server_id' => $serverId,
+                            'synced_at' => now(),
+                        ]);
+                        $pushed++;
+                    } else {
+                        $this->recordItemFailure($signage, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
+                            'stage' => 'signage:portal',
+                            'endpoint' => '/api/sync/forms/crr-signage/push',
+                            'http_status' => $response->status(),
+                        ]);
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordUnexpectedItemFailure($signage, $e, 'signage:unexpected');
+                    $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
+                }
+            }
+
+            $pendingSignageAttachments = SignageAttachment::with('signage')
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingSignageAttachments as $attachment) {
+                if (! $attachment->signage?->server_id) {
+                    continue; // wait for the Signage to sync first
+                }
+
+                $result = $this->pushSignageAttachmentItem($client, $attachment);
 
                 if ($result instanceof SyncResult) {
                     return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
@@ -3685,6 +3793,80 @@ class SyncService
             $this->recordThrowableFailure($attachment, $classification, $e, [
                 'stage' => 'repair-attachment:unexpected',
                 'endpoint' => '/api/sync/forms/repair/attach',
+                'local_path' => $attachment->local_path,
+            ]);
+
+            return ['success' => false, 'reason' => $classification];
+        }
+    }
+
+    /**
+     * @return array{success: bool, reason?: string}|SyncResult
+     */
+    private function pushSignageAttachmentItem(PendingRequest $client, SignageAttachment $attachment): array|SyncResult
+    {
+        try {
+            if (! $this->isReadableLocalFile($attachment->local_path)) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'signage-attachment:local-file',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            $stream = fopen($attachment->local_path, 'r');
+
+            if ($stream === false) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: unable to open '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'signage-attachment:local-open',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            try {
+                $response = $client
+                    ->attach('file', $stream, basename($attachment->local_path))
+                    ->post("{$this->serverUrl}/api/sync/forms/crr-signage/attach", [
+                        'server_id' => $attachment->signage->server_id,
+                        'type' => $attachment->type->value,
+                    ]);
+            } finally {
+                fclose($stream);
+            }
+
+            if ($response->status() === 401) {
+                return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired');
+            }
+
+            $serverId = $response->json('server_id') ?? $response->json('uploaded_file_id');
+            if (! $response->successful() || $serverId === null) {
+                $failure = $response->failed() && $response->status() >= 500
+                    ? 'portal_upload_failed'
+                    : 'portal_rejected';
+
+                $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
+                    'stage' => 'signage-attachment:portal',
+                    'endpoint' => '/api/sync/forms/crr-signage/attach',
+                    'http_status' => $response->status(),
+                ]);
+
+                return ['success' => false, 'reason' => $failure];
+            }
+
+            $this->markSynced($attachment, [
+                'server_id' => $serverId,
+                'synced_at' => now(),
+            ]);
+
+            return ['success' => true];
+        } catch (Throwable $e) {
+            $classification = $this->classifyBinaryThrowable($e);
+            $this->recordThrowableFailure($attachment, $classification, $e, [
+                'stage' => 'signage-attachment:unexpected',
+                'endpoint' => '/api/sync/forms/crr-signage/attach',
                 'local_path' => $attachment->local_path,
             ]);
 
