@@ -8,6 +8,7 @@ use App\Filament\Pages\RepairFormPage;
 use App\Filament\Pages\SignageFormPage;
 use App\Filament\Pages\TradeCheckFormPage;
 use App\Filament\Pages\TradeRequestFormPage;
+use App\Filament\Pages\TrainingFormPage;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrProgram;
 use App\Models\Forms\CRRSignage\SignageProduct;
@@ -15,6 +16,8 @@ use App\Models\Forms\CRRSignage\SignageType;
 use App\Models\Forms\Marketing\MarketingProgram;
 use App\Models\Forms\TradeRequest\TradeProduct;
 use App\Models\Forms\TradeRequest\TradeType;
+use App\Models\Forms\Training\TrainingPosition;
+use App\Models\Forms\Training\TrainingTopic;
 use App\Models\RegionType;
 use App\Models\User;
 use App\Services\Forms\CrrService;
@@ -24,6 +27,7 @@ use App\Services\Forms\RepairService;
 use App\Services\Forms\SignageService;
 use App\Services\Forms\TradeCheckService;
 use App\Services\Forms\TradeRequestService;
+use App\Services\Forms\TrainingService;
 use App\Services\StagedAttachmentService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -60,6 +64,9 @@ function formsPageFakePortal(array $crrs = [], array $programs = [], array $trad
         str_contains($request->url(), '/api/sync/forms/trade-request/products') => Http::response(['trade_products' => [['id' => 501, 'name' => 'Jacket']]], 200),
         str_contains($request->url(), '/api/sync/forms/trade-request/types') => Http::response(['trade_types' => [['id' => 601, 'name' => 'Apparel']]], 200),
         str_contains($request->url(), '/api/sync/forms/trade-request/pull') => Http::response(['trade_requests' => []], 200),
+        str_contains($request->url(), '/api/sync/forms/training/topics') => Http::response(['training_topics' => [['id' => 801, 'name' => 'Product Knowledge']]], 200),
+        str_contains($request->url(), '/api/sync/forms/training/positions') => Http::response(['training_positions' => [['id' => 901, 'name' => 'Driver']]], 200),
+        str_contains($request->url(), '/api/sync/forms/training/pull') => Http::response(['trainings' => []], 200),
         default => Http::response([], 200),
     });
 }
@@ -128,7 +135,7 @@ test('the Forms page renders for an authenticated user', function () {
     $this->get(FormsPage::getUrl())->assertOk();
 });
 
-test('the rail exposes all eight forms with only Training unavailable', function () {
+test('the rail exposes all eight forms with every form available', function () {
     $user = formsPageUser();
     $this->actingAs($user);
     config(['sync.server_url' => 'http://portal.test']);
@@ -141,43 +148,27 @@ test('the rail exposes all eight forms with only Training unavailable', function
         ->and(FormKey::GIVEAWAY->available())->toBeTrue()
         ->and(FormKey::REPAIR->available())->toBeTrue()
         ->and(FormKey::SIGNAGE->available())->toBeTrue()
-        ->and(FormKey::TRADE_REQUEST->available())->toBeTrue();
+        ->and(FormKey::TRADE_REQUEST->available())->toBeTrue()
+        ->and(FormKey::TRAINING->available())->toBeTrue();
 
-    $available = [FormKey::CRR, FormKey::MARKETING, FormKey::TRADE_CHECK, FormKey::GIVEAWAY, FormKey::REPAIR, FormKey::SIGNAGE, FormKey::TRADE_REQUEST];
     $component = Livewire::test(FormsPage::class);
 
-    foreach (FormKey::cases() as $form) {
-        $component->assertSee($form->label());
+    $component->assertDontSee('Coming soon');
 
-        if (! in_array($form, $available, true)) {
-            expect($form->available())->toBeFalse();
-        }
+    foreach (FormKey::cases() as $form) {
+        $component->assertSee($form->label())
+            ->assertSeeHtml("wire:click=\"selectForm('{$form->slug()}')\"");
     }
 
-    $component
-        ->assertSee('Coming soon')
-        ->assertSeeHtml("wire:click=\"selectForm('crr')\"")
-        ->assertSeeHtml("wire:click=\"selectForm('marketing')\"")
-        ->assertSeeHtml("wire:click=\"selectForm('trade-check')\"")
-        ->assertSeeHtml("wire:click=\"selectForm('giveaway')\"")
-        ->assertSeeHtml("wire:click=\"selectForm('repair')\"")
-        ->assertSeeHtml("wire:click=\"selectForm('crr-signage')\"")
-        ->assertSeeHtml("wire:click=\"selectForm('trade-request')\"")
-        ->assertSet('selectedForm', 'crr');
+    $component->assertSet('selectedForm', 'crr');
 
-    // Only Training remains unavailable.
-    expect(substr_count($component->html(), 'Coming soon'))->toBe(1);
+    // Selecting any form switches the pane.
+    foreach (FormKey::cases() as $form) {
+        $component->call('selectForm', $form->slug())->assertSet('selectedForm', $form->slug());
+    }
 
-    // Selecting another available form switches the pane.
-    $component->call('selectForm', 'marketing')->assertSet('selectedForm', 'marketing');
-    $component->call('selectForm', 'trade-check')->assertSet('selectedForm', 'trade-check');
-    $component->call('selectForm', 'giveaway')->assertSet('selectedForm', 'giveaway');
-    $component->call('selectForm', 'repair')->assertSet('selectedForm', 'repair');
-    $component->call('selectForm', 'crr-signage')->assertSet('selectedForm', 'crr-signage');
-    $component->call('selectForm', 'trade-request')->assertSet('selectedForm', 'trade-request');
-
-    // Selecting an unavailable form is ignored.
-    $component->call('selectForm', 'training')->assertSet('selectedForm', 'trade-request');
+    // Unknown slugs are ignored.
+    $component->call('selectForm', 'nonsense')->assertSet('selectedForm', FormKey::TRAINING->slug());
     $component->call('selectForm', 'crr')->assertSet('selectedForm', 'crr');
 });
 
@@ -518,6 +509,67 @@ test('selecting Trade Request loads locally created submissions into the list an
         ->assertRedirect(TradeRequestFormPage::getUrl(['submission' => $tradeRequest->id]));
 });
 
+function formsPageTrainingStagedId(User $user): int
+{
+    $png = base64_decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+    );
+
+    return app(StagedAttachmentService::class)
+        ->stageFromDataUri($user, 'data:image/png;base64,'.base64_encode($png), 'request.png')
+        ->id;
+}
+
+test('selecting Training loads locally created submissions into the list and detail', function () {
+    $user = formsPageUser();
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+    formsPageFakePortal();
+
+    $service = app(TrainingService::class);
+    $service->programs();
+
+    $topic = TrainingTopic::query()->firstOrFail();
+    $position = TrainingPosition::query()->firstOrFail();
+
+    $training = $service->create($user, [
+        'salescall_uuid' => null,
+        'topic_id' => $topic->id,
+        'other_topic' => null,
+        'preferred_at' => '2026-11-01 09:00:00',
+        'omcc_volume' => 100,
+        'competitor_volume' => 50,
+        'participants' => [
+            ['name' => 'Juan Dela Cruz', 'position_id' => $position->id],
+        ],
+        'staged_attachments' => [
+            ['type' => 1, 'staged_id' => formsPageTrainingStagedId($user)],
+        ],
+    ]);
+
+    $component = Livewire::test(FormsPage::class)
+        ->call('selectForm', 'training')
+        ->assertSet('selectedForm', 'training')
+        ->assertSee('Create Training')
+        ->assertSee('Your Trainings')
+        ->assertSee('Product Knowledge')
+        ->assertSee('Pending Sync');
+
+    $rows = $component->get('rows');
+
+    expect(collect($rows)->contains(fn (array $row): bool => ($row['local_uuid'] ?? null) === $training->local_uuid))->toBeTrue();
+
+    $key = 'local:'.$training->local_uuid;
+    $component->call('selectRow', $key)
+        ->assertSet('selectedRowKey', $key)
+        ->assertSee('Training Details')
+        ->assertSee('Juan Dela Cruz')
+        ->assertSee('Edit Training');
+
+    $component->call('editSelectedRow')
+        ->assertRedirect(TrainingFormPage::getUrl(['submission' => $training->id]));
+});
+
 test('editing a non-editable CRR is refused', function () {
     $user = formsPageUser();
     $this->actingAs($user);
@@ -639,11 +691,12 @@ test('opening the Forms page with a form parameter selects that form', function 
         ->assertSet('selectedForm', 'trade-request')
         ->assertSee('Your Trade Requests');
 
-    // Unavailable or unknown forms fall back to the default.
     Livewire::withQueryParams(['form' => 'training'])
         ->test(FormsPage::class)
-        ->assertSet('selectedForm', 'crr');
+        ->assertSet('selectedForm', 'training')
+        ->assertSee('Your Trainings');
 
+    // Unknown forms fall back to the default.
     Livewire::withQueryParams(['form' => 'nonsense'])
         ->test(FormsPage::class)
         ->assertSet('selectedForm', 'crr');

@@ -11,6 +11,7 @@ use App\Models\Forms\Marketing\Marketing;
 use App\Models\Forms\Repair\Repair;
 use App\Models\Forms\TradeCheck\TradeCheck;
 use App\Models\Forms\TradeRequest\TradeRequest;
+use App\Models\Forms\Training\Training;
 use App\Models\User;
 use App\Services\Forms\CrrService;
 use App\Services\Forms\GiveawayService;
@@ -19,6 +20,7 @@ use App\Services\Forms\RepairService;
 use App\Services\Forms\SignageService;
 use App\Services\Forms\TradeCheckService;
 use App\Services\Forms\TradeRequestService;
+use App\Services\Forms\TrainingService;
 use App\Services\SyncService;
 use BackedEnum;
 use Filament\Pages\Page;
@@ -201,6 +203,7 @@ class FormsPage extends Page
             FormKey::REPAIR->value => RepairFormPage::getUrl(['submission' => $submission->getKey()]),
             FormKey::SIGNAGE->value => SignageFormPage::getUrl(['submission' => $submission->getKey()]),
             FormKey::TRADE_REQUEST->value => TradeRequestFormPage::getUrl(['submission' => $submission->getKey()]),
+            FormKey::TRAINING->value => TrainingFormPage::getUrl(['submission' => $submission->getKey()]),
             default => FormsPage::getUrl(),
         });
     }
@@ -237,6 +240,7 @@ class FormsPage extends Page
             FormKey::REPAIR->value => app(RepairService::class),
             FormKey::SIGNAGE->value => app(SignageService::class),
             FormKey::TRADE_REQUEST->value => app(TradeRequestService::class),
+            FormKey::TRAINING->value => app(TrainingService::class),
             default => throw new RuntimeException('This form is not available yet.'),
         };
     }
@@ -254,6 +258,7 @@ class FormsPage extends Page
             FormKey::REPAIR->value => Repair::class,
             FormKey::SIGNAGE->value => Signage::class,
             FormKey::TRADE_REQUEST->value => TradeRequest::class,
+            FormKey::TRAINING->value => Training::class,
             default => throw new RuntimeException('This form is not available yet.'),
         };
     }
