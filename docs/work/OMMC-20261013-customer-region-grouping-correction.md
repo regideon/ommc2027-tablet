@@ -1,6 +1,6 @@
 # OMMC-20261013-customer-region-grouping-correction
 
-- **State:** READY_FOR_TERMINAL_REVIEW
+- **State:** TERMINAL_DELIVERED
 - **Repositories:** Portal `ommc2027`; Tablet `ommc2027-tablet`
 - **Authorization:** Human accepted the implementation and authorized terminalization, separate commits, and ordinary pushes to `origin/main` in Portal and Tablet. No retained database writes, Customer Pull/Push, migrations, force-push, rebase, unrelated changes, or deployment.
 
@@ -66,4 +66,8 @@ Human manually tested and accepted the Customer Location behavior and authorized
 
 Final focused disposable validation before staging: Tablet 71 tests / 533 assertions passed, with 1 optional external Portal contract test skipped because `CUSTOMER_CONTRACT_PORTAL_URL` was not configured; Portal 54 tests / 406 assertions passed. PHP lint, targeted Pint, and diff checks passed in both worktrees. Accepted scope includes the approved five-group crosswalk, physical Region filtering, preserved locality and Area Cluster relationships, stable Customer IDs, protected legacy Specific Region 1, map replacement behavior, and complete provider display addresses. Reference relationships and the offline Tablet snapshot contract are preserved; no reference data or migration change was made.
 
-Known limitations: map reverse geocoding requires a provider response/network; component-only or missing display addresses are reported as partial, and the existing 500-character Customer Address limit applies. Terminal delivery remains pending verification of the commit and push; do not mark TERMINAL_DELIVERED before post-push checks succeed.
+Known limitations: map reverse geocoding requires a provider response/network; component-only or missing display addresses are reported as partial, and the existing 500-character Customer Address limit applies.
+
+## Verified terminal delivery
+
+Human manual acceptance was recorded before delivery. Portal commit `6e7f43b2a7fdec9e9b9883d546b38102dd7407ed` and Tablet commit `774efdb1c2ee295a14b23fee0ab54c6472e4c6b0` were pushed to their configured `origin/main` branches using ordinary fast-forward pushes. Post-push `git fetch origin` confirmed each local HEAD equals `origin/main`; both worktrees were clean at that verification. No database operations, Customer synchronization, migrations, or deployment occurred.
