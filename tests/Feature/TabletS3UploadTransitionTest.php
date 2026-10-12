@@ -1,7 +1,7 @@
 <?php
 
-use App\Models\CustomerProfile;
 use App\Models\Category;
+use App\Models\CustomerProfile;
 use App\Models\Salescall;
 use App\Models\SalescallImage;
 use App\Models\SubCategory;

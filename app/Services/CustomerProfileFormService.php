@@ -162,9 +162,13 @@ class CustomerProfileFormService
         }
 
         foreach ($state['categories'] ?? [] as $stream => $years) {
-            if (! in_array($stream, self::categoryStreams($profileType), true)) continue;
+            if (! in_array($stream, self::categoryStreams($profileType), true)) {
+                continue;
+            }
             foreach ($years as $year => $category) {
-                if (blank($category)) continue;
+                if (blank($category)) {
+                    continue;
+                }
                 CustomerCategoryHistory::updateOrCreate(
                     ['customer_id' => $customer->id, 'profile_type' => $profileType, 'stream' => $stream, 'category_year' => (int) $year],
                     ['category' => $category]

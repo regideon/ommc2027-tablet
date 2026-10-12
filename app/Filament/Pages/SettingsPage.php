@@ -2,8 +2,8 @@
 
 namespace App\Filament\Pages;
 
-use App\Support\NativeAppReleaseMetadata;
 use App\Services\TrustedLoginService;
+use App\Support\NativeAppReleaseMetadata;
 use BackedEnum;
 use Filament\Facades\Filament;
 use Filament\Pages\Page;

@@ -10,6 +10,8 @@ use App\Models\CustomerProfile;
 use App\Models\CustomerProfileAttachment;
 use App\Models\Expense;
 use App\Models\ExpenseAttachment;
+use App\Models\Forms\CRR\Crr;
+use App\Models\Forms\CRR\CrrAttachment;
 use App\Models\Itinerary;
 use App\Models\Salescall;
 use App\Models\SalescallBrand;
@@ -72,6 +74,8 @@ class SyncService
             || $pendingOrRetryable(CustomerProfileAttachment::query())->exists()
             || $pendingOrRetryable(Expense::query())->exists()
             || $pendingOrRetryable(ExpenseAttachment::query())->exists()
+            || $pendingOrRetryable(Crr::query())->exists()
+            || $pendingOrRetryable(CrrAttachment::query())->exists()
             || $pendingOrRetryable(CustomerNote::query())->exists();
     }
 
@@ -1687,6 +1691,66 @@ class SyncService
         }
     }
 
+    /** @return array{programs: array<int, array<string, mixed>>, failed: bool} */
+    public function readCrrProgramsWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/sync/forms/crr/programs', 'crr_programs');
+
+        return ['programs' => $result['rows'], 'failed' => $result['failed']];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public function readCrrPrograms(): array
+    {
+        return $this->readCrrProgramsWithStatus()['programs'];
+    }
+
+    /** @return array{crrs: array<int, array<string, mixed>>, failed: bool} */
+    public function readCrrsWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/sync/forms/crr/pull', 'crrs');
+
+        return ['crrs' => $result['rows'], 'failed' => $result['failed']];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public function readCrrs(): array
+    {
+        return $this->readCrrsWithStatus()['crrs'];
+    }
+
+    /** @return array{rows: array<int, array<string, mixed>>, failed: bool} */
+    private function requestFormRows(string $path, string $key): array
+    {
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (! $user || blank($user->api_token) || blank($this->serverUrl)) {
+            return ['rows' => [], 'failed' => true];
+        }
+
+        try {
+            $response = $this->client($user->api_token)->get("{$this->serverUrl}{$path}");
+
+            if (! $response->successful()) {
+                Log::warning('Form read failed.', ['path' => $path, 'status' => $response->status()]);
+
+                return ['rows' => [], 'failed' => true];
+            }
+
+            $rows = $response->json($key);
+
+            if (! is_array($rows)) {
+                return ['rows' => [], 'failed' => true];
+            }
+
+            return ['rows' => array_values(array_filter($rows, 'is_array')), 'failed' => false];
+        } catch (Throwable $exception) {
+            Log::warning('Form read request failed.', ['path' => $path, 'message' => $exception->getMessage()]);
+
+            return ['rows' => [], 'failed' => true];
+        }
+    }
+
     public function push(): SyncResult
     {
         $this->releaseStaleCustomerPushClaims();
@@ -1908,6 +1972,85 @@ class SyncService
                 }
 
                 $result = $this->pushExpenseAttachmentItem($client, $attachment);
+
+                if ($result instanceof SyncResult) {
+                    return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
+                }
+
+                if ($result['success']) {
+                    $pushed++;
+                } else {
+                    $failed++;
+                    $retryable++;
+                    $failureReasons[$result['reason']] = true;
+                }
+            }
+
+            $pendingCrrs = Crr::with(['program', 'salescall'])
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingCrrs as $crr) {
+                if (! $crr->program?->server_id) {
+                    continue; // wait until the program is available locally
+                }
+
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/forms/crr/push", [
+                        'server_id' => $crr->server_id,
+                        'salescall_uuid' => $crr->salescall?->local_uuid,
+                        'crr_program_id' => $crr->program->server_id,
+                        'date_implemented' => $crr->date_implemented,
+                        'amount' => $crr->amount,
+                        'details' => $crr->details,
+                        'remarks' => $crr->remarks,
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    $serverId = $response->json('server_id');
+                    if ($response->successful() && $serverId !== null) {
+                        $this->markSynced($crr, [
+                            'server_id' => $serverId,
+                            'synced_at' => now(),
+                        ]);
+                        $pushed++;
+                    } else {
+                        $this->recordItemFailure($crr, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
+                            'stage' => 'crr:portal',
+                            'endpoint' => '/api/sync/forms/crr/push',
+                            'http_status' => $response->status(),
+                        ]);
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordUnexpectedItemFailure($crr, $e, 'crr:unexpected');
+                    $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
+                }
+            }
+
+            $pendingCrrAttachments = CrrAttachment::with('crr')
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingCrrAttachments as $attachment) {
+                if (! $attachment->crr?->server_id) {
+                    continue; // wait for the CRR to sync first
+                }
+
+                $result = $this->pushCrrAttachmentItem($client, $attachment);
 
                 if ($result instanceof SyncResult) {
                     return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
@@ -2841,6 +2984,79 @@ class SyncService
             $this->recordThrowableFailure($attachment, $classification, $e, [
                 'stage' => 'expense-attachment:unexpected',
                 'endpoint' => '/api/sync/push/expense-attachment',
+                'local_path' => $attachment->local_path,
+            ]);
+
+            return ['success' => false, 'reason' => $classification];
+        }
+    }
+
+    /**
+     * @return array{success: bool, reason?: string}|SyncResult
+     */
+    private function pushCrrAttachmentItem(PendingRequest $client, CrrAttachment $attachment): array|SyncResult
+    {
+        try {
+            if (! $this->isReadableLocalFile($attachment->local_path)) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'crr-attachment:local-file',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            $stream = fopen($attachment->local_path, 'r');
+
+            if ($stream === false) {
+                $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: unable to open '.$this->displayPath($attachment->local_path), [
+                    'stage' => 'crr-attachment:local-open',
+                    'local_path' => $attachment->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            try {
+                $response = $client
+                    ->attach('file', $stream, basename($attachment->local_path))
+                    ->post("{$this->serverUrl}/api/sync/forms/crr/attach", [
+                        'server_id' => $attachment->crr->server_id,
+                    ]);
+            } finally {
+                fclose($stream);
+            }
+
+            if ($response->status() === 401) {
+                return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired');
+            }
+
+            $serverId = $response->json('uploaded_file_id') ?? $response->json('server_id');
+            if (! $response->successful() || $serverId === null) {
+                $failure = $response->failed() && $response->status() >= 500
+                    ? 'portal_upload_failed'
+                    : 'portal_rejected';
+
+                $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
+                    'stage' => 'crr-attachment:portal',
+                    'endpoint' => '/api/sync/forms/crr/attach',
+                    'http_status' => $response->status(),
+                ]);
+
+                return ['success' => false, 'reason' => $failure];
+            }
+
+            $this->markSynced($attachment, [
+                'server_id' => $serverId,
+                'synced_at' => now(),
+            ]);
+
+            return ['success' => true];
+        } catch (Throwable $e) {
+            $classification = $this->classifyBinaryThrowable($e);
+            $this->recordThrowableFailure($attachment, $classification, $e, [
+                'stage' => 'crr-attachment:unexpected',
+                'endpoint' => '/api/sync/forms/crr/attach',
                 'local_path' => $attachment->local_path,
             ]);
 

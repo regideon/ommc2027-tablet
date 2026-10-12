@@ -2,10 +2,10 @@
 
 namespace App\Console\Commands;
 
-use App\Services\StartupMigrationService;
 use App\Services\StartupMigrationResult;
-use App\Support\StartupMigrationArtifact;
+use App\Services\StartupMigrationService;
 use App\Support\StartupDiagnosticTrace;
+use App\Support\StartupMigrationArtifact;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 use Throwable;
