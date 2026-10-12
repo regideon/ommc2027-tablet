@@ -26,6 +26,7 @@
 /public/customer_profile_attachments
 /public/salescall_images
 /public/trade_check_attachments
+/public/giveaway_signatures
 /public/staged_attachments
 /storage/*.key
 /storage/pail

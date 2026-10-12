@@ -12,6 +12,8 @@ use App\Models\Expense;
 use App\Models\ExpenseAttachment;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrAttachment;
+use App\Models\Forms\Giveaway\Giveaway;
+use App\Models\Forms\Giveaway\GiveawaySignature;
 use App\Models\Forms\Marketing\Marketing;
 use App\Models\Forms\TradeCheck\TradeCheck;
 use App\Models\Forms\TradeCheck\TradeCheckAttachment;
@@ -82,6 +84,8 @@ class SyncService
             || $pendingOrRetryable(Marketing::query())->exists()
             || $pendingOrRetryable(TradeCheck::query())->exists()
             || $pendingOrRetryable(TradeCheckAttachment::query())->exists()
+            || $pendingOrRetryable(Giveaway::query())->exists()
+            || $pendingOrRetryable(GiveawaySignature::query())->exists()
             || $pendingOrRetryable(CustomerNote::query())->exists();
     }
 
@@ -1768,6 +1772,20 @@ class SyncService
         return $this->readTradeChecksWithStatus()['trade_checks'];
     }
 
+    /** @return array{giveaways: array<int, array<string, mixed>>, failed: bool} */
+    public function readGiveawaysWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/sync/forms/giveaway/pull', 'giveaways');
+
+        return ['giveaways' => $result['rows'], 'failed' => $result['failed']];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public function readGiveaways(): array
+    {
+        return $this->readGiveawaysWithStatus()['giveaways'];
+    }
+
     /** @return array{rows: array<int, array<string, mixed>>, failed: bool} */
     private function requestFormRows(string $path, string $key): array
     {
@@ -2266,6 +2284,86 @@ class SyncService
                 }
 
                 $result = $this->pushTradeCheckAttachmentItem($client, $attachment);
+
+                if ($result instanceof SyncResult) {
+                    return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
+                }
+
+                if ($result['success']) {
+                    $pushed++;
+                } else {
+                    $failed++;
+                    $retryable++;
+                    $failureReasons[$result['reason']] = true;
+                }
+            }
+
+            $pendingGiveaways = Giveaway::with(['items.answerItem', 'salescall'])
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingGiveaways as $giveaway) {
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/forms/giveaway/push", [
+                        'server_id' => $giveaway->server_id,
+                        'salescall_uuid' => $giveaway->salescall?->local_uuid,
+                        'name' => $giveaway->name,
+                        'items' => $giveaway->items
+                            ->sortBy('id')
+                            ->values()
+                            ->map(fn ($item): array => [
+                                'category' => $item->category->value,
+                                'name' => $item->name,
+                                'answer' => $item->answerItem?->answer,
+                            ])
+                            ->all(),
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    $serverId = $response->json('server_id');
+                    if ($response->successful() && $serverId !== null) {
+                        $this->markSynced($giveaway, [
+                            'server_id' => $serverId,
+                            'synced_at' => now(),
+                        ]);
+                        $pushed++;
+                    } else {
+                        $this->recordItemFailure($giveaway, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
+                            'stage' => 'giveaway:portal',
+                            'endpoint' => '/api/sync/forms/giveaway/push',
+                            'http_status' => $response->status(),
+                        ]);
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordUnexpectedItemFailure($giveaway, $e, 'giveaway:unexpected');
+                    $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
+                }
+            }
+
+            $pendingGiveawaySignatures = GiveawaySignature::with(['giveaway', 'answer.item'])
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingGiveawaySignatures as $signature) {
+                if (! $signature->giveaway?->server_id) {
+                    continue; // wait for the Giveaway to sync first
+                }
+
+                $result = $this->pushGiveawaySignatureItem($client, $signature);
 
                 if ($result instanceof SyncResult) {
                     return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
@@ -3347,6 +3445,80 @@ class SyncService
                 'stage' => 'trade-check-attachment:unexpected',
                 'endpoint' => '/api/sync/forms/trade-check/attach',
                 'local_path' => $attachment->local_path,
+            ]);
+
+            return ['success' => false, 'reason' => $classification];
+        }
+    }
+
+    /**
+     * @return array{success: bool, reason?: string}|SyncResult
+     */
+    private function pushGiveawaySignatureItem(PendingRequest $client, GiveawaySignature $signature): array|SyncResult
+    {
+        try {
+            if (! $this->isReadableLocalFile($signature->local_path)) {
+                $this->recordItemFailure($signature, 'local_file_missing', 'local_file_missing: '.$this->displayPath($signature->local_path), [
+                    'stage' => 'giveaway-signature:local-file',
+                    'local_path' => $signature->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            $stream = fopen($signature->local_path, 'r');
+
+            if ($stream === false) {
+                $this->recordItemFailure($signature, 'local_file_missing', 'local_file_missing: unable to open '.$this->displayPath($signature->local_path), [
+                    'stage' => 'giveaway-signature:local-open',
+                    'local_path' => $signature->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            try {
+                $response = $client
+                    ->attach('file', $stream, basename($signature->local_path))
+                    ->post("{$this->serverUrl}/api/sync/forms/giveaway/attach", [
+                        'server_id' => $signature->giveaway->server_id,
+                        'item_ref' => $signature->answer?->item?->name,
+                    ]);
+            } finally {
+                fclose($stream);
+            }
+
+            if ($response->status() === 401) {
+                return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired');
+            }
+
+            $serverId = $response->json('server_id') ?? $response->json('uploaded_file_id');
+            if (! $response->successful() || $serverId === null) {
+                $failure = $response->failed() && $response->status() >= 500
+                    ? 'portal_upload_failed'
+                    : 'portal_rejected';
+
+                $this->recordItemFailure($signature, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
+                    'stage' => 'giveaway-signature:portal',
+                    'endpoint' => '/api/sync/forms/giveaway/attach',
+                    'http_status' => $response->status(),
+                ]);
+
+                return ['success' => false, 'reason' => $failure];
+            }
+
+            $this->markSynced($signature, [
+                'server_id' => $serverId,
+                'synced_at' => now(),
+            ]);
+
+            return ['success' => true];
+        } catch (Throwable $e) {
+            $classification = $this->classifyBinaryThrowable($e);
+            $this->recordThrowableFailure($signature, $classification, $e, [
+                'stage' => 'giveaway-signature:unexpected',
+                'endpoint' => '/api/sync/forms/giveaway/attach',
+                'local_path' => $signature->local_path,
             ]);
 
             return ['success' => false, 'reason' => $classification];

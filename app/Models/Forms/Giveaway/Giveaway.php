@@ -2,6 +2,7 @@
 
 namespace App\Models\Forms\Giveaway;
 
+use App\Enums\RSMStatus;
 use App\Models\Salescall;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
@@ -49,5 +50,21 @@ class Giveaway extends Model
     public function salescall(): BelongsTo
     {
         return $this->belongsTo(Salescall::class);
+    }
+
+    /**
+     * Editable only while every one of the user's answer rows is still Pending.
+     */
+    public function isEditableBy(int $userId): bool
+    {
+        $answers = $this->answers->where('submitted_by', $userId);
+
+        if ($answers->isEmpty()) {
+            return false;
+        }
+
+        return $answers->every(
+            fn (GiveawayAnswer $answer): bool => $answer->rsm_status === RSMStatus::PENDING
+        );
     }
 }

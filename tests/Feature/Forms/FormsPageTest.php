@@ -3,6 +3,7 @@
 use App\Enums\FormKey;
 use App\Filament\Pages\CrrFormPage;
 use App\Filament\Pages\FormsPage;
+use App\Filament\Pages\GiveawayFormPage;
 use App\Filament\Pages\TradeCheckFormPage;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrProgram;
@@ -10,8 +11,10 @@ use App\Models\Forms\Marketing\MarketingProgram;
 use App\Models\RegionType;
 use App\Models\User;
 use App\Services\Forms\CrrService;
+use App\Services\Forms\GiveawayService;
 use App\Services\Forms\MarketingService;
 use App\Services\Forms\TradeCheckService;
+use App\Services\StagedAttachmentService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -39,6 +42,7 @@ function formsPageFakePortal(array $crrs = [], array $programs = [], array $trad
         str_contains($request->url(), '/api/sync/forms/marketing/programs') => Http::response(['marketing_programs' => []], 200),
         str_contains($request->url(), '/api/sync/forms/marketing/pull') => Http::response(['marketings' => []], 200),
         str_contains($request->url(), '/api/sync/forms/trade-check/pull') => Http::response(['trade_checks' => $tradeChecks], 200),
+        str_contains($request->url(), '/api/sync/forms/giveaway/pull') => Http::response(['giveaways' => []], 200),
         default => Http::response([], 200),
     });
 }
@@ -107,7 +111,7 @@ test('the Forms page renders for an authenticated user', function () {
     $this->get(FormsPage::getUrl())->assertOk();
 });
 
-test('the rail exposes all eight forms with CRR, Marketing, and Trade Check available', function () {
+test('the rail exposes all eight forms with CRR, Marketing, Trade Check, and Giveaway available', function () {
     $user = formsPageUser();
     $this->actingAs($user);
     config(['sync.server_url' => 'http://portal.test']);
@@ -116,9 +120,10 @@ test('the rail exposes all eight forms with CRR, Marketing, and Trade Check avai
     expect(FormKey::cases())->toHaveCount(8)
         ->and(FormKey::CRR->available())->toBeTrue()
         ->and(FormKey::MARKETING->available())->toBeTrue()
-        ->and(FormKey::TRADE_CHECK->available())->toBeTrue();
+        ->and(FormKey::TRADE_CHECK->available())->toBeTrue()
+        ->and(FormKey::GIVEAWAY->available())->toBeTrue();
 
-    $available = [FormKey::CRR, FormKey::MARKETING, FormKey::TRADE_CHECK];
+    $available = [FormKey::CRR, FormKey::MARKETING, FormKey::TRADE_CHECK, FormKey::GIVEAWAY];
     $component = Livewire::test(FormsPage::class);
 
     foreach (FormKey::cases() as $form) {
@@ -134,18 +139,20 @@ test('the rail exposes all eight forms with CRR, Marketing, and Trade Check avai
         ->assertSeeHtml("wire:click=\"selectForm('crr')\"")
         ->assertSeeHtml("wire:click=\"selectForm('marketing')\"")
         ->assertSeeHtml("wire:click=\"selectForm('trade-check')\"")
+        ->assertSeeHtml("wire:click=\"selectForm('giveaway')\"")
         ->assertSet('selectedForm', 'crr');
 
-    // The remaining five forms render as unavailable.
-    expect(substr_count($component->html(), 'Coming soon'))->toBe(5);
-
-    // Selecting an unavailable form is ignored.
-    $component->call('selectForm', 'giveaway')->assertSet('selectedForm', 'crr');
-    $component->call('selectForm', 'crr')->assertSet('selectedForm', 'crr');
+    // The remaining four forms render as unavailable.
+    expect(substr_count($component->html(), 'Coming soon'))->toBe(4);
 
     // Selecting another available form switches the pane.
     $component->call('selectForm', 'marketing')->assertSet('selectedForm', 'marketing');
     $component->call('selectForm', 'trade-check')->assertSet('selectedForm', 'trade-check');
+    $component->call('selectForm', 'giveaway')->assertSet('selectedForm', 'giveaway');
+
+    // Selecting an unavailable form is ignored.
+    $component->call('selectForm', 'repair')->assertSet('selectedForm', 'giveaway');
+    $component->call('selectForm', 'crr')->assertSet('selectedForm', 'crr');
 });
 
 test('a locally created pending CRR appears in the list with a Pending Sync badge', function () {
@@ -271,6 +278,54 @@ test('selecting Trade Check loads locally created submissions into the list and 
         ->assertRedirect(TradeCheckFormPage::getUrl(['submission' => $submission->id]));
 });
 
+function formsPageGiveawaySignatureStagedId(User $user): int
+{
+    $png = base64_decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+    );
+
+    return app(StagedAttachmentService::class)
+        ->stageFromDataUri($user, 'data:image/png;base64,'.base64_encode($png), 'signature.png')
+        ->id;
+}
+
+test('selecting Giveaway loads locally created submissions into the list and detail', function () {
+    $user = formsPageUser();
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+    formsPageFakePortal();
+
+    $giveaway = app(GiveawayService::class)->create($user, [
+        'salescall_uuid' => null,
+        'name' => 'Store Giveaway',
+        'items' => [
+            ['category' => 1, 'name' => 'Gift Check', 'answer' => '2', 'staged_signature_id' => formsPageGiveawaySignatureStagedId($user)],
+        ],
+    ]);
+
+    $component = Livewire::test(FormsPage::class)
+        ->call('selectForm', 'giveaway')
+        ->assertSet('selectedForm', 'giveaway')
+        ->assertSee('Create Giveaway')
+        ->assertSee('Your Giveaways')
+        ->assertSee('Store Giveaway')
+        ->assertSee('Pending Sync');
+
+    $rows = $component->get('rows');
+
+    expect(collect($rows)->contains(fn (array $row): bool => ($row['local_uuid'] ?? null) === $giveaway->local_uuid))->toBeTrue();
+
+    $key = 'local:'.$giveaway->local_uuid;
+    $component->call('selectRow', $key)
+        ->assertSet('selectedRowKey', $key)
+        ->assertSee('Giveaway Details')
+        ->assertSee('Gift Check')
+        ->assertSee('Edit Giveaway');
+
+    $component->call('editSelectedRow')
+        ->assertRedirect(GiveawayFormPage::getUrl(['submission' => $giveaway->id]));
+});
+
 test('editing a non-editable CRR is refused', function () {
     $user = formsPageUser();
     $this->actingAs($user);
@@ -372,8 +427,13 @@ test('opening the Forms page with a form parameter selects that form', function 
         ->assertSet('selectedForm', 'trade-check')
         ->assertSee('Trade Check Evaluation');
 
-    // Unavailable or unknown forms fall back to the default.
     Livewire::withQueryParams(['form' => 'giveaway'])
+        ->test(FormsPage::class)
+        ->assertSet('selectedForm', 'giveaway')
+        ->assertSee('Your Giveaways');
+
+    // Unavailable or unknown forms fall back to the default.
+    Livewire::withQueryParams(['form' => 'repair'])
         ->test(FormsPage::class)
         ->assertSet('selectedForm', 'crr');
 

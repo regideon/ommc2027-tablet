@@ -38,7 +38,7 @@ enum FormKey: string
             self::GIVEAWAY->value => [
                 'title' => 'Giveaway',
                 'icon' => 'heroicon-o-gift',
-                'available' => false,
+                'available' => true,
             ],
             self::REPAIR->value => [
                 'title' => 'Repair',
