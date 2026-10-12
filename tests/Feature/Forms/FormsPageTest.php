@@ -7,11 +7,14 @@ use App\Filament\Pages\GiveawayFormPage;
 use App\Filament\Pages\RepairFormPage;
 use App\Filament\Pages\SignageFormPage;
 use App\Filament\Pages\TradeCheckFormPage;
+use App\Filament\Pages\TradeRequestFormPage;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrProgram;
 use App\Models\Forms\CRRSignage\SignageProduct;
 use App\Models\Forms\CRRSignage\SignageType;
 use App\Models\Forms\Marketing\MarketingProgram;
+use App\Models\Forms\TradeRequest\TradeProduct;
+use App\Models\Forms\TradeRequest\TradeType;
 use App\Models\RegionType;
 use App\Models\User;
 use App\Services\Forms\CrrService;
@@ -20,6 +23,7 @@ use App\Services\Forms\MarketingService;
 use App\Services\Forms\RepairService;
 use App\Services\Forms\SignageService;
 use App\Services\Forms\TradeCheckService;
+use App\Services\Forms\TradeRequestService;
 use App\Services\StagedAttachmentService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -53,6 +57,9 @@ function formsPageFakePortal(array $crrs = [], array $programs = [], array $trad
         str_contains($request->url(), '/api/sync/forms/crr-signage/products') => Http::response(['signage_products' => [['id' => 301, 'name' => 'Tarpaulin']]], 200),
         str_contains($request->url(), '/api/sync/forms/crr-signage/types') => Http::response(['signage_types' => [['id' => 401, 'name' => 'Horizontal']]], 200),
         str_contains($request->url(), '/api/sync/forms/crr-signage/pull') => Http::response(['signages' => []], 200),
+        str_contains($request->url(), '/api/sync/forms/trade-request/products') => Http::response(['trade_products' => [['id' => 501, 'name' => 'Jacket']]], 200),
+        str_contains($request->url(), '/api/sync/forms/trade-request/types') => Http::response(['trade_types' => [['id' => 601, 'name' => 'Apparel']]], 200),
+        str_contains($request->url(), '/api/sync/forms/trade-request/pull') => Http::response(['trade_requests' => []], 200),
         default => Http::response([], 200),
     });
 }
@@ -121,7 +128,7 @@ test('the Forms page renders for an authenticated user', function () {
     $this->get(FormsPage::getUrl())->assertOk();
 });
 
-test('the rail exposes all eight forms with CRR, Marketing, Trade Check, Giveaway, Repair, and CRR Signage available', function () {
+test('the rail exposes all eight forms with only Training unavailable', function () {
     $user = formsPageUser();
     $this->actingAs($user);
     config(['sync.server_url' => 'http://portal.test']);
@@ -133,9 +140,10 @@ test('the rail exposes all eight forms with CRR, Marketing, Trade Check, Giveawa
         ->and(FormKey::TRADE_CHECK->available())->toBeTrue()
         ->and(FormKey::GIVEAWAY->available())->toBeTrue()
         ->and(FormKey::REPAIR->available())->toBeTrue()
-        ->and(FormKey::SIGNAGE->available())->toBeTrue();
+        ->and(FormKey::SIGNAGE->available())->toBeTrue()
+        ->and(FormKey::TRADE_REQUEST->available())->toBeTrue();
 
-    $available = [FormKey::CRR, FormKey::MARKETING, FormKey::TRADE_CHECK, FormKey::GIVEAWAY, FormKey::REPAIR, FormKey::SIGNAGE];
+    $available = [FormKey::CRR, FormKey::MARKETING, FormKey::TRADE_CHECK, FormKey::GIVEAWAY, FormKey::REPAIR, FormKey::SIGNAGE, FormKey::TRADE_REQUEST];
     $component = Livewire::test(FormsPage::class);
 
     foreach (FormKey::cases() as $form) {
@@ -154,10 +162,11 @@ test('the rail exposes all eight forms with CRR, Marketing, Trade Check, Giveawa
         ->assertSeeHtml("wire:click=\"selectForm('giveaway')\"")
         ->assertSeeHtml("wire:click=\"selectForm('repair')\"")
         ->assertSeeHtml("wire:click=\"selectForm('crr-signage')\"")
+        ->assertSeeHtml("wire:click=\"selectForm('trade-request')\"")
         ->assertSet('selectedForm', 'crr');
 
-    // The remaining two forms render as unavailable.
-    expect(substr_count($component->html(), 'Coming soon'))->toBe(2);
+    // Only Training remains unavailable.
+    expect(substr_count($component->html(), 'Coming soon'))->toBe(1);
 
     // Selecting another available form switches the pane.
     $component->call('selectForm', 'marketing')->assertSet('selectedForm', 'marketing');
@@ -165,9 +174,10 @@ test('the rail exposes all eight forms with CRR, Marketing, Trade Check, Giveawa
     $component->call('selectForm', 'giveaway')->assertSet('selectedForm', 'giveaway');
     $component->call('selectForm', 'repair')->assertSet('selectedForm', 'repair');
     $component->call('selectForm', 'crr-signage')->assertSet('selectedForm', 'crr-signage');
+    $component->call('selectForm', 'trade-request')->assertSet('selectedForm', 'trade-request');
 
     // Selecting an unavailable form is ignored.
-    $component->call('selectForm', 'trade-request')->assertSet('selectedForm', 'crr-signage');
+    $component->call('selectForm', 'training')->assertSet('selectedForm', 'trade-request');
     $component->call('selectForm', 'crr')->assertSet('selectedForm', 'crr');
 });
 
@@ -451,6 +461,63 @@ test('selecting CRR Signage loads locally created submissions into the list and 
         ->assertRedirect(SignageFormPage::getUrl(['submission' => $signage->id]));
 });
 
+function formsPageTradeRequestStagedId(User $user): int
+{
+    $png = base64_decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+    );
+
+    return app(StagedAttachmentService::class)
+        ->stageFromDataUri($user, 'data:image/png;base64,'.base64_encode($png), 'request.png')
+        ->id;
+}
+
+test('selecting Trade Request loads locally created submissions into the list and detail', function () {
+    $user = formsPageUser();
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+    formsPageFakePortal();
+
+    $service = app(TradeRequestService::class);
+    $service->programs();
+
+    $product = TradeProduct::query()->firstOrFail();
+    $type = TradeType::query()->firstOrFail();
+
+    $tradeRequest = $service->create($user, [
+        'salescall_uuid' => null,
+        'product_id' => $product->id,
+        'items' => [
+            ['trade_type_id' => $type->id, 'quantity' => 3, 'size' => 3, 'description' => 'Blue'],
+        ],
+        'staged_attachments' => [
+            ['type' => 1, 'staged_id' => formsPageTradeRequestStagedId($user)],
+        ],
+    ]);
+
+    $component = Livewire::test(FormsPage::class)
+        ->call('selectForm', 'trade-request')
+        ->assertSet('selectedForm', 'trade-request')
+        ->assertSee('Create Trade Request')
+        ->assertSee('Your Trade Requests')
+        ->assertSee('Jacket')
+        ->assertSee('Pending Sync');
+
+    $rows = $component->get('rows');
+
+    expect(collect($rows)->contains(fn (array $row): bool => ($row['local_uuid'] ?? null) === $tradeRequest->local_uuid))->toBeTrue();
+
+    $key = 'local:'.$tradeRequest->local_uuid;
+    $component->call('selectRow', $key)
+        ->assertSet('selectedRowKey', $key)
+        ->assertSee('Trade Request Details')
+        ->assertSee('Apparel')
+        ->assertSee('Edit Trade Request');
+
+    $component->call('editSelectedRow')
+        ->assertRedirect(TradeRequestFormPage::getUrl(['submission' => $tradeRequest->id]));
+});
+
 test('editing a non-editable CRR is refused', function () {
     $user = formsPageUser();
     $this->actingAs($user);
@@ -567,8 +634,13 @@ test('opening the Forms page with a form parameter selects that form', function 
         ->assertSet('selectedForm', 'crr-signage')
         ->assertSee('Your CRR Signages');
 
-    // Unavailable or unknown forms fall back to the default.
     Livewire::withQueryParams(['form' => 'trade-request'])
+        ->test(FormsPage::class)
+        ->assertSet('selectedForm', 'trade-request')
+        ->assertSee('Your Trade Requests');
+
+    // Unavailable or unknown forms fall back to the default.
+    Livewire::withQueryParams(['form' => 'training'])
         ->test(FormsPage::class)
         ->assertSet('selectedForm', 'crr');
 
