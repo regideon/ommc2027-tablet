@@ -32,6 +32,7 @@ class CustomerEditPage extends CustomerCreatePage
             ?? $customer->province?->region_id
             ?? $customer->regionSpecific?->region_id;
         $this->initialRegionSpecificId = $customer->region_specific_id ? (int) $customer->region_specific_id : null;
+        $this->customer_region_type_id = self::customerRegionTypeIdForSpecificRegion($customer->region_specific_id);
         $this->trade = array_merge($this->trade, $state['trade'] ?? []);
         $this->active = $state['active'] ?? [];
         $this->categories = $state['categories'] ?? [];

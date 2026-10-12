@@ -43,6 +43,10 @@ class LocationAreaClusterMappingResolver
                 return ['decision' => 'invalid', 'area_cluster_id' => null, 'region_specific_id' => null, 'source_level' => $level];
             }
 
+            if (in_array((int) $specificRegion->id, (array) config('customer_region_grouping.legacy_specific_region_ids', []), true)) {
+                return ['decision' => 'invalid', 'area_cluster_id' => null, 'region_specific_id' => null, 'source_level' => $level];
+            }
+
             return ['decision' => 'mapped', 'area_cluster_id' => (int) $cluster->id, 'region_specific_id' => (int) $specificRegion->id, 'source_level' => $level];
         }
 

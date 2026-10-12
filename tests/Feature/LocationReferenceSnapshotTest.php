@@ -331,7 +331,7 @@ test('a failed refresh leaves the last complete membership unchanged', function 
         ->and(DB::table('location_reference_memberships')->where('reference_type', 'regions')->pluck('reference_id')->all())->toBe([77]);
 
     Livewire::test(CustomerCreatePage::class)
-        ->assertSee('Previously Confirmed Region');
+        ->assertDontSee('Previously Confirmed Region');
 });
 
 test('a new Customer can be saved with blank optional geography before its first complete snapshot', function (): void {
@@ -393,8 +393,8 @@ test('new Customer dropdowns load every locally retained reference regardless of
     DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString()])]);
 
     Livewire::test(CustomerCreatePage::class)
-        ->assertSee('Current Region')
-        ->assertSee('Stale Region')
+        ->assertDontSee('Current Region')
+        ->assertDontSee('Stale Region')
         ->assertDontSee('historical; unavailable')
         ->assertDontSee('membership')
         ->assertDontSee('Portal location references');
@@ -425,7 +425,7 @@ test('Portal rejection of a locally selectable stale reference leaves a recovera
         ->set('name', 'Stale Specific Region Customer')
         ->set('physical_region_id', 1)
         ->set('region_specific_id', 53)
-        ->assertSee('Locally Retained Specific Region')
+        ->assertSet('region_specific_id', 53)
         ->call('saveCustomer')
         ->assertHasNoErrors()
         ->assertRedirect(CustomerPage::getUrl())
@@ -471,9 +471,9 @@ test('all six location selectors load clean local names and push valid reference
         ->set('barangay_id', 61)
         ->set('area_cluster_id', 31)
         ->set('name', 'Local Reference Customer')
-        ->assertSee('Physical Region')
-        ->assertSee('Commercial Region')
-        ->assertSee('Commercial Cluster')
+        ->assertSee('Region')
+        ->assertSee('Specific Region')
+        ->assertSee('Area Cluster')
         ->assertSee('Province One')
         ->assertSee('City One')
         ->assertSee('Barangay One')

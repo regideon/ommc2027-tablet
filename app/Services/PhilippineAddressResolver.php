@@ -14,7 +14,7 @@ use Throwable;
 class PhilippineAddressResolver
 {
     /**
-     * @return array{ok: bool, reason: ?string, region_id: ?int, province_id: ?int, municipality_id: ?int, barangay_id: ?int, region_specific_id: ?int, area_cluster_id: ?int, address: ?string}
+     * @return array{ok: bool, reason: ?string, region_id: ?int, province_id: ?int, municipality_id: ?int, barangay_id: ?int, region_specific_id: ?int, area_cluster_id: ?int, address: ?string, address_is_partial: bool}
      */
     public function resolve(float $latitude, float $longitude): array
     {
@@ -74,8 +74,25 @@ class PhilippineAddressResolver
         $regionSpecificId = $locationMapping['decision'] === 'mapped' ? $locationMapping['region_specific_id'] : null;
         $areaClusterId = $locationMapping['decision'] === 'mapped' ? $locationMapping['area_cluster_id'] : null;
 
-        $street = trim(((string) ($components['house_number'] ?? '')).' '.((string) ($components['road'] ?? '')));
-        $address = $street !== '' ? $street : $display;
+        $street = trim(implode(' ', array_filter([
+            trim((string) ($components['house_number'] ?? '')),
+            trim((string) ($components['road'] ?? '')),
+        ], fn (string $component): bool => $component !== '')));
+        $componentAddress = implode(', ', array_values(array_unique(array_filter([
+            $street,
+            $components['suburb'] ?? null,
+            $components['city_district'] ?? null,
+            $components['city'] ?? null,
+            $components['municipality'] ?? null,
+            $components['town'] ?? null,
+            $components['county'] ?? null,
+            $components['state_district'] ?? null,
+            $components['state'] ?? null,
+            $components['postcode'] ?? null,
+            $components['country'] ?? null,
+        ], fn (mixed $component): bool => is_string($component) && trim($component) !== ''))));
+        $address = $display !== '' ? $display : $componentAddress;
+        $addressIsPartial = $display === '' || mb_strlen($display) > 500;
 
         return [
             'ok' => true,
@@ -87,6 +104,7 @@ class PhilippineAddressResolver
             'region_specific_id' => $regionSpecificId,
             'area_cluster_id' => $areaClusterId,
             'address' => $address !== '' ? Str::limit($address, 500, '') : null,
+            'address_is_partial' => $addressIsPartial,
         ];
     }
 
@@ -98,7 +116,7 @@ class PhilippineAddressResolver
         return [
             'ok' => false, 'reason' => $reason, 'region_id' => null, 'province_id' => null,
             'municipality_id' => null, 'barangay_id' => null, 'region_specific_id' => null,
-            'area_cluster_id' => null, 'address' => null,
+            'area_cluster_id' => null, 'address' => null, 'address_is_partial' => true,
         ];
     }
 

@@ -27,6 +27,10 @@ function seedCustomerCreateFixtures(): User
     DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 2])]);
     DB::table('general_categories')->insert(['id' => 1, 'name' => 'Mixed Outlet', 'priority_visit' => null, 'duration_per_visit' => null, 'sort' => 1, 'created_at' => $now, 'updated_at' => $now]);
 
+    foreach (['Metro Manila', 'North Luzon', 'South Luzon', 'Visayas', 'Mindanao'] as $index => $name) {
+        DB::table('region_types')->insert(['id' => $index + 1, 'name' => $name, 'sort' => $index + 1, 'is_image_required' => false, 'created_at' => $now, 'updated_at' => $now]);
+    }
+
     return User::factory()->create();
 }
 
@@ -208,7 +212,8 @@ test('customer add page renders against the complete migrated sqlite schema', fu
         ->assertSee('x-on:change="$wire.$set(\'trade.entry_detail\', $event.target.value, true)"', false)
         ->assertSee('wire:model.live="company_id"', false)
         ->assertSee('wire:model.live="physical_region_id"', false)
-        ->assertSee('wire:model.live="region_specific_id"', false)
+        ->assertSee('wire:model.live="customer_region_type_id"', false)
+        ->assertDontSee('wire:model.live="region_specific_id"', false)
         ->assertSee('wire:model.live="province_id"', false)
         ->assertSee('wire:model.live="municipality_id"', false)
         ->assertDontSee('wire:model.live="trade.entry_detail"', false)
@@ -366,7 +371,7 @@ test('customer add page saves the complete aggregate locally when its immediate 
         ->assertSee('wire:model.live="company_id"', false)
         ->assertSee('wire:model.live="physical_region_id"', false)
         ->assertSee('OMMC')
-        ->assertSee('NCR')
+        ->assertSee('Legacy / unresolved Specific Region ID 1')
         ->assertSee('Quezon City');
 
     expect($edit->get('company_id'))->toBe(1)
@@ -444,13 +449,156 @@ test('Edit displays unavailable saved Company and Specific Region references wit
         ->assertSet('region_specific_id', 1)
         ->assertSet('access_user_ids', [$manualUser->id])
         ->assertSee('Unavailable saved Company reference (ID 1)')
-        ->assertSee('Unavailable saved Specific Region reference (ID 1)')
+        ->assertSee('Legacy / unresolved Specific Region ID 1')
         ->assertSee('The saved Company reference is unavailable offline. Its stored value is being preserved.')
-        ->assertSee('The saved Specific Region reference is unavailable offline. Its stored value is being preserved.');
+        ->assertSee('Legacy / unresolved Specific Region ID 1 is preserved on this Customer.');
 
     expect(DB::table('customers')->where('id', $customerId)->value('company_id'))->toBe(1)
         ->and(DB::table('customers')->where('id', $customerId)->value('region_specific_id'))->toBe(1)
         ->and(DB::table('customer_user')->where('customer_id', $customerId)->pluck('user_id')->all())->toBe([$manualUser->id]);
+});
+
+test('Customer Region lists only the five geographic types and filters offline Specific Regions by the approved crosswalk', function () {
+    seedCustomerCreateFixtures();
+    $now = now();
+
+    foreach (['Metro Manila', 'North Luzon', 'South Luzon', 'Visayas', 'Mindanao', 'MCB Team', 'Fleet Team', 'IB Team', 'OE Team', 'MC Parts'] as $index => $name) {
+        if (! DB::table('region_types')->where('id', $index + 1)->exists()) {
+            DB::table('region_types')->insert([
+                'id' => $index + 1,
+                'name' => $name,
+                'sort' => $index + 1,
+                'is_image_required' => false,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+    }
+
+    foreach (range(2, 19) as $regionId) {
+        DB::table('regions')->insert([
+            'id' => $regionId,
+            'code' => "R{$regionId}",
+            'psgc_code' => str_pad((string) $regionId, 10, '0', STR_PAD_LEFT),
+            'name' => $regionId === 6 ? 'Region III (Central Luzon)' : "Physical Region {$regionId}",
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+    }
+
+    $parents = [52 => 7, 53 => 7, 54 => 6, 55 => 16, 56 => 15, 57 => 14, 58 => 17, 59 => 18, 60 => 19, 61 => 5, 62 => 3, 63 => 4, 64 => 9, 65 => 8, 66 => 12, 67 => 13, 68 => 10];
+    foreach ($parents as $specificId => $parentId) {
+        DB::table('region_specifics')->insert([
+            'id' => $specificId,
+            'region_id' => $parentId,
+            'name' => $specificId === 54 ? 'Region III (Central Luzon)' : "Specific Region {$specificId}",
+            'sort' => $specificId,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+    }
+    DB::table('area_clusters')->insert([
+        ['id' => 201, 'region_specific_id' => 54, 'code' => 'NL-1', 'name' => 'NL Area 1', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now],
+        ['id' => 202, 'region_specific_id' => 52, 'code' => 'GMA-1', 'name' => 'GMA Area 1', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now],
+    ]);
+
+    $component = Livewire::test(CustomerCreatePage::class);
+    foreach (['Metro Manila', 'North Luzon', 'South Luzon', 'Visayas', 'Mindanao'] as $name) {
+        $component->assertSee($name);
+    }
+    foreach (['MCB Team', 'Fleet Team', 'IB Team', 'OE Team', 'MC Parts'] as $name) {
+        $component->assertDontSee($name);
+    }
+
+    foreach ([
+        1 => ['Physical Region 7'],
+        2 => ['Region III (Central Luzon)', 'Physical Region 3', 'Physical Region 4', 'Physical Region 5'],
+        3 => ['Physical Region 7', 'Physical Region 8', 'Physical Region 9'],
+        4 => ['Physical Region 10', 'Physical Region 12', 'Physical Region 13'],
+        5 => ['Physical Region 14', 'Physical Region 15', 'Physical Region 16', 'Physical Region 17', 'Physical Region 18', 'Physical Region 19'],
+    ] as $typeId => $expectedRegions) {
+        $component->set('customer_region_type_id', $typeId);
+        foreach ($expectedRegions as $expectedRegion) {
+            $component->assertSee($expectedRegion);
+        }
+        $component->assertDontSee('Physical Region 2');
+    }
+
+    $component->set('customer_region_type_id', 2)
+        ->assertSee('Region III (Central Luzon)')
+        ->assertDontSee('wire:model.live="region_specific_id"', false)
+        ->set('physical_region_id', 6)
+        ->assertSet('region_specific_id', 54)
+        ->assertSee('NL Area 1');
+});
+
+test('Tablet map resolves a selected pin once when the Human confirms it', function (): void {
+    $contents = (string) file_get_contents(resource_path('views/filament/pages/customer-create-page.blade.php'));
+    $coordinateSetter = substr($contents, strpos($contents, 'setCoordinates(latitude, longitude)'), 600);
+
+    expect($coordinateSetter)->not->toContain('$wire.resolveLocation')
+        ->and($contents)->toContain('async confirmLocation()')
+        ->and($contents)->toContain('await this.$wire.resolveLocation(coordinates[0], coordinates[1])');
+});
+
+test('Tablet map applies provider display addresses, preserves geography, replaces repeats, and reports partial responses', function (): void {
+    seedCustomerCreateFixtures();
+    Http::fakeSequence('nominatim.openstreetmap.org/*')
+        ->push(['display_name' => 'Maria Drive, Barandal, City of Calamba, Laguna, CALABARZON, Philippines', 'address' => ['road' => 'Maria Drive', 'suburb' => 'Barandal', 'city' => 'City of Calamba', 'county' => 'Laguna', 'state' => 'CALABARZON']], 200)
+        ->push(['display_name' => '2 New Street, City of Calamba, Laguna, Philippines', 'address' => ['house_number' => '2', 'road' => 'New Street', 'city' => 'City of Calamba', 'county' => 'Laguna', 'state' => 'CALABARZON']], 200)
+        ->push(['address' => ['road' => 'Partial Lane']], 200)
+        ->push(['address' => []], 200);
+
+    $page = Livewire::test(CustomerCreatePage::class)
+        ->set('region_specific_id', 1)
+        ->set('physical_region_id', 1)
+        ->set('province_id', 1)
+        ->set('municipality_id', 1)
+        ->set('address', 'Old address')
+        ->call('resolveLocation', 14.2, 121.2)
+        ->assertSet('address', 'Maria Drive, Barandal, City of Calamba, Laguna, CALABARZON, Philippines')
+        ->assertSet('region_specific_id', 1)
+        ->assertSet('province_id', 1)
+        ->assertSet('municipality_id', 1)
+        ->assertSet('locationError', null)
+        ->call('resolveLocation', 14.3, 121.3)
+        ->assertSet('address', '2 New Street, City of Calamba, Laguna, Philippines')
+        ->assertSet('province_id', 1)
+        ->assertSet('municipality_id', 1)
+        ->call('resolveLocation', 14.4, 121.4)
+        ->assertSet('address', 'Partial Lane')
+        ->assertSet('locationError', 'The provider display address was unavailable or exceeded the 500-character field limit; only available details were filled.')
+        ->call('resolveLocation', 14.5, 121.5)
+        ->assertSet('address', 'Partial Lane')
+        ->assertSet('locationError', 'The provider display address was unavailable or exceeded the 500-character field limit; only available details were filled.');
+
+    $page->set('address', 'Manually edited address')
+        ->assertSet('address', 'Manually edited address');
+});
+
+test('legacy Specific Region 1 is labeled unresolved and remains saved after Edit', function () {
+    $user = seedCustomerCreateFixtures();
+    $user->forceFill(['api_token' => 'tablet-token'])->save();
+    $this->actingAs($user);
+    Http::fake(['*api/sync/push/customer' => Http::response(['message' => 'Offline'], 503)]);
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'Legacy NCR Customer',
+        'company_id' => 1,
+        'region_specific_id' => 1,
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    $edit = Livewire::test(CustomerEditPage::class, ['customerId' => $customerId])
+        ->assertSet('region_specific_id', 1)
+        ->assertSet('customer_region_type_id', null)
+        ->assertSee('Legacy / unresolved Specific Region ID 1 is preserved on this Customer.');
+
+    $edit->call('saveCustomer')->assertRedirect(CustomerPage::getUrl());
+
+    expect(DB::table('customers')->where('id', $customerId)->value('region_specific_id'))->toBe(1);
 });
 
 test('customer add page preserves the default current user when adding another access user', function () {
@@ -510,8 +658,8 @@ test('customer add location dependencies keep physical and commercial hierarchie
         ->assertSet('province_id', null)
         ->assertSet('municipality_id', null)
         ->assertSet('barangay_id', null)
-        ->assertSet('region_specific_id', null)
-        ->assertSet('area_cluster_id', null)
+        ->assertSet('region_specific_id', 1)
+        ->assertSet('area_cluster_id', 1)
         ->set('physical_region_id', 1)
         ->set('province_id', 1)
         ->set('municipality_id', 1)
@@ -522,12 +670,12 @@ test('customer add location dependencies keep physical and commercial hierarchie
         ->assertSet('area_cluster_id', 2);
 
     expect($component->html())
-        ->toContain('Commercial Region 2')
+        ->not->toContain('Commercial Region 2')
         ->toContain('Cluster 2')
         ->toContain('Metro Manila');
 });
 
-test('physical Region filters Specific Regions and selecting one auto-selects its only enabled Area Cluster and mapped Access', function () {
+test('unselected Customer Region does not offer legacy Specific Region 1', function () {
     $user = seedCustomerCreateFixtures();
     $mappedUser = User::factory()->create(['email' => 'mapped.gma@example.test']);
     DB::table('regions')->insert(['id' => 2, 'code' => 'R2', 'psgc_code' => '020000000', 'name' => 'Region 2', 'created_at' => now(), 'updated_at' => now()]);
@@ -538,7 +686,7 @@ test('physical Region filters Specific Regions and selecting one auto-selects it
 
     $component = Livewire::test(CustomerCreatePage::class)
         ->set('physical_region_id', 1)
-        ->assertSee('NCR')
+        ->assertDontSee('NCR')
         ->assertDontSee('Specific Region 2')
         ->set('region_specific_id', 1)
         ->assertSet('area_cluster_id', 1)
@@ -990,7 +1138,7 @@ test('an exhausted failed Customer can be corrected in the existing edit page wi
 
     Livewire::test(CustomerEditPage::class, ['customerId' => -44])
         ->assertSet('region_specific_id', 1)
-        ->assertSee('NCR')
+        ->assertSee('Legacy / unresolved Specific Region ID 1')
         ->assertDontSee('historical; unavailable')
         ->set('region_specific_id', 2)
         ->set('area_cluster_id', null)

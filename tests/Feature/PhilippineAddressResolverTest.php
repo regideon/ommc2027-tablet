@@ -44,9 +44,10 @@ test('resolver maps reverse geocode components to reference ids', function () {
         ->and($result['province_id'])->toBe(1)
         ->and($result['municipality_id'])->toBe(1)
         ->and($result['barangay_id'])->toBe(1)
-        ->and($result['region_specific_id'])->toBe(1)
-        ->and($result['area_cluster_id'])->toBe(1)
-        ->and($result['address'])->toBe('123 Roxas Street');
+        ->and($result['region_specific_id'])->toBeNull()
+        ->and($result['area_cluster_id'])->toBeNull()
+        ->and($result['address'])->toBe('123 Roxas St, Pulung Maragul, Angeles, Pampanga, Central Luzon')
+        ->and($result['address_is_partial'])->toBeFalse();
 });
 
 test('resolver fails closed when the geocoder is unreachable', function () {
@@ -125,7 +126,7 @@ test('resolver leaves area cluster null when the specific region has no enabled 
 
     $result = app(PhilippineAddressResolver::class)->resolve(15.1456, 120.5887);
 
-    expect($result['region_specific_id'])->toBe(1)
+    expect($result['region_specific_id'])->toBeNull()
         ->and($result['area_cluster_id'])->toBeNull();
 });
 
@@ -142,7 +143,7 @@ test('resolver leaves area cluster null when the specific region has multiple cl
 
     $result = app(PhilippineAddressResolver::class)->resolve(15.1456, 120.5887);
 
-    expect($result['region_specific_id'])->toBe(1)
+    expect($result['region_specific_id'])->toBeNull()
         ->and($result['area_cluster_id'])->toBeNull();
 });
 
@@ -208,6 +209,6 @@ test('resolver falls back to the region only specific region when the name and p
 
     expect($result['region_id'])->toBe(1)
         ->and($result['province_id'])->toBe(1)
-        ->and($result['region_specific_id'])->toBe(1)
-        ->and($result['area_cluster_id'])->toBe(1);
+        ->and($result['region_specific_id'])->toBeNull()
+        ->and($result['area_cluster_id'])->toBeNull();
 });

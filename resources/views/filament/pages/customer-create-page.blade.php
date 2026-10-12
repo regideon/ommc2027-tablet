@@ -40,8 +40,8 @@
         <div class="bg-white rounded-2xl shadow-sm p-5 space-y-4">
             <h2 class="font-extrabold">Location</h2>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div><label class="fi-fo-field-wrp-label">Region</label><select wire:model.live="physical_region_id" class="fi-input w-full"><option value="">Select region</option>@foreach($regions as $region)<option value="{{ $region->id }}">{{ $region->name }}</option>@endforeach</select></div>
-                <div><label class="fi-fo-field-wrp-label">Specific Region</label><select wire:model.live="region_specific_id" class="fi-input w-full"><option value="">Select specific region</option>@foreach($regionSpecifics as $region)<option value="{{ $region->id }}">{{ $region->name }}</option>@endforeach @if($regionSpecificReferenceUnavailable)<option value="{{ $region_specific_id }}">Unavailable saved Specific Region reference (ID {{ $region_specific_id }})</option>@endif</select>@if($regionSpecificReferenceUnavailable)<p class="mt-1 text-sm text-warning-700" role="status">The saved Specific Region reference is unavailable offline. Its stored value is being preserved.</p>@endif</div>
+                <div><label class="fi-fo-field-wrp-label">Region</label><select wire:model.live="customer_region_type_id" class="fi-input w-full"><option value="">Select region</option>@foreach($customerRegionTypes as $regionType)<option value="{{ $regionType->id }}">{{ $regionType->name }}</option>@endforeach</select></div>
+                <div><label class="fi-fo-field-wrp-label">Specific Region</label><select wire:model.live="physical_region_id" class="fi-input w-full"><option value="">Select specific region</option>@foreach($regions as $region)<option value="{{ $region->id }}">{{ $region->name }}</option>@endforeach</select>@if($legacySpecificRegionUnresolved)<p class="mt-1 text-sm text-warning-700" role="status">Legacy / unresolved Specific Region ID 1 is preserved on this Customer.</p>@elseif($regionSpecificReferenceUnavailable)<p class="mt-1 text-sm text-warning-700" role="status">The saved Specific Region reference is unavailable offline. Its stored value is being preserved.</p>@endif</div>
                 <div><label class="fi-fo-field-wrp-label">Area Cluster</label><select wire:model="area_cluster_id" class="fi-input w-full"><option value="">Select area cluster</option>@foreach($areaClusters as $cluster)<option value="{{ $cluster->id }}">{{ $cluster->name }}</option>@endforeach</select></div>
                 <div><label class="fi-fo-field-wrp-label">Province</label><select wire:model.live="province_id" class="fi-input w-full"><option value="">No province / independent locality</option>@foreach($provinces->where('region_id', $physical_region_id) as $province)<option value="{{ $province->id }}">{{ $province->name }}</option>@endforeach</select></div>
                 <div><label class="fi-fo-field-wrp-label">City / Municipality</label><select wire:model.live="municipality_id" class="fi-input w-full"><option value="">Select municipality</option>@foreach($municipalities->where('region_id', $physical_region_id)->where('province_id', $province_id) as $municipality)<option value="{{ $municipality->id }}">{{ $municipality->name }}</option>@endforeach</select></div>
@@ -263,10 +263,6 @@
                 setCoordinates(latitude, longitude) {
                     this.setInput(this.latitudeInput(), Number(latitude).toFixed(7));
                     this.setInput(this.longitudeInput(), Number(longitude).toFixed(7));
-
-                    if (this.$wire?.resolveLocation) {
-                        this.$wire.resolveLocation(Number(latitude), Number(longitude));
-                    }
                 },
 
                 setInput(input, value) {
@@ -323,11 +319,11 @@
                         });
                 },
 
-                confirmLocation() {
+                async confirmLocation() {
                     const coordinates = this.currentCoordinates();
 
                     if (coordinates && this.$wire?.resolveLocation) {
-                        this.$wire.resolveLocation(coordinates[0], coordinates[1]);
+                        await this.$wire.resolveLocation(coordinates[0], coordinates[1]);
                     }
 
                     this.closePicker();
