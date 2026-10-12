@@ -2,17 +2,20 @@
 
 namespace App\Filament\Pages;
 
+use App\Contracts\FormSubmissionService;
 use App\Enums\FormKey;
 use App\Models\Forms\CRR\Crr;
-use App\Models\Forms\CRR\CrrProgram;
+use App\Models\Forms\Marketing\Marketing;
 use App\Models\User;
-use App\Services\Forms\CrrReadService;
-use App\Services\Forms\LocalCrrCreationService;
+use App\Services\Forms\CrrService;
+use App\Services\Forms\MarketingService;
 use App\Services\SyncService;
 use BackedEnum;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Validation\ValidationException;
+use RuntimeException;
 use Throwable;
 
 class FormsPage extends Page
@@ -30,14 +33,11 @@ class FormsPage extends Page
     public string $selectedForm = 'crr';
 
     /** @var array<int, array<string, mixed>> */
-    public array $crrRows = [];
+    public array $rows = [];
 
-    /** @var array<int, array{id: int, name: string}> */
-    public array $crrPrograms = [];
+    public string $formLoadError = '';
 
-    public string $crrLoadError = '';
-
-    public ?string $selectedCrrKey = null;
+    public ?string $selectedRowKey = null;
 
     public string $actionError = '';
 
@@ -50,31 +50,27 @@ class FormsPage extends Page
         return auth()->check();
     }
 
-    public function mount(CrrReadService $service): void
+    public function mount(): void
     {
-        $this->loadCrrs($service);
+        $this->loadRows();
     }
 
-    public function loadCrrs(CrrReadService $service): void
+    public function loadRows(): void
     {
-        try {
-            $this->crrPrograms = $service->crrPrograms()
-                ->map(fn (CrrProgram $program): array => [
-                    'id' => $program->id,
-                    'name' => $program->name,
-                ])
-                ->values()
-                ->all();
+        $this->formLoadError = '';
+        $this->actionError = '';
 
-            $this->crrRows = $service->crrForCurrentUser()->all();
-            $this->crrLoadError = $service->globalReadFailed()
-                ? 'Some CRR submissions could not be loaded. Refresh to try again.'
+        try {
+            $service = $this->formService();
+            $service->programs();
+            $this->rows = $service->submissions()->all();
+            $this->formLoadError = $service->globalReadFailed()
+                ? 'Some submissions could not be loaded. Refresh to try again.'
                 : '';
         } catch (Throwable $exception) {
             report($exception);
-            $this->crrPrograms = [];
-            $this->crrRows = [];
-            $this->crrLoadError = 'CRRs could not be loaded. Refresh to try again.';
+            $this->rows = [];
+            $this->formLoadError = 'Submissions could not be loaded. Refresh to try again.';
         }
     }
 
@@ -82,41 +78,56 @@ class FormsPage extends Page
     {
         $form = FormKey::tryFrom($key);
 
-        if (! $form || ! $form->available()) {
-            return;
-        }
-
-        if ($this->selectedForm === $form->value) {
+        if (! $form || ! $form->available() || $this->selectedForm === $form->value) {
             return;
         }
 
         $this->selectedForm = $form->value;
-        $this->clearCrrSelection();
+        $this->clearRowSelection();
+        $this->loadRows();
     }
 
-    public function selectCrr(?string $key): void
+    public function selectRow(?string $key): void
     {
         if ($key === null || $key === '') {
-            $this->clearCrrSelection();
+            $this->clearRowSelection();
 
             return;
         }
 
-        if (! collect($this->crrRows)->contains(fn (array $row): bool => $this->rowKey($row) === $key)) {
+        if (! collect($this->rows)->contains(fn (array $row): bool => $this->rowKey($row) === $key)) {
             return;
         }
 
-        $this->selectedCrrKey = $key;
+        $this->selectedRowKey = $key;
         $this->actionError = '';
     }
 
-    public function clearCrrSelection(): void
+    public function clearRowSelection(): void
     {
-        $this->selectedCrrKey = null;
+        $this->selectedRowKey = null;
         $this->actionError = '';
     }
 
-    public function syncNow(SyncService $sync, CrrReadService $read): void
+    /**
+     * @return array<string, mixed>|null
+     */
+    public function selectedRow(): ?array
+    {
+        if ($this->selectedRowKey === null) {
+            return null;
+        }
+
+        foreach ($this->rows as $row) {
+            if ($this->rowKey($row) === $this->selectedRowKey) {
+                return $row;
+            }
+        }
+
+        return null;
+    }
+
+    public function syncNow(SyncService $sync): void
     {
         if ($this->syncing) {
             return;
@@ -128,7 +139,7 @@ class FormsPage extends Page
 
         try {
             if (! $sync->isReachable()) {
-                $this->syncMessage = 'You are offline. Pending CRRs will sync when reconnected.';
+                $this->syncMessage = 'You are offline. Pending submissions will sync when reconnected.';
             } else {
                 $this->syncMessage = $sync->push()->message;
             }
@@ -137,31 +148,13 @@ class FormsPage extends Page
             $this->syncMessage = 'Sync could not be completed. Try again later.';
         } finally {
             $this->syncing = false;
-            $this->loadCrrs($read);
+            $this->loadRows();
         }
     }
 
-    /**
-     * @return array<string, mixed>|null
-     */
-    public function selectedCrr(): ?array
+    public function editSelectedRow(): void
     {
-        if ($this->selectedCrrKey === null) {
-            return null;
-        }
-
-        foreach ($this->crrRows as $row) {
-            if ($this->rowKey($row) === $this->selectedCrrKey) {
-                return $row;
-            }
-        }
-
-        return null;
-    }
-
-    public function editSelectedCrr(LocalCrrCreationService $service): void
-    {
-        $row = $this->selectedCrr();
+        $row = $this->selectedRow();
 
         if (! $row || ! ($row['is_editable'] ?? false)) {
             return;
@@ -174,35 +167,62 @@ class FormsPage extends Page
         }
 
         try {
-            $crr = $this->resolveLocalCrr($service, $row, $user);
+            $submission = $this->resolveLocalSubmission($row, $user);
         } catch (ValidationException $exception) {
             $this->actionError = (string) (collect($exception->errors())->flatten()->first()
-                ?? 'This CRR could not be opened for editing.');
+                ?? 'This submission could not be opened for editing.');
 
             return;
         }
 
-        $this->redirect(CrrFormPage::getUrl(['crr' => $crr->id]));
+        $this->redirect(match ($this->selectedForm) {
+            FormKey::CRR->value => CrrFormPage::getUrl(['crr' => $submission->getKey()]),
+            FormKey::MARKETING->value => MarketingFormPage::getUrl(['marketing' => $submission->getKey()]),
+            default => FormsPage::getUrl(),
+        });
     }
 
     /**
      * @param  array<string, mixed>  $row
      */
-    private function resolveLocalCrr(LocalCrrCreationService $service, array $row, User $user): Crr
+    private function resolveLocalSubmission(array $row, User $user): Model
     {
+        $modelClass = $this->modelClass();
+
         if (! empty($row['id'])) {
-            return Crr::query()->findOrFail($row['id']);
+            return $modelClass::query()->findOrFail($row['id']);
         }
 
         if (! empty($row['server_id'])) {
-            $existing = Crr::query()->where('server_id', $row['server_id'])->first();
+            $existing = $modelClass::query()->where('server_id', $row['server_id'])->first();
 
             if ($existing) {
                 return $existing;
             }
         }
 
-        return $service->adopt($user, $row);
+        return $this->formService()->adopt($user, $row);
+    }
+
+    private function formService(): FormSubmissionService
+    {
+        return match ($this->selectedForm) {
+            FormKey::CRR->value => app(CrrService::class),
+            FormKey::MARKETING->value => app(MarketingService::class),
+            default => throw new RuntimeException('This form is not available yet.'),
+        };
+    }
+
+    /**
+     * @return class-string<Model>
+     */
+    private function modelClass(): string
+    {
+        return match ($this->selectedForm) {
+            FormKey::CRR->value => Crr::class,
+            FormKey::MARKETING->value => Marketing::class,
+            default => throw new RuntimeException('This form is not available yet.'),
+        };
     }
 
     /**

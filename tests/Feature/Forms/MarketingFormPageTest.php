@@ -1,0 +1,217 @@
+<?php
+
+use App\Enums\Marketing\RealizationStage;
+use App\Filament\Pages\FormsPage;
+use App\Filament\Pages\MarketingFormPage;
+use App\Models\Forms\Marketing\Marketing;
+use App\Models\Forms\Marketing\MarketingMechanic;
+use App\Models\Forms\Marketing\MarketingProgram;
+use App\Models\Forms\Marketing\MarketingRealization;
+use App\Models\Forms\Marketing\MarketingVolume;
+use App\Models\RegionType;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
+use Livewire\Livewire;
+use Spatie\Permission\Models\Role;
+
+uses(RefreshDatabase::class);
+
+beforeEach(function () {
+    config(['sync.server_url' => 'http://portal.test']);
+    Http::fake(['*/api/sync/forms/marketing/programs' => Http::response(['marketing_programs' => []], 200)]);
+});
+
+function marketingFormPageUser(): User
+{
+    return User::factory()->create();
+}
+
+function marketingFormPageProgram(string $name = 'Price Support'): MarketingProgram
+{
+    return MarketingProgram::create(['name' => $name]);
+}
+
+function marketingFormPageRegion(string $name = 'Metro Manila'): RegionType
+{
+    return RegionType::create(['name' => $name]);
+}
+
+function marketingFormPageSubmission(User $user, MarketingProgram $program, RegionType $region): Marketing
+{
+    $marketing = Marketing::create([
+        'local_uuid' => (string) Str::uuid(),
+        'submitted_at' => now(),
+        'submitted_by' => $user->id,
+        'region_type_id' => $region->id,
+        'role_id' => Role::firstOrCreate(['name' => 'drm', 'guard_name' => 'web'])->id,
+        'program_id' => $program->id,
+        'duration_start_at' => '2026-11-01',
+        'duration_end_at' => '2027-01-31',
+        'objective' => 'Grow monthly case volume',
+        'name' => 'Branch Expansion Support',
+        'mechanics_description' => 'Volume rebate per incremental case.',
+        'sps_status' => 1,
+        'rac_status' => 1,
+        'rac_return_count' => 0,
+        'sync_status' => 'pending',
+        'sync_attempts' => 0,
+    ]);
+
+    MarketingVolume::create([
+        'marketing_id' => $marketing->id,
+        'before_program' => 1000,
+        'during_program' => 1500,
+        'volume' => 500,
+    ]);
+
+    MarketingRealization::create([
+        'marketing_id' => $marketing->id,
+        'stage' => RealizationStage::FIRST_STAGE,
+        'start_at' => '2026-11-01',
+        'end_at' => '2026-12-31',
+        'volume' => 5000,
+    ]);
+
+    MarketingMechanic::create([
+        'marketing_id' => $marketing->id,
+        'period' => '2026-11-15',
+        'unit_price' => 1500,
+        'sub_total' => 7500,
+    ]);
+
+    return $marketing;
+}
+
+test('the Marketing create page renders for an authenticated user', function () {
+    $user = marketingFormPageUser();
+    marketingFormPageProgram();
+    marketingFormPageRegion();
+    $this->actingAs($user);
+
+    Livewire::test(MarketingFormPage::class)
+        ->assertOk()
+        ->assertSet('isEdit', false)
+        ->assertSee('Add Marketing Recommendation')
+        ->assertSee('Price Support')
+        ->assertSee('Metro Manila')
+        ->assertSet('duration_start_at', now()->toDateString())
+        ->assertSet('duration_end_at', now()->addMonth()->toDateString())
+        ->assertCount('volumes', 1)
+        ->assertCount('realizations', 1)
+        ->assertCount('mechanics', 1);
+});
+
+test('saving a Marketing recommendation with valid data creates it locally and redirects', function () {
+    $user = marketingFormPageUser();
+    $program = marketingFormPageProgram();
+    $region = marketingFormPageRegion();
+    $this->actingAs($user);
+
+    Livewire::test(MarketingFormPage::class)
+        ->set('program_id', $program->id)
+        ->set('region_type_id', $region->id)
+        ->set('duration_start_at', '2026-11-01')
+        ->set('duration_end_at', '2027-01-31')
+        ->set('objective', 'Grow monthly case volume')
+        ->set('name', 'Branch Expansion Support')
+        ->set('mechanics_description', 'Volume rebate per incremental case.')
+        ->set('volumes', [['before_program' => '1000', 'during_program' => '1500', 'volume' => '500']])
+        ->set('realizations', [[
+            'stage' => RealizationStage::FIRST_STAGE->value,
+            'start_at' => '2026-11-01',
+            'end_at' => '2026-12-31',
+            'volume' => '5000',
+        ]])
+        ->set('mechanics', [['period' => '2026-11-15', 'unit_price' => '1500', 'sub_total' => '7500']])
+        ->call('save')
+        ->assertRedirect(FormsPage::getUrl());
+
+    $marketing = Marketing::query()->first();
+
+    expect($marketing)->not->toBeNull()
+        ->and($marketing->submitted_by)->toBe($user->id)
+        ->and($marketing->program_id)->toBe($program->id)
+        ->and($marketing->region_type_id)->toBe($region->id)
+        ->and($marketing->name)->toBe('Branch Expansion Support')
+        ->and($marketing->sync_status)->toBe('pending')
+        ->and($marketing->volumes)->toHaveCount(1)
+        ->and($marketing->realizations)->toHaveCount(1)
+        ->and($marketing->mechanics)->toHaveCount(1);
+});
+
+test('saving a Marketing recommendation without a name reports a form error and creates nothing', function () {
+    $user = marketingFormPageUser();
+    $program = marketingFormPageProgram();
+    $region = marketingFormPageRegion();
+    $this->actingAs($user);
+
+    $component = Livewire::test(MarketingFormPage::class)
+        ->set('program_id', $program->id)
+        ->set('region_type_id', $region->id)
+        ->set('duration_start_at', '2026-11-01')
+        ->set('duration_end_at', '2027-01-31')
+        ->set('objective', 'Grow monthly case volume')
+        ->set('mechanics_description', 'Volume rebate per incremental case.')
+        ->set('volumes', [['before_program' => '1000', 'during_program' => '1500', 'volume' => '500']])
+        ->set('realizations', [[
+            'stage' => RealizationStage::FIRST_STAGE->value,
+            'start_at' => '2026-11-01',
+            'end_at' => '2026-12-31',
+            'volume' => '5000',
+        ]])
+        ->set('mechanics', [['period' => '2026-11-15', 'unit_price' => '1500', 'sub_total' => '7500']])
+        ->call('save');
+
+    expect($component->get('formErrors'))
+        ->toHaveKey('name')
+        ->and(Marketing::query()->count())->toBe(0);
+
+    $component->assertNoRedirect();
+});
+
+test('the edit route loads a pending Marketing recommendation and saves an update', function () {
+    $user = marketingFormPageUser();
+    $program = marketingFormPageProgram();
+    $region = marketingFormPageRegion();
+
+    $marketing = marketingFormPageSubmission($user, $program, $region);
+
+    $this->actingAs($user);
+
+    Livewire::withQueryParams(['marketing' => $marketing->id])
+        ->test(MarketingFormPage::class)
+        ->assertSet('isEdit', true)
+        ->assertSet('program_id', $program->id)
+        ->assertSet('region_type_id', $region->id)
+        ->assertSet('name', 'Branch Expansion Support')
+        ->assertSet('duration_start_at', '2026-11-01')
+        ->assertSet('salescall_uuid', null)
+        ->assertCount('volumes', 1)
+        ->assertCount('realizations', 1)
+        ->assertCount('mechanics', 1)
+        ->assertSet('realizations.0.stage', RealizationStage::FIRST_STAGE->value)
+        ->set('name', 'Updated Marketing Name')
+        ->call('save')
+        ->assertRedirect(FormsPage::getUrl());
+
+    $marketing->refresh();
+
+    expect($marketing->name)->toBe('Updated Marketing Name')
+        ->and($marketing->sync_status)->toBe('pending')
+        ->and((float) $marketing->volumes()->value('volume'))->toBe(500.0);
+});
+
+test('the edit route aborts 403 for a non-pending Marketing recommendation', function () {
+    $user = marketingFormPageUser();
+    $program = marketingFormPageProgram();
+    $region = marketingFormPageRegion();
+
+    $marketing = marketingFormPageSubmission($user, $program, $region);
+    $marketing->update(['sps_status' => 2]);
+
+    $this->actingAs($user)
+        ->get(MarketingFormPage::getUrl(['marketing' => $marketing->id]))
+        ->assertForbidden();
+});

@@ -28,7 +28,7 @@ enum FormKey: string
             self::MARKETING->value => [
                 'title' => 'Marketing',
                 'icon' => 'heroicon-o-megaphone',
-                'available' => false,
+                'available' => true,
             ],
             self::TRADE_CHECK->value => [
                 'title' => 'Trade Check',

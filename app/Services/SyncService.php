@@ -12,6 +12,7 @@ use App\Models\Expense;
 use App\Models\ExpenseAttachment;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrAttachment;
+use App\Models\Forms\Marketing\Marketing;
 use App\Models\Itinerary;
 use App\Models\Salescall;
 use App\Models\SalescallBrand;
@@ -76,6 +77,7 @@ class SyncService
             || $pendingOrRetryable(ExpenseAttachment::query())->exists()
             || $pendingOrRetryable(Crr::query())->exists()
             || $pendingOrRetryable(CrrAttachment::query())->exists()
+            || $pendingOrRetryable(Marketing::query())->exists()
             || $pendingOrRetryable(CustomerNote::query())->exists();
     }
 
@@ -1719,6 +1721,34 @@ class SyncService
         return $this->readCrrsWithStatus()['crrs'];
     }
 
+    /** @return array{programs: array<int, array<string, mixed>>, failed: bool} */
+    public function readMarketingProgramsWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/sync/forms/marketing/programs', 'marketing_programs');
+
+        return ['programs' => $result['rows'], 'failed' => $result['failed']];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public function readMarketingPrograms(): array
+    {
+        return $this->readMarketingProgramsWithStatus()['programs'];
+    }
+
+    /** @return array{marketings: array<int, array<string, mixed>>, failed: bool} */
+    public function readMarketingsWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/sync/forms/marketing/pull', 'marketings');
+
+        return ['marketings' => $result['rows'], 'failed' => $result['failed']];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public function readMarketings(): array
+    {
+        return $this->readMarketingsWithStatus()['marketings'];
+    }
+
     /** @return array{rows: array<int, array<string, mixed>>, failed: bool} */
     private function requestFormRows(string $path, string $key): array
     {
@@ -2062,6 +2092,77 @@ class SyncService
                     $failed++;
                     $retryable++;
                     $failureReasons[$result['reason']] = true;
+                }
+            }
+
+            $pendingMarketings = Marketing::with(['program', 'salescall', 'volumes', 'realizations', 'mechanics'])
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingMarketings as $marketing) {
+                if (! $marketing->program?->server_id) {
+                    continue; // wait until the program is available locally
+                }
+
+                try {
+                    $response = $client->post("{$this->serverUrl}/api/sync/forms/marketing/push", [
+                        'server_id' => $marketing->server_id,
+                        'salescall_uuid' => $marketing->salescall?->local_uuid,
+                        'program_id' => $marketing->program->server_id,
+                        'region_type_id' => $marketing->region_type_id,
+                        'duration_start_at' => $marketing->duration_start_at?->toDateTimeString(),
+                        'duration_end_at' => $marketing->duration_end_at?->toDateTimeString(),
+                        'objective' => $marketing->objective,
+                        'name' => $marketing->name,
+                        'mechanics_description' => $marketing->mechanics_description,
+                        'submitted_at' => $marketing->submitted_at?->toDateTimeString(),
+                        'volumes' => $marketing->volumes->map(fn ($volume): array => [
+                            'before_program' => $volume->before_program,
+                            'during_program' => $volume->during_program,
+                            'volume' => $volume->volume,
+                        ])->values()->all(),
+                        'realizations' => $marketing->realizations->map(fn ($realization): array => [
+                            'stage' => $realization->stage->value,
+                            'start_at' => $realization->start_at?->toDateTimeString(),
+                            'end_at' => $realization->end_at?->toDateTimeString(),
+                            'volume' => $realization->volume,
+                        ])->values()->all(),
+                        'mechanics' => $marketing->mechanics->map(fn ($mechanic): array => [
+                            'period' => $mechanic->period?->toDateTimeString(),
+                            'unit_price' => $mechanic->unit_price,
+                            'sub_total' => $mechanic->sub_total,
+                        ])->values()->all(),
+                    ]);
+
+                    if ($response->status() === 401) {
+                        return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired', $pushed, $failed, $retryable, array_keys($failureReasons));
+                    }
+
+                    $serverId = $response->json('server_id');
+                    if ($response->successful() && $serverId !== null) {
+                        $this->markSynced($marketing, [
+                            'server_id' => $serverId,
+                            'synced_at' => now(),
+                        ]);
+                        $pushed++;
+                    } else {
+                        $this->recordItemFailure($marketing, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
+                            'stage' => 'marketing:portal',
+                            'endpoint' => '/api/sync/forms/marketing/push',
+                            'http_status' => $response->status(),
+                        ]);
+                        $failed++;
+                        $retryable++;
+                        $failureReasons['portal_rejected'] = true;
+                    }
+                } catch (Throwable $e) {
+                    $this->recordUnexpectedItemFailure($marketing, $e, 'marketing:unexpected');
+                    $failed++;
+                    $retryable++;
+                    $failureReasons['unexpected_sync_error'] = true;
                 }
             }
 

@@ -73,4 +73,14 @@ class Marketing extends Model
     {
         return $this->hasMany(MarketingMechanic::class);
     }
+
+    /**
+     * A Marketing Recommendation may be edited only while SPS and RAC have not
+     * acted; the Portal resets both to Pending on every push.
+     */
+    public function isEditable(): bool
+    {
+        return $this->sps_status === SPSStatus::PENDING
+            && $this->rac_status === RACStatus::PENDING;
+    }
 }
