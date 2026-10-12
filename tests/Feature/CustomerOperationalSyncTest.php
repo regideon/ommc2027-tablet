@@ -31,7 +31,7 @@ test('pull persists customer category and competitor volume without affecting se
                 'municipalities' => [['id' => 3, 'region_id' => 1, 'province_id' => 7, 'name' => 'Municipality', 'enabled' => true]], 'barangays' => [],
             ];
 
-            return ['reference_contract_version' => 1, ...$payload, 'reference_counts' => array_map('count', $payload)];
+            return ['reference_contract_version' => 2, ...$payload, 'customer_access_mappings' => [], 'reference_counts' => array_map('count', $payload)];
         })(), 200),
         'portal.test/api/sync/pull/*' => Http::response([
             'companies' => [['id' => 7, 'name' => 'OMMC', 'code' => 'OMMC']],

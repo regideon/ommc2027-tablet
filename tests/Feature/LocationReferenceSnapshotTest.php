@@ -22,8 +22,9 @@ beforeEach(function (): void {
         $sections = array_replace(array_fill_keys(['regions', 'region_specifics', 'area_clusters', 'provinces', 'municipalities', 'barangays'], []), $overrides);
 
         return [
-            'reference_contract_version' => 1,
+            'reference_contract_version' => 2,
             ...$sections,
+            'customer_access_mappings' => [],
             'reference_counts' => array_map('count', $sections),
         ];
     };
@@ -178,6 +179,12 @@ test('location pull caches Access mappings and resolves their Users by exact ema
             'is_complete' => true,
             'users' => [['email' => 'mapped.oe@example.test', 'name' => 'Mapped OE User']],
         ],
+        [
+            'scope' => 'group',
+            'group_code' => 'CREATOR-GROUP',
+            'is_complete' => false,
+            'users' => [['email' => 'unresolved.creator.group@example.test', 'name' => 'Offline Reference']],
+        ],
     ];
     Http::fake(['portal.test/api/sync/pull/locations' => Http::response($payload)]);
 
@@ -189,14 +196,38 @@ test('location pull caches Access mappings and resolves their Users by exact ema
         ->and((bool) $mapping->is_complete)->toBeTrue()
         ->and(json_decode($mapping->user_references, true))->toBe([['email' => 'mapped.access@example.test', 'name' => 'Mapped Access User']])
         ->and(User::query()->where('email', 'mapped.access@example.test')->exists())->toBeTrue()
-        ->and(User::query()->where('email', 'mapped.oe@example.test')->exists())->toBeTrue();
+        ->and(User::query()->where('email', 'mapped.oe@example.test')->exists())->toBeTrue()
+        ->and(DB::table('customer_access_mappings')->where('scope', 'group')->value('mapping_key'))->toBe('CREATOR-GROUP')
+        ->and(User::query()->where('email', 'unresolved.creator.group@example.test')->exists())->toBeFalse();
 
     $resolved = app(CustomerAccessMappingResolver::class)->forCustomer(1, 20);
     expect($resolved['complete'])->toBeTrue()
         ->and($resolved['user_ids'])->toBe([User::query()->where('email', 'mapped.access@example.test')->value('id')]);
 });
 
-test('legacy location snapshots without mapping section clear stale mapping cache but retain strict base validation', function (): void {
+test('older creator-group references without last_name preserve a saved local surname', function (): void {
+    $user = User::factory()->create([
+        'name' => 'Jordan',
+        'last_name' => 'Rivera',
+        'email' => 'jordan.legacy-reference@example.test',
+    ]);
+    $payload = ($this->snapshot)();
+    $payload['customer_access_mappings'] = [[
+        'scope' => 'group',
+        'group_code' => 'LEGACY-GROUP',
+        'is_complete' => true,
+        'users' => [['email' => $user->email, 'name' => 'Jordan']],
+    ]];
+    Http::fake(['portal.test/api/sync/pull/locations' => Http::response($payload)]);
+
+    $result = syncLocationSnapshot()->pullLocations();
+
+    expect($result->success)->toBeTrue($result->message)
+        ->and(User::query()->findOrFail($user->id)->last_name)->toBe('Rivera')
+        ->and(DB::table('customer_access_mappings')->where('scope', 'group')->value('mapping_key'))->toBe('LEGACY-GROUP');
+});
+
+test('legacy v1 location snapshots without creator mappings are rejected and preserve the prior cache', function (): void {
     DB::table('customer_access_mappings')->insert([
         'scope' => 'region_specific',
         'mapping_key' => '77',
@@ -205,15 +236,19 @@ test('legacy location snapshots without mapping section clear stale mapping cach
         'created_at' => now(),
         'updated_at' => now(),
     ]);
-    Http::fake(['portal.test/api/sync/pull/locations' => Http::response(($this->snapshot)([
+    $legacyPayload = ($this->snapshot)([
         'regions' => [['id' => 78, 'code' => 'R78', 'name' => 'New Region']],
-    ]))]);
+    ]);
+    $legacyPayload['reference_contract_version'] = 1;
+    unset($legacyPayload['customer_access_mappings']);
+    Http::fake(['portal.test/api/sync/pull/locations' => Http::response($legacyPayload)]);
 
     $result = syncLocationSnapshot()->pullLocations();
 
-    expect($result->success)->toBeTrue($result->message)
-        ->and(DB::table('customer_access_mappings')->count())->toBe(0)
-        ->and(DB::table('regions')->where('id', 78)->exists())->toBeTrue();
+    expect($result->success)->toBeFalse()
+        ->and(DB::table('customer_access_mappings')->count())->toBe(1)
+        ->and(DB::table('customer_access_mappings')->value('mapping_key'))->toBe('77')
+        ->and(DB::table('regions')->where('id', 78)->exists())->toBeFalse();
 });
 
 test('invalid Access mapping references reject the full snapshot and preserve the prior cache', function (): void {

@@ -119,7 +119,7 @@ class CustomerEditPage extends CustomerCreatePage
                 'business_mobile_number' => $this->business_mobile_number,
                 'date_established' => $this->date_established,
                 'is_active' => $this->is_active,
-                'person_in_charge_id' => $profileType === 'outlet' ? $this->person_in_charge_id : $customer->person_in_charge_id,
+                'person_in_charge_id' => $this->person_in_charge_id,
                 'trade' => $this->trade,
                 'active' => $this->active,
                 'categories' => $this->categories,

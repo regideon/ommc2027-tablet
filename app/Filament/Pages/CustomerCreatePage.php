@@ -127,7 +127,8 @@ class CustomerCreatePage extends Page
         $this->categories = CustomerProfileFormService::defaultCategories('outlet');
 
         if (auth()->check()) {
-            $this->access_user_ids = [auth()->id()];
+            $this->person_in_charge_id = (int) auth()->id();
+            $this->initializeCreatorAccessForAdd();
         }
     }
 
@@ -159,7 +160,7 @@ class CustomerCreatePage extends Page
                 ? Barangay::where(fn ($query) => $query->where('municipality_id', $this->municipality_id)->where('enabled', true)->orWhere('id', $this->barangay_id))->orderBy('name')->get()
                 : collect(),
             'generalCategories' => GeneralCategory::orderBy('sort')->get(),
-            'users' => User::orderBy('name')->get(),
+            'users' => User::query()->orderBy('name')->get()->sortBy(fn (User $user): string => $user->fullName())->values(),
         ];
     }
 
@@ -205,7 +206,6 @@ class CustomerCreatePage extends Page
             $this->trade = [];
             $this->active = [];
             $this->categories = $profile ? CustomerProfileFormService::defaultCategories($profile) : [];
-            $this->person_in_charge_id = null;
         }
 
         $newCode = Company::find($this->company_id)?->code;
@@ -215,7 +215,7 @@ class CustomerCreatePage extends Page
         $this->companyChangeOldProfile = null;
         $this->companyChangeOldCode = null;
 
-        if ($companyAccessChanged) {
+        if ($companyAccessChanged && $this instanceof CustomerEditPage) {
             $this->recalculateAccessForCurrentControls();
         }
     }
@@ -224,7 +224,9 @@ class CustomerCreatePage extends Page
     {
         if ($this->regionSpecificIdBeforeUpdate === $this->region_specific_id) {
             $this->regionSpecificIdBeforeUpdate = null;
-            $this->inspectAccessMappingAvailability();
+            if ($this instanceof CustomerEditPage) {
+                $this->inspectAccessMappingAvailability();
+            }
 
             return;
         }
@@ -248,7 +250,7 @@ class CustomerCreatePage extends Page
         if ($this->region_specific_id && (! $specificRegion || (int) $specificRegion->region_id !== (int) ($this->physical_region_id ?? 0))) {
             $this->region_specific_id = null;
             $this->area_cluster_id = null;
-            if (! in_array($this->profileType(), ['oe', 'ib'], true)) {
+            if ($this instanceof CustomerEditPage && ! in_array($this->profileType(), ['oe', 'ib'], true)) {
                 $this->applyAccessMappingForChangedController();
             }
         }
@@ -432,7 +434,7 @@ class CustomerCreatePage extends Page
                 'business_landline_number' => $this->business_landline_number,
                 'business_mobile_number' => $this->business_mobile_number,
                 'date_established' => $this->date_established,
-                'person_in_charge_id' => $profileType === 'outlet' ? $this->person_in_charge_id : null,
+                'person_in_charge_id' => $this->person_in_charge_id,
                 'is_active' => $this->is_active,
                 'sync_status' => 'pending',
                 'sync_attempts' => 0,
@@ -541,9 +543,16 @@ class CustomerCreatePage extends Page
             : collect();
         $this->area_cluster_id = $clusters->count() === 1 ? (int) $clusters->first() : null;
 
-        if (! in_array($this->profileType(), ['oe', 'ib'], true)) {
+        if ($this instanceof CustomerEditPage && ! in_array($this->profileType(), ['oe', 'ib'], true)) {
             $this->applyAccessMappingForChangedController();
         }
+    }
+
+    protected function initializeCreatorAccessForAdd(): void
+    {
+        $resolution = app(CustomerAccessMappingResolver::class)->forCreator(auth()->id());
+        $this->access_user_ids = $resolution['user_ids'];
+        $this->accessMappingWarning = $resolution['warning'];
     }
 
     protected function applyAccessMappingForChangedController(): void

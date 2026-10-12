@@ -12,7 +12,7 @@ use Illuminate\Notifications\Notifiable;
 use Spatie\Permission\Traits\HasRoles;
 
 #[Fillable([
-    'name', 'email', 'password', 'api_token', 'server_id',
+    'name', 'last_name', 'email', 'password', 'api_token', 'server_id',
     'base_start_latitude', 'base_start_longitude', 'base_end_latitude', 'base_end_longitude',
     'base_location_pending', 'region_type_id',
 ])]
@@ -31,6 +31,20 @@ class User extends Authenticatable
             'password' => 'hashed',
             'base_location_pending' => 'boolean',
         ];
+    }
+
+    public function fullName(): string
+    {
+        $name = trim((string) $this->name);
+        $lastName = trim((string) ($this->last_name ?? ''));
+
+        $normalizedName = mb_strtolower($name);
+        $normalizedLastName = mb_strtolower($lastName);
+        if ($lastName === '' || $normalizedName === $normalizedLastName || str_ends_with($normalizedName, ' '.$normalizedLastName)) {
+            return $name;
+        }
+
+        return trim($name.' '.$lastName);
     }
 
     public function regionType(): BelongsTo

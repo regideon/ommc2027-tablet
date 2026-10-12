@@ -28,7 +28,7 @@ function seedMapAutomationFixture(bool $mappingComplete = true): array
         ['id' => 17, 'region_specific_id' => 52, 'code' => 'FIXTURE-GMA-B', 'name' => 'Fixture GMA Cluster B', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now],
         ['id' => 18, 'region_specific_id' => 53, 'code' => 'FIXTURE-SL-A', 'name' => 'Fixture SL Cluster', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now],
     ]);
-    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['reference_contract_version' => 1])]);
+    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['reference_contract_version' => 2])]);
     DB::table('general_categories')->insert(['id' => 1, 'name' => 'Mixed Outlet', 'priority_visit' => null, 'duration_per_visit' => null, 'sort' => 1, 'created_at' => $now, 'updated_at' => $now]);
     DB::table('location_area_cluster_mappings')->insert([
         ['location_level' => 'province', 'location_id' => 28, 'decision' => 'mapped', 'area_cluster_id' => 18, 'created_at' => $now, 'updated_at' => $now],
@@ -70,8 +70,8 @@ test('map-derived cluster survives Access recalculation when Specific Region has
         ->assertSet('barangay_id', 13567)
         ->assertSet('region_specific_id', 53)
         ->assertSet('area_cluster_id', 18)
-        ->assertSet('access_user_ids', [$mappedUser->id])
-        ->assertSet('accessMappingWarning', null);
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->assertSet('accessMappingWarning', 'The signed-in User has no configured Access group. The creator is selected; Access can be adjusted manually.');
 });
 
 test('map-derived Area Cluster 17 survives recalculation into multi-cluster Specific Region 52', function () {
@@ -87,7 +87,8 @@ test('map-derived Area Cluster 17 survives recalculation into multi-cluster Spec
         ->assertSet('province_id', 27)
         ->assertSet('region_specific_id', 52)
         ->assertSet('area_cluster_id', 17)
-        ->assertSet('access_user_ids', [$mappedUser->id]);
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->assertSet('accessMappingWarning', 'The signed-in User has no configured Access group. The creator is selected; Access can be adjusted manually.');
 });
 
 test('map-derived unresolved or incomplete mapping preserves manual Access and location selections', function () {
@@ -102,7 +103,7 @@ test('map-derived unresolved or incomplete mapping preserves manual Access and l
         ->assertSet('region_specific_id', 53)
         ->assertSet('area_cluster_id', 18)
         ->assertSet('access_user_ids', [$manualUser->id])
-        ->assertSet('accessMappingWarning', 'Customer Access mapping is missing or incomplete offline. Existing Access is preserved.');
+        ->assertSet('accessMappingWarning', 'The signed-in User has no configured Access group. The creator is selected; Access can be adjusted manually.');
 });
 
 test('explicitly unresolved location mapping preserves manual Specific Region, Area Cluster, and Access', function () {
@@ -176,7 +177,7 @@ test('Customer Edit uses the inherited map resolver and preserves the mapped mul
         ->call('resolveLocation', 15.1456, 120.5887)
         ->assertSet('region_specific_id', 53)
         ->assertSet('area_cluster_id', 18)
-        ->assertSet('access_user_ids', [$mappedUser->id]);
+        ->assertSet('access_user_ids', [$manualUser->id, $mappedUser->id]);
 });
 
 test('OE Company Access remains authoritative when map resolution changes geographic location', function () {
@@ -199,7 +200,7 @@ test('OE Company Access remains authoritative when map resolution changes geogra
         ->assertSet('access_user_ids', [$manualUser->id]);
 });
 
-test('Customer Add persists map-derived location and mapped Access through its sync path', function () {
+test('Customer Add persists map-derived location and manual Access through its sync path', function () {
     [$mappedUser, $manualUser] = seedMapAutomationFixture();
     $this->actingAs($mappedUser);
     Http::fake(function ($request) {
@@ -226,7 +227,7 @@ test('Customer Add persists map-derived location and mapped Access through its s
         ->call('resolveLocation', 15.1456, 120.5887)
         ->assertSet('region_specific_id', 53)
         ->assertSet('area_cluster_id', 18)
-        ->assertSet('access_user_ids', [$mappedUser->id])
+        ->assertSet('access_user_ids', [$manualUser->id])
         ->call('saveCustomer')
         ->assertRedirect();
 
@@ -238,5 +239,5 @@ test('Customer Add persists map-derived location and mapped Access through its s
         ->and((int) $customer->region_specific_id)->toBe(53)
         ->and((int) $customer->area_cluster_id)->toBe(18)
         ->and(DB::table('customer_user')->where('customer_id', $customer->id)->pluck('user_id')->map(fn ($id): int => (int) $id)->all())
-        ->toBe([$mappedUser->id]);
+        ->toBe([$manualUser->id]);
 });

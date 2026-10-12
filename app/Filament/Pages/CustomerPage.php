@@ -20,6 +20,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -258,17 +259,19 @@ class CustomerPage extends Page
 
         $photoCount = SalescallImage::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))->count();
 
+        $userColumns = Schema::hasColumn('users', 'last_name') ? ['id', 'name', 'last_name'] : ['id', 'name'];
         $customer = Customer::with([
             'company', 'tradeProfile', 'categoryHistories', 'province', 'barangay',
-            'areaCluster', 'regionSpecific', 'personInCharge:id,name', 'users:id,name,rsm_id',
+            'areaCluster', 'regionSpecific', 'personInCharge' => fn ($query) => $query->select($userColumns),
+            'users' => fn ($query) => $query->select([...$userColumns, 'rsm_id']),
             'municipality.region', 'municipality.province',
         ])->findOrFail($customerId);
-        $accessUsers = $customer->users->sortBy('name')->values();
+        $accessUsers = $customer->users->sortBy(fn (User $user): string => $user->fullName())->values();
         $drmUsers = $accessUsers->filter(fn (User $user): bool => $user->hasRole('drm'))->values();
         $rsmIds = $drmUsers->pluck('rsm_id')->filter()->unique()->values();
         $rsmUsers = $rsmIds->isEmpty()
             ? collect()
-            : User::query()->whereIn('id', $rsmIds)->orderBy('name')->get(['id', 'name']);
+            : User::query()->whereIn('id', $rsmIds)->orderBy('name')->get(Schema::hasColumn('users', 'last_name') ? ['id', 'name', 'last_name'] : ['id', 'name']);
         $physicalRegion = $customer->municipality?->region?->name;
         $province = $customer->province?->name ?? $customer->municipality?->province?->name;
         $municipality = $customer->municipality?->name;
@@ -285,7 +288,7 @@ class CustomerPage extends Page
                 'business_landline_number' => $customer->business_landline_number,
                 'business_mobile_number' => $customer->business_mobile_number,
                 'date_established' => $customer->date_established?->format('Y-m-d'),
-                'person_in_charge' => $customer->personInCharge?->name,
+                'person_in_charge' => $customer->personInCharge?->fullName(),
                 'physical_region' => $physicalRegion,
                 'province' => $province,
                 'barangay' => $customer->barangay?->name,
@@ -306,13 +309,13 @@ class CustomerPage extends Page
                 'server_id' => $customer->server_id === null ? null : (string) $customer->server_id,
             ],
             'access_users' => $accessUsers->map(fn (User $user): array => [
-                'name' => $user->name,
+                'name' => $user->fullName(),
             ])->all(),
             'drm_users' => $drmUsers->map(fn (User $user): array => [
-                'name' => $user->name,
+                'name' => $user->fullName(),
             ])->all(),
             'rsm_users' => $rsmUsers->map(fn (User $user): array => [
-                'name' => $user->name,
+                'name' => $user->fullName(),
             ])->all(),
             'trade_profile' => $customer->tradeProfile ? [
                 'profile_type' => $customer->tradeProfile->profile_type,

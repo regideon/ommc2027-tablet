@@ -54,8 +54,9 @@ function emptyLocationReferenceSnapshot(): array
     $sections = array_fill_keys(['regions', 'region_specifics', 'area_clusters', 'provinces', 'municipalities', 'barangays'], []);
 
     return [
-        'reference_contract_version' => 1,
+        'reference_contract_version' => 2,
         ...$sections,
+        'customer_access_mappings' => [],
         'reference_counts' => array_map('count', $sections),
     ];
 }

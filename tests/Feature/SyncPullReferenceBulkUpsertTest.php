@@ -36,7 +36,7 @@ test('pull bulk-upserts a large reference table instead of one query per row', f
     ];
 
     Http::fake([
-        'portal.test/api/sync/pull/locations' => Http::response(['reference_contract_version' => 1, ...$sections, 'reference_counts' => array_map('count', $sections)], 200),
+        'portal.test/api/sync/pull/locations' => Http::response(['reference_contract_version' => 2, ...$sections, 'customer_access_mappings' => [], 'reference_counts' => array_map('count', $sections)], 200),
         'portal.test/api/sync/pull/*' => Http::response([], 200),
     ]);
 
@@ -68,7 +68,7 @@ test('pull updates existing reference rows in place', function () {
     ];
 
     Http::fake([
-        'portal.test/api/sync/pull/locations' => Http::response(['reference_contract_version' => 1, ...$sections, 'reference_counts' => array_map('count', $sections)], 200),
+        'portal.test/api/sync/pull/locations' => Http::response(['reference_contract_version' => 2, ...$sections, 'customer_access_mappings' => [], 'reference_counts' => array_map('count', $sections)], 200),
         'portal.test/api/sync/pull/*' => Http::response([], 200),
     ]);
 

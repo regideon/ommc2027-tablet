@@ -21,7 +21,15 @@ function seedSaveLocationFixtures(): User
     DB::table('municipalities')->insert(['id' => 1, 'psgc_code' => '0354010000', 'region_id' => 1, 'province_id' => 1, 'name' => 'City of Angeles', 'enabled' => true, 'sort' => 1, 'created_at' => $now, 'updated_at' => $now]);
     DB::table('barangays')->insert(['id' => 1, 'municipality_id' => 1, 'code' => 'pulungmaragul', 'name' => 'Barangay Pulung Maragul', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
     DB::table('area_clusters')->insert(['id' => 1, 'region_specific_id' => 1, 'code' => 'gmaarea1', 'name' => 'GMA - Area 1', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
-    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 1])]);
+    DB::table('location_area_cluster_mappings')->insert([
+        'location_level' => 'province',
+        'location_id' => 1,
+        'decision' => 'mapped',
+        'area_cluster_id' => 1,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 2])]);
 
     return User::factory()->create();
 }

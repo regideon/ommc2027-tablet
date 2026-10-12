@@ -1,7 +1,9 @@
 <?php
 
+use App\Filament\Pages\CustomerCreatePage;
 use App\Filament\Pages\CustomerPage;
 use App\Models\User;
+use App\Services\CustomerAccessMappingResolver;
 use App\Services\SyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -26,8 +28,9 @@ beforeEach(function () {
         $sections = array_replace(array_fill_keys(['regions', 'region_specifics', 'area_clusters', 'provinces', 'municipalities', 'barangays'], []), $sections);
 
         return [
-            'reference_contract_version' => 1,
+            'reference_contract_version' => 2,
             ...$sections,
+            'customer_access_mappings' => [],
             'reference_counts' => array_map('count', $sections),
         ];
     };
@@ -352,6 +355,46 @@ test('the salescall pull uses the schedule endpoint and fetches locations only w
     Http::assertSentCount(3);
     Http::assertSent(fn (Request $request) => str_ends_with($request->url(), '/api/sync/pull/locations'));
     Http::assertNotSent(fn (Request $request) => str_ends_with($request->url(), '/api/sync/pull'));
+});
+
+test('salescall pull refreshes a legacy v1 reference snapshot before resolving creator groups', function (): void {
+    $this->user->forceFill(['name' => 'Jordan', 'last_name' => null])->save();
+    DB::table('sync_states')->insert([
+        'key' => 'location_reference_snapshot_complete',
+        'value' => json_encode(['reference_contract_version' => 1]),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    $payload = ($this->makeLocationPayload)();
+    $payload['customer_access_mappings'] = [[
+        'scope' => 'group',
+        'group_code' => 'CREATOR-REFRESH',
+        'is_complete' => true,
+        'users' => [['email' => $this->user->email, 'name' => $this->user->name, 'last_name' => 'Rivera']],
+    ]];
+    Http::fake([
+        'portal.test/api/sync/pull/locations' => Http::response($payload),
+        'portal.test/api/sync/pull/schedule' => Http::response(['itineraries' => [], 'customers' => []]),
+    ]);
+
+    $result = app(SyncService::class)->pull();
+
+    expect($result->success)->toBeTrue($result->message)
+        ->and(json_decode(DB::table('sync_states')->where('key', 'location_reference_snapshot_complete')->value('value'), true)['reference_contract_version'])->toBe(2)
+        ->and(DB::table('customer_access_mappings')->where('scope', 'group')->value('mapping_key'))->toBe('CREATOR-REFRESH')
+        ->and(app(CustomerAccessMappingResolver::class)->forCreator($this->user->id)['user_ids'])->toBe([$this->user->id]);
+
+    $reloadedUser = User::query()->findOrFail($this->user->id);
+    $this->actingAs($reloadedUser);
+    expect($reloadedUser->last_name)->toBe('Rivera')
+        ->and($reloadedUser->fullName())->toBe('Jordan Rivera');
+
+    Livewire::test(CustomerCreatePage::class)
+        ->assertSet('person_in_charge_id', $reloadedUser->id)
+        ->assertSet('access_user_ids', [$reloadedUser->id])
+        ->assertSee('Jordan Rivera');
+
+    Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/api/sync/pull/locations'));
 });
 
 test('the customers page offers a customer pull and starts it when none has completed', function () {

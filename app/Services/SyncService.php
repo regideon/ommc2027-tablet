@@ -40,6 +40,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Spatie\Permission\Models\Role;
 use Throwable;
@@ -198,21 +199,22 @@ class SyncService
 
             $data = $response->json();
 
-            $user = User::updateOrCreate(
-                ['email' => $data['email']],
-                [
-                    'name' => $data['name'],
-                    'password' => $data['password'],
-                    'api_token' => $data['api_token'],
-                    'server_id' => $data['id'] ?? null,
-                    'rsm_id' => $data['rsm_id'] ?? null,
-                    'region_type_id' => $data['region_type_id'] ?? null,
-                    'base_start_latitude' => $data['base_start_latitude'] ?? null,
-                    'base_start_longitude' => $data['base_start_longitude'] ?? null,
-                    'base_end_latitude' => $data['base_end_latitude'] ?? null,
-                    'base_end_longitude' => $data['base_end_longitude'] ?? null,
-                ]
-            );
+            $attributes = [
+                'name' => $data['name'],
+                'password' => $data['password'],
+                'api_token' => $data['api_token'],
+                'server_id' => $data['id'] ?? null,
+                'rsm_id' => $data['rsm_id'] ?? null,
+                'region_type_id' => $data['region_type_id'] ?? null,
+                'base_start_latitude' => $data['base_start_latitude'] ?? null,
+                'base_start_longitude' => $data['base_start_longitude'] ?? null,
+                'base_end_latitude' => $data['base_end_latitude'] ?? null,
+                'base_end_longitude' => $data['base_end_longitude'] ?? null,
+            ];
+            if (Schema::hasColumn('users', 'last_name') && array_key_exists('last_name', $data)) {
+                $attributes['last_name'] = $data['last_name'];
+            }
+            $user = User::updateOrCreate(['email' => $data['email']], $attributes);
 
             if (! empty($data['roles'])) {
                 foreach ($data['roles'] as $roleName) {
@@ -240,7 +242,8 @@ class SyncService
             return SyncResult::fail('No API token found. Please log in first.', 'no_token');
         }
 
-        if (! DB::table('sync_states')->where('key', 'location_reference_snapshot_complete')->exists()) {
+        $locationSnapshot = $this->syncState('location_reference_snapshot_complete');
+        if (($locationSnapshot['reference_contract_version'] ?? 0) < 2) {
             $locations = $this->pullLocations();
             if (! $locations->success) {
                 return $locations;
@@ -286,14 +289,12 @@ class SyncService
 
         try {
             $this->validateLocationSnapshot($data);
-            $data['customer_access_mappings'] ??= [];
-
             DB::transaction(function () use ($data, $user): void {
                 $this->applyPullPayload($data, $user);
 
                 $this->putSyncState('location_reference_snapshot_complete', [
                     'completed_at' => now()->toISOString(),
-                    'reference_contract_version' => 1,
+                    'reference_contract_version' => 2,
                 ]);
             });
         } catch (\Exception $e) {
@@ -328,8 +329,12 @@ class SyncService
             'municipalities' => ['region_id', 'province_id'],
         ];
 
-        if (($data['reference_contract_version'] ?? null) !== 1 || ! is_array($data['reference_counts'] ?? null)) {
+        if (($data['reference_contract_version'] ?? null) !== 2 || ! is_array($data['reference_counts'] ?? null)) {
             throw new \RuntimeException('Portal location response is missing supported snapshot metadata.');
+        }
+
+        if (! array_key_exists('customer_access_mappings', $data)) {
+            throw new \RuntimeException('Portal location response is missing creator-group and Customer Access references.');
         }
 
         $ids = [];
@@ -428,6 +433,11 @@ class SyncService
                     throw new \RuntimeException('Portal returned an invalid Specific Region Access mapping reference.');
                 }
                 $mappingKey = (string) $mappingKey;
+            } elseif (($row['scope'] ?? null) === 'group') {
+                $mappingKey = $row['group_code'] ?? null;
+                if (! is_string($mappingKey) || trim($mappingKey) === '') {
+                    throw new \RuntimeException('Portal returned an invalid Access group reference.');
+                }
             } elseif (($row['scope'] ?? null) === 'company') {
                 $mappingKey = $row['company_code'] ?? null;
                 if (! is_string($mappingKey) || ! in_array($mappingKey, ['OE', 'IB'], true)) {
@@ -447,7 +457,10 @@ class SyncService
             foreach ($row['users'] as $reference) {
                 if (! is_array($reference) || ! is_string($reference['email'] ?? null)
                     || filter_var($reference['email'], FILTER_VALIDATE_EMAIL) === false
-                    || ! is_string($reference['name'] ?? null) || trim($reference['name']) === '') {
+                    || ! is_string($reference['name'] ?? null) || trim($reference['name']) === ''
+                    || (array_key_exists('last_name', $reference)
+                        && $reference['last_name'] !== null
+                        && ! is_string($reference['last_name']))) {
                     throw new \RuntimeException('Portal returned an invalid mapped User identity.');
                 }
                 if (in_array($reference['email'], $emails, true)) {
@@ -1023,13 +1036,22 @@ class SyncService
             $local = $matches->first();
 
             if (! $local) {
-                $local = User::create([
+                $attributes = [
                     'name' => $customerUser['name'],
                     'email' => $email,
                     'password' => Str::random(64),
-                ]);
-            } elseif ($local->name !== $customerUser['name']) {
-                $local->update(['name' => $customerUser['name']]);
+                ];
+                if (Schema::hasColumn('users', 'last_name') && array_key_exists('last_name', $customerUser)) {
+                    $attributes['last_name'] = $customerUser['last_name'];
+                }
+                $local = User::create($attributes);
+            } elseif ($local->name !== $customerUser['name']
+                || (Schema::hasColumn('users', 'last_name') && array_key_exists('last_name', $customerUser) && $local->last_name !== $customerUser['last_name'])) {
+                $attributes = ['name' => $customerUser['name']];
+                if (Schema::hasColumn('users', 'last_name') && array_key_exists('last_name', $customerUser)) {
+                    $attributes['last_name'] = $customerUser['last_name'];
+                }
+                $local->update($attributes);
             }
 
             $localUserIdsByEmail[$email] = (int) $local->id;
@@ -1039,9 +1061,11 @@ class SyncService
             $mappings = [];
             foreach ($data['customer_access_mappings'] as $mapping) {
                 $scope = $mapping['scope'];
-                $mappingKey = $scope === 'region_specific'
-                    ? (string) $mapping['region_specific_id']
-                    : $mapping['company_code'];
+                $mappingKey = match ($scope) {
+                    'region_specific' => (string) $mapping['region_specific_id'],
+                    'group' => (string) $mapping['group_code'],
+                    default => $mapping['company_code'],
+                };
 
                 foreach ($mapping['users'] as $reference) {
                     $email = $reference['email'];
@@ -1050,19 +1074,36 @@ class SyncService
                             ->filter(fn (User $candidate): bool => $candidate->email === $email)
                             ->values();
 
-                        if ($matches->count() > 1) {
+                        if ($matches->count() > 1 && $scope !== 'group') {
                             throw new \RuntimeException('Portal returned a mapped User email that matches multiple local Users.');
+                        }
+
+                        if ($matches->count() > 1) {
+                            continue;
                         }
 
                         $local = $matches->first();
                         if (! $local) {
-                            $local = User::create([
+                            if ($scope === 'group') {
+                                continue;
+                            }
+
+                            $attributes = [
                                 'name' => $reference['name'],
                                 'email' => $email,
                                 'password' => Str::random(64),
-                            ]);
-                        } elseif ($local->name !== $reference['name']) {
-                            $local->update(['name' => $reference['name']]);
+                            ];
+                            if (Schema::hasColumn('users', 'last_name') && array_key_exists('last_name', $reference)) {
+                                $attributes['last_name'] = $reference['last_name'];
+                            }
+                            $local = User::create($attributes);
+                        } elseif ($local->name !== $reference['name']
+                            || (Schema::hasColumn('users', 'last_name') && array_key_exists('last_name', $reference) && $local->last_name !== $reference['last_name'])) {
+                            $attributes = ['name' => $reference['name']];
+                            if (Schema::hasColumn('users', 'last_name') && array_key_exists('last_name', $reference)) {
+                                $attributes['last_name'] = $reference['last_name'];
+                            }
+                            $local->update($attributes);
                         }
 
                         $localUserIdsByEmail[$email] = (int) $local->id;

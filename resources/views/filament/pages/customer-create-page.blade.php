@@ -15,19 +15,19 @@
                         @foreach($users as $user)
                             <label x-show="$el.textContent.toLowerCase().includes(search.toLowerCase())" class="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-gray-50">
                                 <input type="checkbox" wire:model="access_user_ids" value="{{ $user->id }}" class="rounded">
-                                <span>{{ $user->name }}</span>
+                                <span>{{ $user->fullName() }}</span>
                             </label>
                         @endforeach
                     </div>
                     <div class="flex flex-wrap gap-1" aria-live="polite">
                         @foreach($users->whereIn('id', $access_user_ids) as $selectedAccessUser)
-                            <span class="rounded-full bg-gray-100 px-2 py-1 text-xs">{{ $selectedAccessUser->name }}</span>
+                            <span class="rounded-full bg-gray-100 px-2 py-1 text-xs">{{ $selectedAccessUser->fullName() }}</span>
                         @endforeach
                     </div>
                     <p class="text-sm text-gray-600">{{ count($access_user_ids) }} User{{ count($access_user_ids) === 1 ? '' : 's' }} selected</p>
                     @if($accessMappingWarning)<p class="mt-1 text-sm text-warning-700" role="status">{{ $accessMappingWarning }}</p>@endif
                 </div>
-                @if($this->profileType() === 'outlet')<div><label class="fi-fo-field-wrp-label">Person in Charge</label><select wire:model="person_in_charge_id" class="fi-input w-full"><option value="">Select person</option>@foreach($users as $user)<option value="{{ $user->id }}">{{ $user->name }}</option>@endforeach</select></div>@endif
+                <div><label class="fi-fo-field-wrp-label">Person in Charge</label><select wire:model="person_in_charge_id" class="fi-input w-full"><option value="">Select person</option>@foreach($users as $user)<option value="{{ $user->id }}">{{ $user->fullName() }}</option>@endforeach</select></div>
                 <div class="md:col-span-3"><label class="fi-fo-field-wrp-label">Address</label><textarea wire:model="address" data-location-address="address" class="fi-input w-full" rows="3"></textarea></div>
                 <div><label class="fi-fo-field-wrp-label">Contact Person</label><x-filament::input wire:model="contact_person" /></div>
                 <div><label class="fi-fo-field-wrp-label">Business Landline Number</label><x-filament::input wire:model="business_landline_number" /></div>

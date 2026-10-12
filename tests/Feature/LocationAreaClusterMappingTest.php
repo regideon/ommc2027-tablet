@@ -98,7 +98,7 @@ test('rejects mapping a locality to a cluster in another physical Region', funct
 test('Customer Add applies an offline mapped Area Cluster and parent Specific Region', function (): void {
     tabletLocationMappingFixture();
     $user = User::factory()->create();
-    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 1])]);
+    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 2])]);
     LocationAreaClusterMapping::create(['location_level' => 'province', 'location_id' => 27, 'decision' => 'mapped', 'area_cluster_id' => 17]);
 
     Livewire::actingAs($user)
@@ -116,7 +116,7 @@ test('Customer Add preserves a mapped Area Cluster when its Specific Region has 
         ['id' => 16, 'region_specific_id' => 52, 'code' => 'GMA-SECOND', 'name' => 'GMA second area', 'enabled' => true],
         ['id' => 21, 'region_specific_id' => 53, 'code' => 'SL-SECOND', 'name' => 'SL second area', 'enabled' => true],
     ]);
-    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 1])]);
+    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 2])]);
     LocationAreaClusterMapping::create(['location_level' => 'province', 'location_id' => 27, 'decision' => 'mapped', 'area_cluster_id' => 17]);
 
     $page = Livewire::actingAs($user)
@@ -138,7 +138,7 @@ test('Customer Edit preserves mapped Area Cluster while recalculating Access and
         ['id' => 16, 'region_specific_id' => 52, 'code' => 'GMA-SECOND', 'name' => 'GMA second area', 'enabled' => true],
         ['id' => 21, 'region_specific_id' => 53, 'code' => 'SL-SECOND', 'name' => 'SL second area', 'enabled' => true],
     ]);
-    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 1])]);
+    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 2])]);
     LocationAreaClusterMapping::create(['location_level' => 'province', 'location_id' => 27, 'decision' => 'mapped', 'area_cluster_id' => 17]);
     $customer = Customer::query()->create([
         'name' => 'Location Mapping Edit Fixture',
@@ -162,7 +162,7 @@ test('Customer Edit preserves mapped Area Cluster while recalculating Access and
 test('Customer Add preserves manual Area Cluster and Specific Region when no local decision applies', function (): void {
     tabletLocationMappingFixture();
     $user = User::factory()->create();
-    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 1])]);
+    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 2])]);
 
     Livewire::actingAs($user)
         ->test(CustomerCreatePage::class)

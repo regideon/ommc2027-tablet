@@ -24,7 +24,7 @@ function seedCustomerCreateFixtures(): User
     DB::table('provinces')->insert(['id' => 1, 'region_id' => 1, 'region_specific_id' => 1, 'name' => 'Metro Manila', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
     DB::table('municipalities')->insert(['id' => 1, 'region_id' => 1, 'province_id' => 1, 'name' => 'Quezon City', 'sort' => 1, 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
     DB::table('area_clusters')->insert(['id' => 1, 'region_specific_id' => 1, 'code' => 'cluster-1', 'name' => 'Cluster 1', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
-    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 1])]);
+    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 2])]);
     DB::table('general_categories')->insert(['id' => 1, 'name' => 'Mixed Outlet', 'priority_visit' => null, 'duration_per_visit' => null, 'sort' => 1, 'created_at' => $now, 'updated_at' => $now]);
 
     return User::factory()->create();
@@ -98,6 +98,68 @@ function customerAccessIdsMatch(array $actual, array $expected): bool
 
     return $actual === $expected;
 }
+
+test('creator group snapshot resolves multiple email identities once and geography or Company changes do not replace Access or Person in Charge', function (): void {
+    $actor = seedCustomerCreateFixtures();
+    $actor->update(['name' => 'Auth User']);
+    $first = User::factory()->create(['name' => 'First Assigned', 'email' => 'creator.first@example.test']);
+    $second = User::factory()->create(['name' => 'Second Assigned', 'email' => 'creator.second@example.test']);
+    $manual = User::factory()->create(['name' => 'Manual Choice', 'email' => 'creator.manual@example.test']);
+    cacheCustomerAccessMapping('group', 'GROUP-A', [
+        ['email' => $actor->email, 'name' => $actor->name],
+        ['email' => $first->email, 'name' => $first->name],
+    ]);
+    cacheCustomerAccessMapping('group', 'GROUP-B', [
+        ['email' => $actor->email, 'name' => $actor->name],
+        ['email' => $second->email, 'name' => $second->name],
+    ]);
+    $this->actingAs($actor);
+    $syncService = Mockery::mock(SyncService::class)->makePartial();
+    $syncService->shouldReceive('reserveCustomerCode')->zeroOrMoreTimes()->andReturn(null);
+    app()->instance(SyncService::class, $syncService);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->assertSet('person_in_charge_id', $actor->id)
+        ->assertSet('access_user_ids', fn (array $ids): bool => customerAccessIdsMatch($ids, [$actor->id, $first->id, $second->id]))
+        ->set('access_user_ids', [$manual->id])
+        ->set('person_in_charge_id', $manual->id)
+        ->set('company_id', 1)
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$manual->id])
+        ->assertSet('person_in_charge_id', $manual->id)
+        ->assertSee('First Assigned')
+        ->assertSee('Second Assigned');
+});
+
+test('single complete creator group selects the creator and its assigned User', function (): void {
+    $actor = seedCustomerCreateFixtures();
+    $assigned = User::factory()->create(['name' => 'Single Group User', 'email' => 'creator.single@example.test']);
+    cacheCustomerAccessMapping('group', 'SINGLE-GROUP', [
+        ['email' => $actor->email, 'name' => $actor->name],
+        ['email' => $assigned->email, 'name' => $assigned->name],
+    ]);
+    $this->actingAs($actor);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->assertSet('access_user_ids', [$actor->id, $assigned->id])
+        ->assertSet('accessMappingWarning', null);
+});
+
+test('unresolved offline group email preserves creator fallback, warns, and does not create a local User', function (): void {
+    $actor = seedCustomerCreateFixtures();
+    cacheCustomerAccessMapping('group', 'UNRESOLVED-GROUP', [
+        ['email' => $actor->email, 'name' => $actor->name],
+        ['email' => 'missing.identity@example.test', 'name' => 'Unknown Person'],
+    ]);
+    $this->actingAs($actor);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->assertSet('access_user_ids', [$actor->id])
+        ->assertSet('accessMappingWarning', 'One or more creator Access groups are incomplete or unavailable offline (UNRESOLVED-GROUP). Resolvable assigned Users were included; verify remaining memberships manually.')
+        ->assertSee('verify remaining memberships manually');
+
+    expect(User::query()->where('email', 'missing.identity@example.test')->exists())->toBeFalse();
+});
 
 test('customer add page renders against the complete migrated sqlite schema', function () {
     $user = seedCustomerCreateFixtures();
@@ -480,8 +542,8 @@ test('physical Region filters Specific Regions and selecting one auto-selects it
         ->assertDontSee('Specific Region 2')
         ->set('region_specific_id', 1)
         ->assertSet('area_cluster_id', 1)
-        ->assertSet('access_user_ids', fn (array $ids): bool => customerAccessIdsMatch($ids, [$user->id, $mappedUser->id]))
-        ->assertSet('accessMappingWarning', null);
+        ->assertSet('access_user_ids', [$user->id])
+        ->assertSet('area_cluster_id', 1);
 
     $component->set('access_user_ids', [$user->id])
         ->assertSet('access_user_ids', [$user->id]);
@@ -523,19 +585,19 @@ test('same and repeated Add controller updates preserve manual Access while real
         ->set('region_specific_id', 1)
         ->assertSet('access_user_ids', [])
         ->set('region_specific_id', 2)
-        ->assertSet('access_user_ids', fn (array $ids): bool => customerAccessIdsMatch($ids, [$user->id, $geographicUser->id]))
+        ->assertSet('access_user_ids', [])
         ->set('access_user_ids', [$manualUser->id])
         ->set('region_specific_id', 2)
         ->assertSet('access_user_ids', [$manualUser->id])
         ->set('region_specific_id', 3)
         ->assertSet('access_user_ids', [$manualUser->id])
         ->set('company_id', 2)
-        ->assertSet('access_user_ids', fn (array $ids): bool => customerAccessIdsMatch($ids, [$manualUser->id, $user->id, $oeUser->id]))
+        ->assertSet('access_user_ids', [$manualUser->id])
         ->set('access_user_ids', [$manualUser->id])
         ->set('company_id', 2)
         ->assertSet('access_user_ids', [$manualUser->id])
         ->set('company_id', 3)
-        ->assertSet('access_user_ids', fn (array $ids): bool => customerAccessIdsMatch($ids, [$manualUser->id, $user->id, $ibUser->id]))
+        ->assertSet('access_user_ids', [$manualUser->id])
         ->set('access_user_ids', [$manualUser->id])
         ->set('company_id', 3)
         ->assertSet('access_user_ids', [$manualUser->id]);
@@ -563,10 +625,10 @@ test('Add controller changes retain the authenticated User, deduplicate its mapp
         ->set('region_specific_id', 1)
         ->assertSet('access_user_ids', [$actor->id])
         ->set('region_specific_id', 2)
-        ->assertSet('access_user_ids', fn (array $ids): bool => customerAccessIdsMatch($ids, [$actor->id, $slUser->id]))
+        ->assertSet('access_user_ids', [$actor->id])
         ->set('access_user_ids', [$actor->id, $slUser->id, $manualUser->id])
         ->set('region_specific_id', 3)
-        ->assertSet('access_user_ids', fn (array $ids): bool => customerAccessIdsMatch($ids, [$actor->id, $manualUser->id, $nlUser->id]));
+        ->assertSet('access_user_ids', [$actor->id, $slUser->id, $manualUser->id]);
 });
 
 test('Edit hydration and same or repeated Specific Region updates preserve manual Access', function () {
@@ -646,16 +708,16 @@ test('multiple enabled Area Clusters are filtered by Specific Region without aut
 test('incomplete offline mapping preserves the current Add Access selection and displays a warning', function () {
     $user = seedCustomerCreateFixtures();
     $partialUser = User::factory()->create(['email' => 'partial.mapping@example.test']);
-    cacheCustomerAccessMapping('region_specific', '1', [['email' => $partialUser->email, 'name' => $partialUser->name]], false);
+    cacheCustomerAccessMapping('group', 'PARTIAL', [['email' => $user->email, 'name' => $user->name], ['email' => $partialUser->email, 'name' => $partialUser->name]], false);
     $this->actingAs($user);
 
     Livewire::test(CustomerCreatePage::class)
         ->set('physical_region_id', 1)
         ->set('region_specific_id', 1)
         ->assertSet('area_cluster_id', 1)
-        ->assertSet('access_user_ids', [$user->id])
-        ->assertSet('accessMappingWarning', 'Customer Access mapping is missing or incomplete offline. Existing Access is preserved.')
-        ->assertSee('Existing Access is preserved.');
+        ->assertSet('access_user_ids', [$user->id, $partialUser->id])
+        ->assertSet('accessMappingWarning', 'One or more creator Access groups are incomplete or unavailable offline (PARTIAL). Resolvable assigned Users were included; verify remaining memberships manually.')
+        ->assertSee('verify remaining memberships manually');
 });
 
 test('Add form shows no mapping warning without a controller when the mapping cache table is absent', function () {
@@ -666,8 +728,8 @@ test('Add form shows no mapping warning without a controller when the mapping ca
     Livewire::test(CustomerCreatePage::class)
         ->set('region_specific_id', null)
         ->assertSet('access_user_ids', [$user->id])
-        ->assertSet('accessMappingWarning', null)
-        ->assertDontSee('Customer Access mappings are unavailable offline.');
+        ->assertSet('accessMappingWarning', 'Creator Access group references are unavailable offline. The creator is selected; Access can be adjusted manually.')
+        ->assertSee('Access can be adjusted manually.');
 });
 
 test('Add form shows no mapping warning without a controller when the cache has only unrelated incomplete mappings', function () {
@@ -678,8 +740,8 @@ test('Add form shows no mapping warning without a controller when the cache has 
     Livewire::test(CustomerCreatePage::class)
         ->set('region_specific_id', null)
         ->assertSet('access_user_ids', [$user->id])
-        ->assertSet('accessMappingWarning', null)
-        ->assertDontSee('mapping is missing or incomplete offline');
+        ->assertSet('accessMappingWarning', 'The signed-in User has no configured Access group. The creator is selected; Access can be adjusted manually.')
+        ->assertSee('Access can be adjusted manually.');
 });
 
 test('Add form preserves manual Access and reports a missing cache when a geographic controller is selected', function () {
@@ -690,7 +752,7 @@ test('Add form preserves manual Access and reports a missing cache when a geogra
     Livewire::test(CustomerCreatePage::class)
         ->set('region_specific_id', 1)
         ->assertSet('access_user_ids', [$user->id])
-        ->assertSet('accessMappingWarning', 'Customer Access mappings are unavailable offline. Existing Access is preserved.');
+        ->assertSet('accessMappingWarning', 'Creator Access group references are unavailable offline. The creator is selected; Access can be adjusted manually.');
 });
 
 test('Edit hydration shows no mapping warning without a controller when the mapping cache table is absent', function () {
@@ -749,8 +811,8 @@ test('OE and IB Company selections resolve their cached mappings by Company code
 
     Livewire::test(CustomerCreatePage::class)
         ->set('company_id', $companyId)
-        ->assertSet('access_user_ids', fn (array $ids): bool => customerAccessIdsMatch($ids, [$user->id, $mappedUser->id]))
-        ->assertSet('accessMappingWarning', null)
+        ->assertSet('access_user_ids', [$user->id])
+        ->assertSet('accessMappingWarning', 'The signed-in User has no configured Access group. The creator is selected; Access can be adjusted manually.')
         ->assertSee(ucfirst($profile).' Profile');
 })->with([
     ['OE', 'oe'],
@@ -768,7 +830,7 @@ test('Add form preserves manual Access and warns for incomplete OE and IB Compan
         ->set('access_user_ids', [$partialUser->id])
         ->set('company_id', 2)
         ->assertSet('access_user_ids', [$partialUser->id])
-        ->assertSet('accessMappingWarning', 'Customer Access mapping is missing or incomplete offline. Existing Access is preserved.');
+        ->assertSet('accessMappingWarning', 'The signed-in User has no configured Access group. The creator is selected; Access can be adjusted manually.');
 })->with(['OE', 'IB']);
 
 test('editing an unchanged Specific Region preserves manual Access during mapping hydration', function () {
