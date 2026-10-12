@@ -37,4 +37,15 @@ class Repair extends Model
     {
         return $this->hasMany(RepairAttachment::class);
     }
+
+    /**
+     * A repair may be edited only while it is still fully pending; once any
+     * approver has acted the tablet treats it as read-only.
+     */
+    public function isEditable(): bool
+    {
+        return $this->rsm_status === RSMStatus::PENDING
+            && $this->sps_status === SPSStatus::PENDING
+            && $this->spm_status === SPMStatus::PENDING;
+    }
 }

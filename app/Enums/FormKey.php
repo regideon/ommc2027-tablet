@@ -43,7 +43,7 @@ enum FormKey: string
             self::REPAIR->value => [
                 'title' => 'Repair',
                 'icon' => 'heroicon-o-wrench-screwdriver',
-                'available' => false,
+                'available' => true,
             ],
             self::SIGNAGE->value => [
                 'title' => 'CRR Signage',
