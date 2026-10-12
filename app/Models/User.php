@@ -12,7 +12,7 @@ use Illuminate\Notifications\Notifiable;
 use Spatie\Permission\Traits\HasRoles;
 
 #[Fillable([
-    'name', 'email', 'password', 'api_token',
+    'name', 'email', 'password', 'api_token', 'server_id',
     'base_start_latitude', 'base_start_longitude', 'base_end_latitude', 'base_end_longitude',
     'base_location_pending', 'region_type_id',
 ])]

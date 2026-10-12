@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Enums\FormKey;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrProgram;
 use App\Models\Salescall;
@@ -157,12 +158,12 @@ class CrrFormPage extends Page
 
         Notification::make()->title($title)->success()->send();
 
-        $this->redirect(FormsPage::getUrl());
+        $this->redirect(FormsPage::getUrl(['form' => FormKey::CRR->value]));
     }
 
     public function cancel(): void
     {
-        $this->redirect(FormsPage::getUrl());
+        $this->redirect(FormsPage::getUrl(['form' => FormKey::CRR->value]));
     }
 
     public function takeAttachmentPhoto(): void

@@ -333,43 +333,43 @@ class CustomerPage extends Page
                 },
                 'ulab' => $customer->tradeProfile->ulab,
                 'profile_data' => $customer->tradeProfile->profile_data,
-                ] : null,
+            ] : null,
             'category_histories' => $customer->categoryHistories->map(fn ($history) => [
                 'year' => $history->category_year,
                 'profile_type' => $history->profile_type,
                 'stream' => $history->stream,
                 'category' => $history->category,
-                ])->all(),
+            ])->all(),
             'profile' => $profile ? [
                 'registered_name' => $profile->registered_name,
                 'owner_name' => $profile->owner_name,
                 'classification' => $profile->classification,
                 'mobile' => $profile->mobile,
                 'submitted_at' => $profile->created_at->diffForHumans(),
-                ] : null,
+            ] : null,
 
             'brands' => $brands->map(fn (CustomerBrand $b) => [
                 'material_group' => $b->materialGroup?->name ?? '—',
                 'brand' => $b->brand?->name ?? $b->brand_other ?? '—',
                 'quantity' => $b->quantity,
-                ])->all(),
+            ])->all(),
 
             'category' => $category ? [
                 'category' => $category->category?->name,
                 'sub_category' => $category->subCategory?->name,
-                ] : null,
+            ] : null,
 
             'notes' => $notes->map(fn (CustomerNote $n) => [
                 'title' => $n->title,
                 'body' => $n->body,
                 'created_at' => $n->created_at->diffForHumans(),
-                ])->all(),
+            ])->all(),
 
             'visits' => $visits->map(fn (Salescall $s) => [
                 'date' => $s->visit_date->format('M j, Y'),
                 'status' => $s->status,
                 'visited_by' => $s->createdBy?->name ?? '—',
-                ])->all(),
+            ])->all(),
 
             'photo_count' => $photoCount,
         ];

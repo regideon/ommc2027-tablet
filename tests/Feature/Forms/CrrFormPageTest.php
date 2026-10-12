@@ -52,7 +52,7 @@ test('saving a CRR with valid data creates it locally and redirects', function (
         ->set('details', 'Sample details')
         ->set('remarks', 'Sample remarks')
         ->call('save')
-        ->assertRedirect(FormsPage::getUrl());
+        ->assertRedirect(FormsPage::getUrl(['form' => 'crr']));
 
     $crr = Crr::query()->first();
 
@@ -112,7 +112,7 @@ test('the edit route loads a pending CRR and saves an update', function () {
         ->set('amount', '250.75')
         ->set('details', 'Updated details')
         ->call('save')
-        ->assertRedirect(FormsPage::getUrl());
+        ->assertRedirect(FormsPage::getUrl(['form' => 'crr']));
 
     $crr->refresh();
 
