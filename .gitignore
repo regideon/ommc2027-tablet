@@ -25,6 +25,8 @@
 /public/expense_attachments
 /public/customer_profile_attachments
 /public/salescall_images
+/public/trade_check_attachments
+/public/staged_attachments
 /storage/*.key
 /storage/pail
 /vendor

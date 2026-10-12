@@ -6,15 +6,18 @@ use App\Contracts\FormSubmissionService;
 use App\Enums\FormKey;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\Marketing\Marketing;
+use App\Models\Forms\TradeCheck\TradeCheck;
 use App\Models\User;
 use App\Services\Forms\CrrService;
 use App\Services\Forms\MarketingService;
+use App\Services\Forms\TradeCheckService;
 use App\Services\SyncService;
 use BackedEnum;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Validation\ValidationException;
+use Livewire\Attributes\Url;
 use RuntimeException;
 use Throwable;
 
@@ -30,6 +33,7 @@ class FormsPage extends Page
 
     protected static ?int $navigationSort = 250;
 
+    #[Url(as: 'form', keep: true)]
     public string $selectedForm = 'crr';
 
     /** @var array<int, array<string, mixed>> */
@@ -52,6 +56,12 @@ class FormsPage extends Page
 
     public function mount(): void
     {
+        $form = FormKey::tryFrom($this->selectedForm);
+
+        $this->selectedForm = $form !== null && $form->available()
+            ? $form->value
+            : FormKey::CRR->value;
+
         $this->loadRows();
     }
 
@@ -178,6 +188,7 @@ class FormsPage extends Page
         $this->redirect(match ($this->selectedForm) {
             FormKey::CRR->value => CrrFormPage::getUrl(['crr' => $submission->getKey()]),
             FormKey::MARKETING->value => MarketingFormPage::getUrl(['marketing' => $submission->getKey()]),
+            FormKey::TRADE_CHECK->value => TradeCheckFormPage::getUrl(['submission' => $submission->getKey()]),
             default => FormsPage::getUrl(),
         });
     }
@@ -209,6 +220,7 @@ class FormsPage extends Page
         return match ($this->selectedForm) {
             FormKey::CRR->value => app(CrrService::class),
             FormKey::MARKETING->value => app(MarketingService::class),
+            FormKey::TRADE_CHECK->value => app(TradeCheckService::class),
             default => throw new RuntimeException('This form is not available yet.'),
         };
     }
@@ -221,6 +233,7 @@ class FormsPage extends Page
         return match ($this->selectedForm) {
             FormKey::CRR->value => Crr::class,
             FormKey::MARKETING->value => Marketing::class,
+            FormKey::TRADE_CHECK->value => TradeCheck::class,
             default => throw new RuntimeException('This form is not available yet.'),
         };
     }

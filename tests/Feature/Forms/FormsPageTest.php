@@ -3,6 +3,7 @@
 use App\Enums\FormKey;
 use App\Filament\Pages\CrrFormPage;
 use App\Filament\Pages\FormsPage;
+use App\Filament\Pages\TradeCheckFormPage;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrProgram;
 use App\Models\Forms\Marketing\MarketingProgram;
@@ -10,6 +11,7 @@ use App\Models\RegionType;
 use App\Models\User;
 use App\Services\Forms\CrrService;
 use App\Services\Forms\MarketingService;
+use App\Services\Forms\TradeCheckService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -27,14 +29,16 @@ function formsPageUser(): User
  *
  * @param  array<int, array<string, mixed>>  $crrs
  * @param  array<int, array<string, mixed>>  $programs
+ * @param  array<int, array<string, mixed>>  $tradeChecks
  */
-function formsPageFakePortal(array $crrs = [], array $programs = []): void
+function formsPageFakePortal(array $crrs = [], array $programs = [], array $tradeChecks = []): void
 {
     Http::fake(fn ($request) => match (true) {
         str_contains($request->url(), '/api/sync/forms/crr/programs') => Http::response(['crr_programs' => $programs], 200),
         str_contains($request->url(), '/api/sync/forms/crr/pull') => Http::response(['crrs' => $crrs], 200),
         str_contains($request->url(), '/api/sync/forms/marketing/programs') => Http::response(['marketing_programs' => []], 200),
         str_contains($request->url(), '/api/sync/forms/marketing/pull') => Http::response(['marketings' => []], 200),
+        str_contains($request->url(), '/api/sync/forms/trade-check/pull') => Http::response(['trade_checks' => $tradeChecks], 200),
         default => Http::response([], 200),
     });
 }
@@ -42,6 +46,51 @@ function formsPageFakePortal(array $crrs = [], array $programs = []): void
 function formsPageProgram(string $name = 'Price Support'): CrrProgram
 {
     return CrrProgram::create(['name' => $name]);
+}
+
+/**
+ * @return array<int, array<string, mixed>>
+ */
+function formsPageTradeCheckTemplates(): array
+{
+    return [[
+        'id' => 20,
+        'name' => 'Trade Check Evaluation',
+        'group' => [[
+            'id' => 1,
+            'name' => 'External',
+            'category' => 1,
+            'description' => null,
+            'order' => 1,
+            'items' => [
+                [
+                    'id' => 101,
+                    'name' => 'DF Signage - Available',
+                    'description' => null,
+                    'type' => 1,
+                    'is_required' => true,
+                    'is_image_required' => false,
+                    'options' => null,
+                    'order' => 1,
+                    'answer' => null,
+                    'attachments' => [],
+                ],
+                [
+                    'id' => 102,
+                    'name' => 'DF Signage - Condition',
+                    'description' => null,
+                    'type' => 4,
+                    'is_required' => false,
+                    'is_image_required' => false,
+                    'options' => ['Good', 'Bad'],
+                    'order' => 2,
+                    'answer' => null,
+                    'attachments' => [],
+                ],
+            ],
+        ]],
+        'answers' => [],
+    ]];
 }
 
 test('the Forms page renders for an authenticated user', function () {
@@ -58,7 +107,7 @@ test('the Forms page renders for an authenticated user', function () {
     $this->get(FormsPage::getUrl())->assertOk();
 });
 
-test('the rail exposes all eight forms with CRR and Marketing available', function () {
+test('the rail exposes all eight forms with CRR, Marketing, and Trade Check available', function () {
     $user = formsPageUser();
     $this->actingAs($user);
     config(['sync.server_url' => 'http://portal.test']);
@@ -66,14 +115,16 @@ test('the rail exposes all eight forms with CRR and Marketing available', functi
 
     expect(FormKey::cases())->toHaveCount(8)
         ->and(FormKey::CRR->available())->toBeTrue()
-        ->and(FormKey::MARKETING->available())->toBeTrue();
+        ->and(FormKey::MARKETING->available())->toBeTrue()
+        ->and(FormKey::TRADE_CHECK->available())->toBeTrue();
 
+    $available = [FormKey::CRR, FormKey::MARKETING, FormKey::TRADE_CHECK];
     $component = Livewire::test(FormsPage::class);
 
     foreach (FormKey::cases() as $form) {
         $component->assertSee($form->label());
 
-        if (! in_array($form, [FormKey::CRR, FormKey::MARKETING], true)) {
+        if (! in_array($form, $available, true)) {
             expect($form->available())->toBeFalse();
         }
     }
@@ -82,14 +133,19 @@ test('the rail exposes all eight forms with CRR and Marketing available', functi
         ->assertSee('Coming soon')
         ->assertSeeHtml("wire:click=\"selectForm('crr')\"")
         ->assertSeeHtml("wire:click=\"selectForm('marketing')\"")
+        ->assertSeeHtml("wire:click=\"selectForm('trade-check')\"")
         ->assertSet('selectedForm', 'crr');
 
+    // The remaining five forms render as unavailable.
+    expect(substr_count($component->html(), 'Coming soon'))->toBe(5);
+
     // Selecting an unavailable form is ignored.
-    $component->call('selectForm', 'trade-check')->assertSet('selectedForm', 'crr');
+    $component->call('selectForm', 'giveaway')->assertSet('selectedForm', 'crr');
     $component->call('selectForm', 'crr')->assertSet('selectedForm', 'crr');
 
     // Selecting another available form switches the pane.
     $component->call('selectForm', 'marketing')->assertSet('selectedForm', 'marketing');
+    $component->call('selectForm', 'trade-check')->assertSet('selectedForm', 'trade-check');
 });
 
 test('a locally created pending CRR appears in the list with a Pending Sync badge', function () {
@@ -171,6 +227,48 @@ test('selecting Marketing loads locally created recommendations into the list', 
         ->assertSee('Marketing Details')
         ->assertSee('Volume rebate per incremental case.')
         ->assertSee('Edit Marketing');
+});
+
+test('selecting Trade Check loads locally created submissions into the list and detail', function () {
+    $user = formsPageUser();
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+    formsPageFakePortal(tradeChecks: formsPageTradeCheckTemplates());
+
+    $template = app(TradeCheckService::class)->programs()->firstOrFail();
+    $items = $template->group->flatMap->items;
+
+    $submission = app(TradeCheckService::class)->create($user, [
+        'trade_check_id' => $template->id,
+        'salescall_uuid' => null,
+        'answers' => [$items[0]->id => 'Yes', $items[1]->id => 'Good'],
+    ]);
+
+    $component = Livewire::test(FormsPage::class)
+        ->call('selectForm', 'trade-check')
+        ->assertSet('selectedForm', 'trade-check')
+        ->assertSee('Create Trade Check')
+        ->assertSee('Your Trade Checks')
+        ->assertSee('Trade Check Evaluation')
+        ->assertSee('Pending Sync');
+
+    $rows = $component->get('rows');
+
+    expect(collect($rows)->contains(fn (array $row): bool => ($row['local_uuid'] ?? null) === $submission->local_uuid))->toBeTrue()
+        ->and($submission->server_id)->toBe(20);
+
+    $key = 'server:'.$submission->server_id;
+    $component->call('selectRow', $key)
+        ->assertSet('selectedRowKey', $key)
+        ->assertSee('Trade Check Details')
+        ->assertSee('External')
+        ->assertSee('DF Signage - Available')
+        ->assertSee('Yes')
+        ->assertSee('Good')
+        ->assertSee('Edit Trade Check');
+
+    $component->call('editSelectedRow')
+        ->assertRedirect(TradeCheckFormPage::getUrl(['submission' => $submission->id]));
 });
 
 test('editing a non-editable CRR is refused', function () {
@@ -261,4 +359,25 @@ test('the Forms page Sync action pushes pending CRRs to the server', function ()
 
     expect($crr->fresh()->server_id)->toBe(77)
         ->and($crr->fresh()->sync_status)->toBe('synced');
+});
+
+test('opening the Forms page with a form parameter selects that form', function () {
+    $user = formsPageUser();
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+    formsPageFakePortal(tradeChecks: formsPageTradeCheckTemplates());
+
+    Livewire::withQueryParams(['form' => 'trade-check'])
+        ->test(FormsPage::class)
+        ->assertSet('selectedForm', 'trade-check')
+        ->assertSee('Trade Check Evaluation');
+
+    // Unavailable or unknown forms fall back to the default.
+    Livewire::withQueryParams(['form' => 'giveaway'])
+        ->test(FormsPage::class)
+        ->assertSet('selectedForm', 'crr');
+
+    Livewire::withQueryParams(['form' => 'nonsense'])
+        ->test(FormsPage::class)
+        ->assertSet('selectedForm', 'crr');
 });

@@ -146,3 +146,26 @@ Route::middleware('auth')->get('customer-profile-attachment/{id}', function ($id
         'Cache-Control' => 'private, max-age=3600',
     ]);
 });
+
+// The NativePHP WebView serves `/_assets/<path>` from the app's public
+// directory on device. This route provides the same behavior for the web
+// (Herd / artisan serve) so previews do not 404 in a browser.
+Route::middleware('auth')
+    ->get('/_assets/{path}', function (string $path) {
+        $publicRoot = realpath(public_path());
+        $file = realpath(public_path($path));
+
+        abort_unless(
+            $publicRoot !== false
+                && $file !== false
+                && str_starts_with($file, $publicRoot.DIRECTORY_SEPARATOR)
+                && is_file($file),
+            404,
+        );
+
+        return response()->file($file, [
+            'Cache-Control' => 'private, max-age=3600',
+        ]);
+    })
+    ->where('path', '.*')
+    ->name('assets.preview');

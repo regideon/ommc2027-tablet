@@ -126,7 +126,7 @@ test('saving a Marketing recommendation with valid data creates it locally and r
         ]])
         ->set('mechanics', [['period' => '2026-11-15', 'unit_price' => '1500', 'sub_total' => '7500']])
         ->call('save')
-        ->assertRedirect(FormsPage::getUrl());
+        ->assertRedirect(FormsPage::getUrl(['form' => 'marketing']));
 
     $marketing = Marketing::query()->first();
 
@@ -194,7 +194,7 @@ test('the edit route loads a pending Marketing recommendation and saves an updat
         ->assertSet('realizations.0.stage', RealizationStage::FIRST_STAGE->value)
         ->set('name', 'Updated Marketing Name')
         ->call('save')
-        ->assertRedirect(FormsPage::getUrl());
+        ->assertRedirect(FormsPage::getUrl(['form' => 'marketing']));
 
     $marketing->refresh();
 

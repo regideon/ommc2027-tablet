@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Enums\FormKey;
 use App\Models\Forms\Marketing\Marketing;
 use App\Models\Forms\Marketing\MarketingMechanic;
 use App\Models\Forms\Marketing\MarketingProgram;
@@ -246,12 +247,12 @@ class MarketingFormPage extends Page
 
         Notification::make()->title($title)->success()->send();
 
-        $this->redirect(FormsPage::getUrl());
+        $this->redirect(FormsPage::getUrl(['form' => FormKey::MARKETING->value]));
     }
 
     public function cancel(): void
     {
-        $this->redirect(FormsPage::getUrl());
+        $this->redirect(FormsPage::getUrl(['form' => FormKey::MARKETING->value]));
     }
 
     /**

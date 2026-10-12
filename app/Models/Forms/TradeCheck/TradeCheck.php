@@ -2,7 +2,11 @@
 
 namespace App\Models\Forms\TradeCheck;
 
+use App\Enums\RSMStatus;
+use App\Enums\TDHStatus;
+use App\Models\Salescall;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
@@ -24,6 +28,16 @@ class TradeCheck extends Model
         return $this->hasMany(TradeCheckAnswer::class);
     }
 
+    public function attachments(): HasMany
+    {
+        return $this->hasMany(TradeCheckAttachment::class);
+    }
+
+    public function salescall(): BelongsTo
+    {
+        return $this->belongsTo(Salescall::class);
+    }
+
     /**
      * A submission's metadata (submitter, sales call, statuses) lives on its
      * answer rows; they are shared across the submission.
@@ -31,5 +45,22 @@ class TradeCheck extends Model
     public function firstAnswer(): HasOne
     {
         return $this->hasOne(TradeCheckAnswer::class)->oldestOfMany();
+    }
+
+    /**
+     * Editable only while every one of the user's answer rows is still Pending.
+     */
+    public function isEditableBy(int $userId): bool
+    {
+        $answers = $this->answers->where('submitted_by', $userId);
+
+        if ($answers->isEmpty()) {
+            return false;
+        }
+
+        return $answers->every(
+            fn (TradeCheckAnswer $answer): bool => $answer->rsm_status === RSMStatus::PENDING
+                && $answer->tdh_status === TDHStatus::PENDING
+        );
     }
 }

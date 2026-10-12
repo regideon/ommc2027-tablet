@@ -13,6 +13,8 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->redirectGuestsTo(fn () => route('filament.saleshub.auth.login'));
+
         $middleware->prependToPriorityList(
             AuthenticatesRequests::class,
             RestoreTrustedSession::class,

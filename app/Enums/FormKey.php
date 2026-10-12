@@ -33,7 +33,7 @@ enum FormKey: string
             self::TRADE_CHECK->value => [
                 'title' => 'Trade Check',
                 'icon' => 'heroicon-o-clipboard-document-check',
-                'available' => false,
+                'available' => true,
             ],
             self::GIVEAWAY->value => [
                 'title' => 'Giveaway',
