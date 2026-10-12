@@ -85,6 +85,8 @@ class CustomerCreatePage extends Page
 
     public array $access_user_ids = [];
 
+    public array $automaticallyMappedAccessUserIds = [];
+
     public bool $is_active = true;
 
     public array $trade = [];
@@ -562,8 +564,31 @@ class CustomerCreatePage extends Page
             return;
         }
 
-        $this->access_user_ids = array_values(array_unique($mapping['user_ids']));
+        $previousMappedUserIds = array_map('intval', $this->automaticallyMappedAccessUserIds);
+        $currentUserIds = array_values(array_unique(array_map('intval', $this->access_user_ids)));
+        $manualUserIds = array_values(array_diff($currentUserIds, $previousMappedUserIds));
+        $authenticatedUserId = auth()->id();
+        $mappedUserIds = array_values(array_unique(array_map('intval', $mapping['user_ids'])));
+
+        $this->access_user_ids = array_values(array_unique([
+            ...$manualUserIds,
+            ...($authenticatedUserId ? [(int) $authenticatedUserId] : []),
+            ...$mappedUserIds,
+        ]));
+        $this->automaticallyMappedAccessUserIds = $mappedUserIds;
         $this->accessMappingWarning = null;
+    }
+
+    protected function initializeAutomaticAccessUserIds(): void
+    {
+        $mapping = app(CustomerAccessMappingResolver::class)->forCustomer(
+            $this->company_id,
+            $this->region_specific_id,
+        );
+
+        $this->automaticallyMappedAccessUserIds = $mapping['complete']
+            ? array_values(array_unique(array_map('intval', $mapping['user_ids'])))
+            : [];
     }
 
     protected function inspectAccessMappingAvailability(): void
