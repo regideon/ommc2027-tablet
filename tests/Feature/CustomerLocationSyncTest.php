@@ -17,6 +17,7 @@ test('pull stores location reference tables and customer location foreign keys',
 
     Http::fake([
         'portal.test/api/sync/pull/*' => Http::response([
+            'reference_contract_version' => 1,
             'companies' => [],
             'general_categories' => [],
             'regions' => [['id' => 1, 'code' => 'R3', 'psgc_code' => '0300000000', 'name' => 'Region III (Central Luzon)']],
@@ -25,6 +26,7 @@ test('pull stores location reference tables and customer location foreign keys',
             'municipalities' => [['id' => 9, 'region_id' => 1, 'province_id' => 7, 'name' => 'City of Angeles', 'enabled' => true]],
             'barangays' => [['id' => 55, 'municipality_id' => 9, 'psgc_code' => '0305401001', 'code' => 'pulungmaragul', 'name' => 'Barangay Pulung Maragul', 'enabled' => true]],
             'area_clusters' => [['id' => 61, 'region_specific_id' => 1, 'code' => 'gmaarea1', 'name' => 'GMA - Area 1', 'enabled' => true]],
+            'reference_counts' => ['regions' => 1, 'region_specifics' => 1, 'area_clusters' => 1, 'provinces' => 1, 'municipalities' => 1, 'barangays' => 1],
             'customers' => [[
                 'id' => 99,
                 'company_id' => null,
@@ -34,11 +36,17 @@ test('pull stores location reference tables and customer location foreign keys',
                 'municipality_id' => 9,
                 'barangay_id' => 55,
                 'area_cluster_id' => 61,
+                'person_in_charge_email' => 'pic@example.test',
+                'access_user_emails' => ['access@example.test'],
                 'address' => '123 Roxas Street',
                 'latitude' => 15.1456,
                 'longitude' => 120.5887,
                 'is_active' => true,
             ]],
+            'customer_users' => [
+                ['name' => 'Access User', 'email' => 'access@example.test'],
+                ['name' => 'PIC User', 'email' => 'pic@example.test'],
+            ],
             'customer_trade_profiles' => [], 'customer_category_histories' => [], 'customer_category_events' => [],
             'salescall_statuses' => [], 'salescall_types' => [], 'material_groups' => [], 'brands' => [],
             'categories' => [], 'sub_categories' => [], 'sub_sub_categories' => [], 'salescall_image_categories' => [],
@@ -53,7 +61,14 @@ test('pull stores location reference tables and customer location foreign keys',
         ->and(DB::table('area_clusters')->where('id', 61)->value('name'))->toBe('GMA - Area 1');
 
     $customer = Customer::findOrFail(99);
+    $accessUser = User::where('email', 'access@example.test')->firstOrFail();
+    $personInCharge = User::where('email', 'pic@example.test')->firstOrFail();
     expect($customer->province_id)->toBe(7)
         ->and($customer->barangay_id)->toBe(55)
-        ->and($customer->area_cluster_id)->toBe(61);
+        ->and($customer->area_cluster_id)->toBe(61)
+        ->and($customer->person_in_charge_id)->toBe($personInCharge->id)
+        ->and($personInCharge->id)->not->toBe(999)
+        ->and($accessUser->id)->not->toBe(999)
+        ->and($accessUser->rsm_id)->toBeNull()
+        ->and(DB::table('customer_user')->where('customer_id', 99)->where('user_id', $accessUser->id)->exists())->toBeTrue();
 });

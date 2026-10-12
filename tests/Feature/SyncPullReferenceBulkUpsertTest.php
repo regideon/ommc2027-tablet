@@ -29,8 +29,15 @@ test('pull bulk-upserts a large reference table instead of one query per row', f
         $queryCount++;
     });
 
+    $sections = [
+        'regions' => [], 'region_specifics' => [], 'area_clusters' => [], 'provinces' => [],
+        'municipalities' => [['id' => 1, 'region_id' => null, 'province_id' => null, 'name' => 'Municipality', 'enabled' => true]],
+        'barangays' => $barangays,
+    ];
+
     Http::fake([
-        'portal.test/api/sync/pull/*' => Http::response(['barangays' => $barangays], 200),
+        'portal.test/api/sync/pull/locations' => Http::response(['reference_contract_version' => 1, ...$sections, 'reference_counts' => array_map('count', $sections)], 200),
+        'portal.test/api/sync/pull/*' => Http::response([], 200),
     ]);
 
     $result = app(SyncService::class)->pull();
@@ -54,15 +61,15 @@ test('pull updates existing reference rows in place', function () {
         'enabled' => true,
     ]);
 
+    $sections = [
+        'regions' => [], 'region_specifics' => [], 'area_clusters' => [], 'provinces' => [],
+        'municipalities' => [['id' => 1, 'region_id' => null, 'province_id' => null, 'name' => 'Municipality', 'enabled' => true]],
+        'barangays' => [['id' => 1, 'municipality_id' => 1, 'psgc_code' => null, 'code' => 'NEW', 'name' => 'New name', 'enabled' => false]],
+    ];
+
     Http::fake([
-        'portal.test/api/sync/pull/*' => Http::response(['barangays' => [[
-            'id' => 1,
-            'municipality_id' => 1,
-            'psgc_code' => null,
-            'code' => 'NEW',
-            'name' => 'New name',
-            'enabled' => false,
-        ]]], 200),
+        'portal.test/api/sync/pull/locations' => Http::response(['reference_contract_version' => 1, ...$sections, 'reference_counts' => array_map('count', $sections)], 200),
+        'portal.test/api/sync/pull/*' => Http::response([], 200),
     ]);
 
     $result = app(SyncService::class)->pull();

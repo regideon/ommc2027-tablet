@@ -16,8 +16,12 @@ use BackedEnum;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+use Throwable;
 
 class CustomerPage extends Page
 {
@@ -42,7 +46,7 @@ class CustomerPage extends Page
 
     private const PHOTO_LIMIT = 15;
 
-    public ?int $selectedCustomerId = null;
+    public ?string $selectedCustomerId = null;
 
     public array $customerDetail = [];
 
@@ -53,6 +57,8 @@ class CustomerPage extends Page
     public string $search = '';
 
     public bool $pushingCustomers = false;
+
+    public ?string $retryingCustomerId = null;
 
     protected function getViewData(): array
     {
@@ -120,7 +126,7 @@ class CustomerPage extends Page
             }
 
             $notification->send();
-        } catch (\Throwable $exception) {
+        } catch (Throwable $exception) {
             report($exception);
             Notification::make()
                 ->title('Customer push could not be completed. Pending Customers remain saved locally.')
@@ -131,6 +137,30 @@ class CustomerPage extends Page
         }
     }
 
+    public function retryCustomerPush(string $customerId): void
+    {
+        $customerId = $this->validatedCustomerId($customerId);
+        $customerIdString = (string) $customerId;
+
+        if ($this->retryingCustomerId !== null || $this->selectedCustomerId !== $customerIdString) {
+            return;
+        }
+
+        $this->retryingCustomerId = $customerIdString;
+        try {
+            $result = app(SyncService::class)->retryExhaustedCustomer($customerId);
+            $notification = Notification::make()->title($result->message);
+            $result->success ? $notification->success() : $notification->warning();
+            $notification->send();
+            $this->viewCustomer($customerId);
+        } catch (Throwable $exception) {
+            report($exception);
+            Notification::make()->title('Customer retry could not be completed. The local Customer remains saved.')->danger()->send();
+        } finally {
+            $this->retryingCustomerId = null;
+        }
+    }
+
     /**
      * Loads everything except photos in one tap — all of it is either a single row
      * or capped to RECENT_LIMIT, so this stays cheap regardless of how long a
@@ -138,11 +168,60 @@ class CustomerPage extends Page
      * (see loadCustomerPhotos()) so opening a customer never downloads images
      * the user didn't ask to see.
      */
-    public function viewCustomer(int $customerId): void
+    public function viewCustomer(string $customerId): void
     {
-        $this->selectedCustomerId = $customerId;
+        $customerId = $this->validatedCustomerId($customerId);
+        $this->selectedCustomerId = (string) $customerId;
         $this->showPhotos = false;
         $this->customerPhotos = [];
+        $this->customerDetail = [];
+
+        try {
+            $this->loadCustomerDetail($customerId);
+        } catch (Throwable $exception) {
+            $reference = (string) Str::uuid();
+            $applicationFrame = collect($exception->getTrace())->first(function (array $frame): bool {
+                $file = $frame['file'] ?? null;
+
+                return is_string($file) && str_starts_with($file, app_path().DIRECTORY_SEPARATOR);
+            });
+            $this->selectedCustomerId = null;
+            $this->customerDetail = [];
+
+            Log::error('Tablet Customer detail load failed.', [
+                'reference' => $reference,
+                'customer_id' => $customerId,
+                'user_id' => Auth::id(),
+                'exception_class' => $exception::class,
+                'exception_code' => $exception->getCode(),
+                'source_file' => basename($exception->getFile()),
+                'source_line' => $exception->getLine(),
+                'database_error_code' => $exception instanceof QueryException
+                    ? ($exception->errorInfo[0] ?? null)
+                    : null,
+                'database_error_summary' => $exception instanceof QueryException
+                    ? substr((string) ($exception->errorInfo[2] ?? 'Database query failed.'), 0, 200)
+                    : null,
+                'application_frame' => $applicationFrame ? [
+                    'file' => basename($applicationFrame['file']),
+                    'line' => $applicationFrame['line'] ?? null,
+                    'class' => $applicationFrame['class'] ?? null,
+                    'function' => $applicationFrame['function'] ?? null,
+                ] : null,
+            ]);
+
+            Notification::make()
+                ->title('Customer details could not be loaded.')
+                ->body('Please try again. Reference: '.$reference)
+                ->danger()
+                ->send();
+
+            return;
+        }
+    }
+
+    private function loadCustomerDetail(int $customerId): void
+    {
 
         $profile = CustomerProfile::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))
             ->latest('created_at')
@@ -179,13 +258,22 @@ class CustomerPage extends Page
 
         $photoCount = SalescallImage::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))->count();
 
-        $customer = Customer::with(['company', 'tradeProfile', 'categoryHistories', 'province', 'barangay', 'areaCluster', 'municipality.region', 'municipality.province'])->findOrFail($customerId);
+        $customer = Customer::with([
+            'company', 'tradeProfile', 'categoryHistories', 'province', 'barangay',
+            'areaCluster', 'regionSpecific', 'personInCharge:id,name', 'users:id,name,rsm_id',
+            'municipality.region', 'municipality.province',
+        ])->findOrFail($customerId);
+        $accessUsers = $customer->users->sortBy('name')->values();
+        $drmUsers = $accessUsers->filter(fn (User $user): bool => $user->hasRole('drm'))->values();
+        $rsmIds = $drmUsers->pluck('rsm_id')->filter()->unique()->values();
+        $rsmUsers = $rsmIds->isEmpty()
+            ? collect()
+            : User::query()->whereIn('id', $rsmIds)->orderBy('name')->get(['id', 'name']);
         $physicalRegion = $customer->municipality?->region?->name;
         $province = $customer->province?->name ?? $customer->municipality?->province?->name;
         $municipality = $customer->municipality?->name;
-        $specificRegion = $customer->region_specific_id
-            ? DB::table('region_specifics')->where('id', $customer->region_specific_id)->value('name')
-            : null;
+        $specificRegion = $customer->regionSpecific?->name;
+        $pushErrorHistory = json_decode((string) DB::table('sync_states')->where('key', 'customer.push_error_history.'.$customer->id)->value('value'), true);
 
         $this->customerDetail = [
             'customer' => [
@@ -194,6 +282,10 @@ class CustomerPage extends Page
                 'address' => $customer->address,
                 'contact_person' => $customer->contact_person,
                 'contact_number' => $customer->contact_number,
+                'business_landline_number' => $customer->business_landline_number,
+                'business_mobile_number' => $customer->business_mobile_number,
+                'date_established' => $customer->date_established?->format('Y-m-d'),
+                'person_in_charge' => $customer->personInCharge?->name,
                 'physical_region' => $physicalRegion,
                 'province' => $province,
                 'barangay' => $customer->barangay?->name,
@@ -209,8 +301,19 @@ class CustomerPage extends Page
                 'is_active' => $customer->is_active,
                 'sync_status' => $customer->sync_status,
                 'sync_error' => $customer->sync_error,
-                'server_id' => $customer->server_id,
+                'previous_push_errors' => is_array($pushErrorHistory) ? array_slice($pushErrorHistory, 0, -1) : [],
+                'sync_attempts' => $customer->sync_attempts,
+                'server_id' => $customer->server_id === null ? null : (string) $customer->server_id,
             ],
+            'access_users' => $accessUsers->map(fn (User $user): array => [
+                'name' => $user->name,
+            ])->all(),
+            'drm_users' => $drmUsers->map(fn (User $user): array => [
+                'name' => $user->name,
+            ])->all(),
+            'rsm_users' => $rsmUsers->map(fn (User $user): array => [
+                'name' => $user->name,
+            ])->all(),
             'trade_profile' => $customer->tradeProfile ? [
                 'profile_type' => $customer->tradeProfile->profile_type,
                 'house_number' => $customer->tradeProfile->house_number,
@@ -286,8 +389,9 @@ class CustomerPage extends Page
      * only runs (and only downloads thumbnails) if the user explicitly expands
      * the Photos section, capped at PHOTO_LIMIT regardless of how many exist.
      */
-    public function loadCustomerPhotos(int $customerId): void
+    public function loadCustomerPhotos(string $customerId): void
     {
+        $customerId = $this->validatedCustomerId($customerId);
         $this->showPhotos = true;
 
         $this->customerPhotos = SalescallImage::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))
@@ -300,5 +404,14 @@ class CustomerPage extends Page
                 'type' => $img->type?->name ?? '—',
             ])
             ->all();
+    }
+
+    private function validatedCustomerId(string $customerId): int
+    {
+        $validatedId = filter_var($customerId, FILTER_VALIDATE_INT);
+
+        abort_if($validatedId === false, 404);
+
+        return $validatedId;
     }
 }

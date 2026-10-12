@@ -24,14 +24,15 @@ return [
         'owner' => ['owner.name', 'owner.birthday', 'owner.nickname', 'owner.successor_name', 'owner.successor_birthday', 'owner.relationship', 'owner.generation', 'owner.hobbies'],
     ],
     'field_rules' => [
-        'person_in_charge_id' => ['profiles' => ['outlet'], 'required' => true, 'type' => 'user'],
+        'person_in_charge_id' => ['profiles' => ['outlet'], 'required' => false, 'type' => 'user'],
         'rsm' => ['profiles' => ['outlet', 'fleet', 'oe', 'ib'], 'derived' => true, 'source' => 'assigned_users.rsm_id'],
         'region' => ['derived' => true, 'source' => 'coordinates'], 'specific_region' => ['derived' => true, 'source' => 'coordinates'],
         'province' => ['derived' => true, 'source' => 'coordinates'], 'municipality' => ['derived' => true, 'source' => 'coordinates'],
         'barangay' => ['derived' => true, 'source' => 'coordinates', 'available' => false],
         'area_cluster' => ['derived' => true, 'source' => 'province_mapping', 'available' => false],
         'serving_outlet_id' => ['available' => false, 'source' => 'serving_outlet_mapping'],
-        'warehouse_code' => ['required_when' => ['motiv_user' => true]], 'delivery_detail' => ['required_when' => ['delivery_type' => true]],
+        'warehouse_code' => ['profiles' => ['outlet'], 'required' => false, 'type' => 'string'],
+        'delivery_detail' => ['profiles' => ['outlet'], 'required' => false, 'type' => 'enum'],
         'conversion_program' => ['conditional' => true, 'source' => 'non_exclusive_prior_year_category'],
     ],
     'category_streams' => [

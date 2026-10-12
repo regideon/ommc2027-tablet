@@ -3,7 +3,9 @@
 use App\Filament\Pages\CustomerCreatePage;
 use App\Filament\Pages\CustomerEditPage;
 use App\Filament\Pages\CustomerPage;
+use App\Models\Customer;
 use App\Models\User;
+use App\Services\SyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -19,8 +21,10 @@ function seedCustomerCreateFixtures(): User
     DB::table('companies')->insert(['id' => 1, 'name' => 'OMMC', 'code' => 'OMMC', 'created_at' => $now, 'updated_at' => $now]);
     DB::table('regions')->insert(['id' => 1, 'code' => 'MM', 'psgc_code' => '130000000', 'name' => 'Metro Manila', 'created_at' => $now, 'updated_at' => $now]);
     DB::table('region_specifics')->insert(['id' => 1, 'region_id' => 1, 'name' => 'NCR', 'sort' => 1, 'created_at' => $now, 'updated_at' => $now]);
-    DB::table('provinces')->insert(['id' => 1, 'region_specific_id' => 1, 'name' => 'Metro Manila', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('provinces')->insert(['id' => 1, 'region_id' => 1, 'region_specific_id' => 1, 'name' => 'Metro Manila', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
     DB::table('municipalities')->insert(['id' => 1, 'region_id' => 1, 'province_id' => 1, 'name' => 'Quezon City', 'sort' => 1, 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('area_clusters')->insert(['id' => 1, 'region_specific_id' => 1, 'code' => 'cluster-1', 'name' => 'Cluster 1', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 1])]);
     DB::table('general_categories')->insert(['id' => 1, 'name' => 'Mixed Outlet', 'priority_visit' => null, 'duration_per_visit' => null, 'sort' => 1, 'created_at' => $now, 'updated_at' => $now]);
 
     return User::factory()->create();
@@ -73,6 +77,18 @@ function validCustomerCreateState(): array
     ];
 }
 
+function cacheCustomerAccessMapping(string $scope, string $key, array $users, bool $complete = true): void
+{
+    DB::table('customer_access_mappings')->insert([
+        'scope' => $scope,
+        'mapping_key' => $key,
+        'is_complete' => $complete,
+        'user_references' => json_encode($users, JSON_THROW_ON_ERROR),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+}
+
 test('customer add page renders against the complete migrated sqlite schema', function () {
     $user = seedCustomerCreateFixtures();
     $this->actingAs($user);
@@ -93,7 +109,6 @@ test('customer add page renders against the complete migrated sqlite schema', fu
         ->set('trade.entry_detail', 'AB')
         ->assertOk()
         ->assertSee('OMMC')
-        ->assertSee('NCR')
         ->assertSee('Mixed Outlet')
         ->assertSee('Store Name')
         ->assertSee('Customer Code')
@@ -119,20 +134,16 @@ test('customer add page renders against the complete migrated sqlite schema', fu
         ->assertSee('wire:model="latitude"', false)
         ->assertSee('x-model="$wire.trade.entry_detail"', false)
         ->assertSee('x-on:change="$wire.$set(\'trade.entry_detail\', $event.target.value, true)"', false)
-        ->assertSee('x-model="$wire.company_id"', false)
-        ->assertSee('x-on:change="$wire.$set(\'company_id\', $event.target.value, true)"', false)
-        ->assertSee('x-model="$wire.physical_region_id"', false)
-        ->assertSee('x-on:change="$wire.$set(\'physical_region_id\', $event.target.value, true)"', false)
-        ->assertSee('x-model="$wire.region_specific_id"', false)
-        ->assertSee('x-model="$wire.province_id"', false)
-        ->assertSee('x-on:change="$wire.$set(\'province_id\', $event.target.value, true)"', false)
-        ->assertSee('x-model="$wire.municipality_id"', false)
+        ->assertSee('wire:model.live="company_id"', false)
+        ->assertSee('wire:model.live="physical_region_id"', false)
+        ->assertSee('wire:model.live="region_specific_id"', false)
+        ->assertSee('wire:model.live="province_id"', false)
+        ->assertSee('wire:model.live="municipality_id"', false)
         ->assertDontSee('wire:model.live="trade.entry_detail"', false)
-        ->assertDontSee('wire:model.live="physical_region_id"', false)
         ->assertSee('wire:model="trade.classifications"', false)
-        ->assertSee('x-model="$wire.categories.ab.2018"', false)
+        ->assertSee('x-model="$wire.categories[\'ab\'][2018]"', false)
+        ->assertDontSee('x-model="$wire.categories.ab.2018"', false)
         ->assertSee('OMMC')
-        ->assertSee('NCR')
         ->assertSee('Metro Manila');
 
     $component->set('physical_region_id', 1)
@@ -142,7 +153,7 @@ test('customer add page renders against the complete migrated sqlite schema', fu
         ->assertSee('Quezon City');
 
     $component->set('physical_region_id', null)
-        ->assertSet('region_specific_id', 1)
+        ->assertSet('region_specific_id', null)
         ->assertSet('province_id', null)
         ->assertSet('municipality_id', null);
 
@@ -151,6 +162,86 @@ test('customer add page renders against the complete migrated sqlite schema', fu
     foreach (range(2018, 2026) as $year) {
         expect($state[$year])->toBeNull();
     }
+});
+
+test('Fleet annual category bindings save, push, edit, and push updates without losing other years', function () {
+    $user = seedCustomerCreateFixtures();
+    $user->forceFill(['api_token' => 'fleet-test-token'])->save();
+    DB::table('companies')->insert(['id' => 4, 'name' => 'Fleet', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
+    config(['sync.server_url' => 'http://portal.test']);
+    $this->actingAs($user);
+
+    Http::fake(function ($request) {
+        if (str_ends_with($request->url(), '/api/sync/reserve-customer-code')) {
+            return Http::response(['token' => 'fleet-reservation-token', 'code' => 'FLEET90001']);
+        }
+
+        return Http::response([
+            'server_id' => 99001,
+            'local_uuid' => $request['local_uuid'],
+            'unique_id' => 'FLEET90001',
+            'updated_at' => now()->toISOString(),
+        ]);
+    });
+
+    $add = Livewire::test(CustomerCreatePage::class)
+        ->set('company_id', 4)
+        ->assertSee('FLEET Annual Categories')
+        ->assertSee('x-model="$wire.categories[\'fleet\'][2018]"', false)
+        ->assertSee('x-model="$wire.categories[\'fleet\'][2026]"', false)
+        ->assertDontSee('x-model="$wire.categories.fleet.2018"', false)
+        ->set('name', 'Fleet Annual Category Contract')
+        ->set('categories.fleet.2018', 'Motolite Only')
+        ->set('categories.fleet.2026', 'Mixed')
+        ->call('saveCustomer')
+        ->assertRedirect(CustomerPage::getUrl());
+
+    $customer = DB::table('customers')->where('name', 'Fleet Annual Category Contract')->first();
+    $histories = DB::table('customer_category_histories')->where('customer_id', $customer->id)->orderBy('category_year')->get();
+
+    expect($histories->map(fn ($row): array => [$row->profile_type, $row->stream, (int) $row->category_year, $row->category])->all())
+        ->toBe([['fleet', 'fleet', 2018, 'Motolite Only'], ['fleet', 'fleet', 2026, 'Mixed']])
+        ->and($customer->server_id)->toBe(99001)
+        ->and($customer->sync_status)->toBe('synced');
+
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+        && collect($request['category_histories'])->pluck('category_year')->all() === [2018, 2026]
+        && collect($request['category_histories'])->pluck('stream')->unique()->all() === ['fleet']);
+
+    $edit = Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customer->id])
+        ->assertSee('x-model="$wire.categories[\'fleet\'][2018]"', false)
+        ->assertSet('categories.fleet.2018', 'Motolite Only')
+        ->assertSet('categories.fleet.2026', 'Mixed')
+        ->set('categories.fleet.2026', 'Competitor')
+        ->call('saveCustomer')
+        ->assertRedirect(CustomerPage::getUrl());
+
+    expect(DB::table('customer_category_histories')->where('customer_id', $customer->id)->where('category_year', 2018)->value('category'))->toBe('Motolite Only')
+        ->and(DB::table('customer_category_histories')->where('customer_id', $customer->id)->where('category_year', 2026)->value('category'))->toBe('Competitor');
+
+    $localId = (int) $customer->id;
+    app(SyncService::class)->pushCustomer($localId);
+
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+        && $request['sync_intent'] === 'update'
+        && collect($request['category_histories'])->map(fn (array $row): array => [(int) $row['category_year'], $row['category']])->all() === [[2018, 'Motolite Only'], [2026, 'Competitor']]);
+});
+
+test('Fleet Customer with intentionally blank annual categories persists no fabricated history', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('companies')->insert(['id' => 4, 'name' => 'Fleet', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+    Http::fake();
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('company_id', 4)
+        ->assertSee('x-model="$wire.categories[\'fleet\'][2018]"', false)
+        ->set('name', 'Fleet Empty Category Contract')
+        ->call('saveCustomer')
+        ->assertRedirect(CustomerPage::getUrl());
+
+    $customer = DB::table('customers')->where('name', 'Fleet Empty Category Contract')->first();
+    expect(DB::table('customer_category_histories')->where('customer_id', $customer->id)->count())->toBe(0);
 });
 
 test('customer add page saves the complete aggregate locally when its immediate push fails', function () {
@@ -190,12 +281,18 @@ test('customer add page saves the complete aggregate locally when its immediate 
         ->and($histories->pluck('category_year')->all())->toBe(range(2018, 2026))
         ->and($histories->pluck('category')->unique()->all())->toBe(['AB Loyal']);
 
-    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer'));
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+        && $request['general_category_id'] === 1
+        && $request['region_specific_id'] === 1
+        && $request['province_id'] === 1
+        && $request['municipality_id'] === 1
+        && $request['category_histories'][0]['stream'] === 'ab'
+        && count($request['category_histories']) === 9);
 
     $edit = Livewire::test(CustomerEditPage::class, ['customerId' => $customer->id])
         ->assertOk()
-        ->assertSee('x-model="$wire.company_id"', false)
-        ->assertSee('x-model="$wire.physical_region_id"', false)
+        ->assertSee('wire:model.live="company_id"', false)
+        ->assertSee('wire:model.live="physical_region_id"', false)
         ->assertSee('OMMC')
         ->assertSee('NCR')
         ->assertSee('Quezon City');
@@ -233,6 +330,57 @@ test('customer add page defaults the current local user into access without requ
         ->and(DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->exists())->toBeTrue();
 });
 
+test('Access is searchable and supports multiple local Users without changing the Add default', function () {
+    $user = seedCustomerCreateFixtures();
+    $otherUser = User::factory()->create(['name' => 'Searchable Access User']);
+    $this->actingAs($user);
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->assertSee('Search Access Users')
+        ->assertSee('Search Users')
+        ->assertSee('x-model="search"', false)
+        ->assertSee('x-show="$el.textContent.toLowerCase().includes(search.toLowerCase())"', false)
+        ->assertSee('wire:model="access_user_ids"', false)
+        ->assertDontSee('<select wire:model="access_user_ids" multiple', false);
+
+    expect($component->get('access_user_ids'))->toBe([$user->id]);
+
+    $component->set('access_user_ids', [$user->id, $otherUser->id]);
+
+    expect($component->get('access_user_ids'))->toBe([$user->id, $otherUser->id]);
+});
+
+test('Edit displays unavailable saved Company and Specific Region references without changing their IDs or Access', function () {
+    $user = seedCustomerCreateFixtures();
+    $manualUser = User::factory()->create(['email' => 'unavailable-reference-access@example.test']);
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'Unavailable Reference Customer',
+        'company_id' => 1,
+        'region_specific_id' => 1,
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_user')->insert(['customer_id' => $customerId, 'user_id' => $manualUser->id, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('companies')->where('id', 1)->delete();
+    DB::table('region_specifics')->where('id', 1)->delete();
+    $this->actingAs($user);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customerId])
+        ->assertSet('company_id', 1)
+        ->assertSet('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->assertSee('Unavailable saved Company reference (ID 1)')
+        ->assertSee('Unavailable saved Specific Region reference (ID 1)')
+        ->assertSee('The saved Company reference is unavailable offline. Its stored value is being preserved.')
+        ->assertSee('The saved Specific Region reference is unavailable offline. Its stored value is being preserved.');
+
+    expect(DB::table('customers')->where('id', $customerId)->value('company_id'))->toBe(1)
+        ->and(DB::table('customers')->where('id', $customerId)->value('region_specific_id'))->toBe(1)
+        ->and(DB::table('customer_user')->where('customer_id', $customerId)->pluck('user_id')->all())->toBe([$manualUser->id]);
+});
+
 test('customer add page preserves the default current user when adding another access user', function () {
     $user = seedCustomerCreateFixtures();
     $otherUser = User::factory()->create();
@@ -252,6 +400,495 @@ test('customer add page preserves the default current user when adding another a
         ->toBe([$user->id, $otherUser->id]);
 });
 
+test('customer add page pushes Access and PIC using user emails instead of local numeric ids', function () {
+    $user = seedCustomerCreateFixtures();
+    $pic = User::factory()->create(['email' => 'pic@example.test']);
+    $user->forceFill(['api_token' => 'tablet-token'])->save();
+    $this->actingAs($user);
+    Http::fake(['*api/sync/push/customer' => Http::response(['server_id' => 100, 'updated_at' => now()->toISOString()], 200)]);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set(validCustomerCreateState())
+        ->set('person_in_charge_id', $pic->id)
+        ->set('access_user_ids', [$user->id, $pic->id])
+        ->call('saveCustomer')
+        ->assertRedirect(CustomerPage::getUrl());
+
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+        && $request['person_in_charge_email'] === 'pic@example.test'
+        && $request['access_user_emails'] === [$user->email, 'pic@example.test']
+        && ! array_key_exists('person_in_charge_id', $request->data())
+        && ! array_key_exists('access_user_ids', $request->data()));
+});
+
+test('customer add location dependencies keep physical and commercial hierarchies independent', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('region_specifics')->insert(['id' => 2, 'region_id' => 1, 'name' => 'Commercial Region 2', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('area_clusters')->insert(['id' => 2, 'region_specific_id' => 2, 'code' => 'cluster-2', 'name' => 'Cluster 2', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set('physical_region_id', 1)
+        ->set('region_specific_id', 1)
+        ->set('province_id', 1)
+        ->set('municipality_id', 1)
+        ->set('area_cluster_id', 1)
+        ->set('barangay_id', null)
+        ->set('physical_region_id', 2)
+        ->assertSet('province_id', null)
+        ->assertSet('municipality_id', null)
+        ->assertSet('barangay_id', null)
+        ->assertSet('region_specific_id', null)
+        ->assertSet('area_cluster_id', null)
+        ->set('physical_region_id', 1)
+        ->set('province_id', 1)
+        ->set('municipality_id', 1)
+        ->set('region_specific_id', 2)
+        ->assertSet('physical_region_id', 1)
+        ->assertSet('province_id', 1)
+        ->assertSet('municipality_id', 1)
+        ->assertSet('area_cluster_id', 2);
+
+    expect($component->html())
+        ->toContain('Commercial Region 2')
+        ->toContain('Cluster 2')
+        ->toContain('Metro Manila');
+});
+
+test('physical Region filters Specific Regions and selecting one auto-selects its only enabled Area Cluster and mapped Access', function () {
+    $user = seedCustomerCreateFixtures();
+    $mappedUser = User::factory()->create(['email' => 'mapped.gma@example.test']);
+    DB::table('regions')->insert(['id' => 2, 'code' => 'R2', 'psgc_code' => '020000000', 'name' => 'Region 2', 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('region_specifics')->insert(['id' => 2, 'region_id' => 2, 'name' => 'Specific Region 2', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('area_clusters')->insert(['id' => 2, 'region_specific_id' => 2, 'code' => 'cluster-2', 'name' => 'Cluster 2', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    cacheCustomerAccessMapping('region_specific', '1', [['email' => $mappedUser->email, 'name' => $mappedUser->name]]);
+    $this->actingAs($user);
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set('physical_region_id', 1)
+        ->assertSee('NCR')
+        ->assertDontSee('Specific Region 2')
+        ->set('region_specific_id', 1)
+        ->assertSet('area_cluster_id', 1)
+        ->assertSet('access_user_ids', [$mappedUser->id])
+        ->assertSet('accessMappingWarning', null);
+
+    $component->set('access_user_ids', [$user->id])
+        ->assertSet('access_user_ids', [$user->id]);
+});
+
+test('same and repeated Add controller updates preserve manual Access while real changes use complete mappings', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('companies')->insert([
+        ['id' => 2, 'name' => 'OE', 'code' => 'OE', 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 3, 'name' => 'IB', 'code' => 'IB', 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    DB::table('region_specifics')->insert([
+        ['id' => 2, 'region_id' => 1, 'name' => 'Complete Destination', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 3, 'region_id' => 1, 'name' => 'Incomplete Destination', 'sort' => 3, 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    $geographicUser = User::factory()->create(['email' => 'same-geographic@example.test']);
+    $oeUser = User::factory()->create(['email' => 'same-oe@example.test']);
+    $ibUser = User::factory()->create(['email' => 'same-ib@example.test']);
+    $manualUser = User::factory()->create(['email' => 'same-manual@example.test']);
+    cacheCustomerAccessMapping('region_specific', '1', [['email' => $user->email, 'name' => $user->name]]);
+    cacheCustomerAccessMapping('region_specific', '2', [['email' => $geographicUser->email, 'name' => $geographicUser->name]]);
+    cacheCustomerAccessMapping('region_specific', '3', [['email' => $geographicUser->email, 'name' => $geographicUser->name]], false);
+    cacheCustomerAccessMapping('company', 'OE', [['email' => $oeUser->email, 'name' => $oeUser->name]]);
+    cacheCustomerAccessMapping('company', 'IB', [['email' => $ibUser->email, 'name' => $ibUser->name]]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('company_id', 1)
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$user->id])
+        ->set('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('access_user_ids', [])
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [])
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [])
+        ->set('region_specific_id', 2)
+        ->assertSet('access_user_ids', [$geographicUser->id])
+        ->set('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 2)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 3)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('company_id', 2)
+        ->assertSet('access_user_ids', [$oeUser->id])
+        ->set('access_user_ids', [$manualUser->id])
+        ->set('company_id', 2)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('company_id', 3)
+        ->assertSet('access_user_ids', [$ibUser->id])
+        ->set('access_user_ids', [$manualUser->id])
+        ->set('company_id', 3)
+        ->assertSet('access_user_ids', [$manualUser->id]);
+});
+
+test('Edit hydration and same or repeated Specific Region updates preserve manual Access', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('companies')->insert([
+        ['id' => 2, 'name' => 'OE', 'code' => 'OE', 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 3, 'name' => 'IB', 'code' => 'IB', 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    DB::table('region_specifics')->insert([
+        ['id' => 2, 'region_id' => 1, 'name' => 'Complete Edit Destination', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 3, 'region_id' => 1, 'name' => 'Incomplete Edit Destination', 'sort' => 3, 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    $mappedUser = User::factory()->create(['email' => 'same-edit-mapped@example.test']);
+    $manualUser = User::factory()->create(['email' => 'same-edit-manual@example.test']);
+    $oeUser = User::factory()->create(['email' => 'same-edit-oe@example.test']);
+    $partialCompanyUser = User::factory()->create(['email' => 'same-edit-partial-company@example.test']);
+    cacheCustomerAccessMapping('region_specific', '1', [['email' => $user->email, 'name' => $user->name]]);
+    cacheCustomerAccessMapping('region_specific', '2', [['email' => $mappedUser->email, 'name' => $mappedUser->name]]);
+    cacheCustomerAccessMapping('region_specific', '3', [['email' => $mappedUser->email, 'name' => $mappedUser->name]], false);
+    cacheCustomerAccessMapping('company', 'OE', [['email' => $oeUser->email, 'name' => $oeUser->name]]);
+    cacheCustomerAccessMapping('company', 'IB', [['email' => $partialCompanyUser->email, 'name' => $partialCompanyUser->name]], false);
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'Same Value Edit Customer',
+        'company_id' => 1,
+        'region_specific_id' => 1,
+        'province_id' => 1,
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_user')->insert(['customer_id' => $customerId, 'user_id' => $manualUser->id, 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customerId])
+        ->assertSet('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 2)
+        ->assertSet('access_user_ids', [$mappedUser->id])
+        ->set('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 2)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('region_specific_id', 3)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('company_id', 2)
+        ->assertSet('access_user_ids', [$oeUser->id])
+        ->set('access_user_ids', [$manualUser->id])
+        ->set('company_id', 2)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->set('company_id', 3)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->assertSet('accessMappingWarning', 'Customer Access mapping is missing or incomplete offline. Existing Access is preserved.');
+});
+
+test('multiple enabled Area Clusters are filtered by Specific Region without automatic selection', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('region_specifics')->insert(['id' => 2, 'region_id' => 1, 'name' => 'Specific Region 2', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('area_clusters')->insert([
+        ['id' => 2, 'region_specific_id' => 1, 'code' => 'cluster-1b', 'name' => 'Cluster 1B', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 3, 'region_specific_id' => 2, 'code' => 'cluster-2', 'name' => 'Cluster 2', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('physical_region_id', 1)
+        ->set('region_specific_id', 1)
+        ->assertSet('area_cluster_id', null)
+        ->assertSee('Cluster 1')
+        ->assertSee('Cluster 1B')
+        ->assertDontSee('Cluster 2');
+});
+
+test('incomplete offline mapping preserves the current Add Access selection and displays a warning', function () {
+    $user = seedCustomerCreateFixtures();
+    $partialUser = User::factory()->create(['email' => 'partial.mapping@example.test']);
+    cacheCustomerAccessMapping('region_specific', '1', [['email' => $partialUser->email, 'name' => $partialUser->name]], false);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('physical_region_id', 1)
+        ->set('region_specific_id', 1)
+        ->assertSet('area_cluster_id', 1)
+        ->assertSet('access_user_ids', [$user->id])
+        ->assertSet('accessMappingWarning', 'Customer Access mapping is missing or incomplete offline. Existing Access is preserved.')
+        ->assertSee('Existing Access is preserved.');
+});
+
+test('Add form shows no mapping warning without a controller when the mapping cache table is absent', function () {
+    $user = seedCustomerCreateFixtures();
+    Schema::drop('customer_access_mappings');
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('region_specific_id', null)
+        ->assertSet('access_user_ids', [$user->id])
+        ->assertSet('accessMappingWarning', null)
+        ->assertDontSee('Customer Access mappings are unavailable offline.');
+});
+
+test('Add form shows no mapping warning without a controller when the cache has only unrelated incomplete mappings', function () {
+    $user = seedCustomerCreateFixtures();
+    cacheCustomerAccessMapping('region_specific', '999', [], false);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('region_specific_id', null)
+        ->assertSet('access_user_ids', [$user->id])
+        ->assertSet('accessMappingWarning', null)
+        ->assertDontSee('mapping is missing or incomplete offline');
+});
+
+test('Add form preserves manual Access and reports a missing cache when a geographic controller is selected', function () {
+    $user = seedCustomerCreateFixtures();
+    Schema::drop('customer_access_mappings');
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$user->id])
+        ->assertSet('accessMappingWarning', 'Customer Access mappings are unavailable offline. Existing Access is preserved.');
+});
+
+test('Edit hydration shows no mapping warning without a controller when the mapping cache table is absent', function () {
+    $user = seedCustomerCreateFixtures();
+    $manualUser = User::factory()->create(['email' => 'no-controller-edit-manual@example.test']);
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'No Controller Customer',
+        'company_id' => 1,
+        'region_specific_id' => null,
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_user')->insert(['customer_id' => $customerId, 'user_id' => $manualUser->id, 'created_at' => now(), 'updated_at' => now()]);
+    Schema::drop('customer_access_mappings');
+    $this->actingAs($user);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customerId])
+        ->assertSet('region_specific_id', null)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->assertSet('accessMappingWarning', null)
+        ->assertDontSee('Customer Access mappings are unavailable offline.');
+});
+
+test('Edit hydration shows no mapping warning without a controller when cached mappings are incomplete', function () {
+    $user = seedCustomerCreateFixtures();
+    $manualUser = User::factory()->create(['email' => 'no-controller-incomplete-edit-manual@example.test']);
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'No Controller Incomplete Mapping Customer',
+        'company_id' => 1,
+        'region_specific_id' => null,
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_user')->insert(['customer_id' => $customerId, 'user_id' => $manualUser->id, 'created_at' => now(), 'updated_at' => now()]);
+    cacheCustomerAccessMapping('region_specific', '999', [], false);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customerId])
+        ->assertSet('region_specific_id', null)
+        ->assertSet('access_user_ids', [$manualUser->id])
+        ->assertSet('accessMappingWarning', null)
+        ->assertDontSee('mapping is missing or incomplete offline');
+});
+
+test('OE and IB Company selections resolve their cached mappings by Company code', function (string $code, string $profile) {
+    $user = seedCustomerCreateFixtures();
+    $companyId = 2;
+    DB::table('companies')->insert(['id' => $companyId, 'name' => $code, 'code' => $code, 'created_at' => now(), 'updated_at' => now()]);
+    $mappedUser = User::factory()->create(['email' => "mapped.{$code}@example.test"]);
+    cacheCustomerAccessMapping('company', $code, [['email' => $mappedUser->email, 'name' => $mappedUser->name]]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('company_id', $companyId)
+        ->assertSet('access_user_ids', [$mappedUser->id])
+        ->assertSet('accessMappingWarning', null)
+        ->assertSee(ucfirst($profile).' Profile');
+})->with([
+    ['OE', 'oe'],
+    ['IB', 'ib'],
+]);
+
+test('Add form preserves manual Access and warns for incomplete OE and IB Company mappings', function (string $code) {
+    $user = seedCustomerCreateFixtures();
+    DB::table('companies')->insert(['id' => 2, 'name' => $code, 'code' => $code, 'created_at' => now(), 'updated_at' => now()]);
+    $partialUser = User::factory()->create(['email' => "partial.{$code}@example.test"]);
+    cacheCustomerAccessMapping('company', $code, [['email' => $partialUser->email, 'name' => $partialUser->name]], false);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('access_user_ids', [$partialUser->id])
+        ->set('company_id', 2)
+        ->assertSet('access_user_ids', [$partialUser->id])
+        ->assertSet('accessMappingWarning', 'Customer Access mapping is missing or incomplete offline. Existing Access is preserved.');
+})->with(['OE', 'IB']);
+
+test('editing an unchanged Specific Region preserves manual Access during mapping hydration', function () {
+    $user = seedCustomerCreateFixtures();
+    $mappedUser = User::factory()->create(['email' => 'mapped.edit@example.test']);
+    cacheCustomerAccessMapping('region_specific', '1', [['email' => $mappedUser->email, 'name' => $mappedUser->name]]);
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'Existing Customer',
+        'company_id' => 1,
+        'region_specific_id' => 1,
+        'province_id' => 1,
+        'municipality_id' => 1,
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_user')->insert(['customer_id' => $customerId, 'user_id' => $user->id, 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customerId])
+        ->assertSet('region_specific_id', 1)
+        ->assertSet('access_user_ids', [$user->id])
+        ->assertSet('accessMappingWarning', null);
+
+    expect(DB::table('customer_user')->where('customer_id', $customerId)->pluck('user_id')->all())->toBe([$user->id]);
+});
+
+test('editing a changed Specific Region replaces Access only for a complete offline mapping', function () {
+    $user = seedCustomerCreateFixtures();
+    $mappedUser = User::factory()->create(['email' => 'mapped.changed@example.test']);
+    DB::table('region_specifics')->insert(['id' => 2, 'region_id' => 1, 'name' => 'Specific Region 2', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('area_clusters')->insert(['id' => 2, 'region_specific_id' => 2, 'code' => 'cluster-2', 'name' => 'Cluster 2', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    cacheCustomerAccessMapping('region_specific', '2', [['email' => $mappedUser->email, 'name' => $mappedUser->name]]);
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'Existing Customer',
+        'company_id' => 1,
+        'region_specific_id' => 1,
+        'province_id' => 1,
+        'municipality_id' => 1,
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_user')->insert(['customer_id' => $customerId, 'user_id' => $user->id, 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+
+    $component = Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customerId])
+        ->set('region_specific_id', 2)
+        ->assertSet('area_cluster_id', 2)
+        ->assertSet('access_user_ids', [$mappedUser->id])
+        ->assertSet('accessMappingWarning', null);
+    $component->call('saveCustomer')->assertHasNoErrors();
+
+    expect(DB::table('customer_user')->where('customer_id', $customerId)->pluck('user_id')->all())->toBe([$mappedUser->id]);
+});
+
+test('editing a changed Specific Region preserves Access and warns when offline mapping is incomplete', function () {
+    $user = seedCustomerCreateFixtures();
+    $partialUser = User::factory()->create(['email' => 'partial.edit@example.test']);
+    DB::table('region_specifics')->insert(['id' => 2, 'region_id' => 1, 'name' => 'Specific Region 2', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()]);
+    cacheCustomerAccessMapping('region_specific', '2', [['email' => $partialUser->email, 'name' => $partialUser->name]], false);
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'Existing Customer',
+        'company_id' => 1,
+        'region_specific_id' => 1,
+        'province_id' => 1,
+        'municipality_id' => 1,
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_user')->insert(['customer_id' => $customerId, 'user_id' => $user->id, 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customerId])
+        ->set('region_specific_id', 2)
+        ->assertSet('access_user_ids', [$user->id])
+        ->assertSet('accessMappingWarning', 'Customer Access mapping is missing or incomplete offline. Existing Access is preserved.')
+        ->assertSee('Existing Access is preserved.');
+
+    expect(DB::table('customer_user')->where('customer_id', $customerId)->pluck('user_id')->all())->toBe([$user->id]);
+});
+
+test('an exhausted failed Customer can be corrected in the existing edit page without changing its code or local identity', function () {
+    $user = seedCustomerCreateFixtures();
+    $now = now();
+    DB::table('region_specifics')->insert(['id' => 2, 'region_id' => 1, 'name' => 'Current Commercial Region', 'sort' => 2, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('customers')->insert([
+        'id' => -44,
+        'local_uuid' => '44444444-4444-4444-8444-444444444444',
+        'name' => 'Failed Customer',
+        'unique_id' => 'OMMC0044',
+        'customer_code_reservation_token' => '44444444-4444-4444-8444-444444444445',
+        'company_id' => 1,
+        'region_specific_id' => 1,
+        'is_active' => true,
+        'sync_status' => 'failed',
+        'sync_attempts' => 3,
+        'sync_error' => '422: selected region-specific id is invalid',
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => -44])
+        ->assertSet('region_specific_id', 1)
+        ->assertSee('NCR')
+        ->assertDontSee('historical; unavailable')
+        ->set('region_specific_id', 2)
+        ->set('area_cluster_id', null)
+        ->call('saveCustomer')
+        ->assertHasNoErrors();
+
+    $customer = Customer::findOrFail(-44);
+    expect($customer->region_specific_id)->toBe(2)
+        ->and($customer->unique_id)->toBe('OMMC0044')
+        ->and($customer->customer_code_reservation_token)->toBe('44444444-4444-4444-8444-444444444445')
+        ->and($customer->local_uuid)->toBe('44444444-4444-4444-8444-444444444444')
+        ->and($customer->sync_status)->toBe('failed')
+        ->and($customer->sync_attempts)->toBe(3)
+        ->and(DB::table('sync_states')->where('key', 'customer.manual_retry_ready.-44')->exists())->toBeTrue();
+});
+
+test('editing a non-outlet Customer accepts Access users without RSM and preserves its hidden PIC relationship', function () {
+    $viewer = seedCustomerCreateFixtures();
+    $now = now();
+    DB::table('companies')->insert(['id' => 4, 'name' => 'FLEET', 'code' => 'FLEET', 'created_at' => $now, 'updated_at' => $now]);
+    $access = User::factory()->create(['rsm_id' => null]);
+    $pic = User::factory()->create();
+    $customer = new Customer;
+    $customer->id = -45;
+    $customer->fill([
+        'name' => 'Fleet edit customer',
+        'company_id' => 4,
+        'person_in_charge_id' => $pic->id,
+        'is_active' => true,
+        'sync_status' => 'synced',
+    ]);
+    $customer->save();
+    $customer->tradeProfile()->create(['profile_type' => 'fleet', 'profile_data' => ['active' => []]]);
+    $customer->users()->attach($access->id);
+    $this->actingAs($viewer);
+
+    Livewire::test(CustomerEditPage::class, ['customerId' => -45])
+        ->set('name', 'Edited Fleet customer')
+        ->call('saveCustomer')
+        ->assertHasNoErrors()
+        ->assertRedirect(CustomerPage::getUrl());
+
+    expect(Customer::findOrFail(-45)->person_in_charge_id)->toBe($pic->id)
+        ->and(DB::table('customer_user')->where('customer_id', -45)->where('user_id', $access->id)->exists())->toBeTrue()
+        ->and(DB::table('customers')->where('id', -45)->value('name'))->toBe('Edited Fleet customer')
+        ->and($access->fresh()->rsm_id)->toBeNull();
+});
+
 test('customer add page still rejects an invalid access user id', function () {
     $user = seedCustomerCreateFixtures();
     $user->forceFill(['api_token' => 'tablet-token'])->save();
@@ -268,11 +905,137 @@ test('customer add page still rejects an invalid access user id', function () {
     Http::assertNotSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer'));
 });
 
+test('customer add page accepts blank Warehouse Code when MOTIV User is enabled', function () {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set(array_replace_recursive(validCustomerCreateState(), ['trade' => ['motiv_user' => true]]))
+        ->call('saveCustomer')
+        ->assertHasNoErrors();
+
+    $customer = DB::table('customers')->where('name', 'Diagnostic Customer')->first();
+    $profile = DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->first();
+    expect($customer)->not->toBeNull()
+        ->and(json_decode($profile->profile_data, true)['active']['warehouse_code'] ?? null)->toBeNull();
+});
+
+test('customer add page accepts blank Delivery Detail when Delivery Type is Yes', function () {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set(array_replace_recursive(validCustomerCreateState(), ['active' => ['delivery_type' => 'yes']]))
+        ->call('saveCustomer')
+        ->assertHasNoErrors();
+
+    $customer = DB::table('customers')->where('name', 'Diagnostic Customer')->first();
+    $profile = DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->first();
+    expect($customer)->not->toBeNull()
+        ->and(json_decode($profile->profile_data, true)['active']['delivery_type'])->toBe('yes')
+        ->and(json_decode($profile->profile_data, true)['active']['delivery_detail'] ?? null)->toBeNull();
+});
+
+test('customer add validates supplied Warehouse Code and Delivery Detail values without conditional requiredness', function () {
+    $user = seedCustomerCreateFixtures();
+    $user->forceFill(['api_token' => 'tablet-token'])->save();
+    $this->actingAs($user);
+    Http::fake(['*' => Http::response(['server_id' => 100, 'updated_at' => now()->toISOString()], 200)]);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set(array_replace_recursive(validCustomerCreateState(), [
+            'trade' => ['motiv_user' => true],
+            'active' => ['warehouse_code' => 'WH-123', 'delivery_type' => 'yes', 'delivery_detail' => 'own_delivery'],
+        ]))
+        ->call('saveCustomer')
+        ->assertHasNoErrors();
+
+    $customer = DB::table('customers')->where('name', 'Diagnostic Customer')->first();
+    $active = json_decode(DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->value('profile_data'), true)['active'];
+    expect($active['warehouse_code'])->toBe('WH-123')
+        ->and($active['delivery_detail'])->toBe('own_delivery');
+
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+        && data_get($request->data(), 'profile_data.active.warehouse_code') === 'WH-123'
+        && data_get($request->data(), 'profile_data.active.delivery_detail') === 'own_delivery');
+});
+
+test('customer add rejects malformed populated Warehouse Code and Delivery Detail values', function () {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set(array_replace_recursive(validCustomerCreateState(), ['active' => ['delivery_detail' => 'invalid']]))
+        ->call('saveCustomer')
+        ->assertHasErrors(['active.delivery_detail']);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set(array_replace_recursive(validCustomerCreateState(), ['active' => ['warehouse_code' => str_repeat('x', 256)]]))
+        ->call('saveCustomer')
+        ->assertHasErrors(['active.warehouse_code']);
+
+    expect(DB::table('customers')->where('name', 'Diagnostic Customer')->exists())->toBeFalse();
+});
+
+test('customer add minimum Name and Company creation supports every mapped company profile including CAR_CLUBS', function () {
+    $user = seedCustomerCreateFixtures();
+    $companies = [
+        [2, 'LAST MILE', 'LAST_MILE'], [3, 'FLEET', 'FLEET'], [4, 'OE', 'OE'], [5, 'IB', 'IB'], [6, 'CAR CLUBS', 'CAR_CLUBS'],
+    ];
+    foreach ($companies as [$id, $name, $code]) {
+        DB::table('companies')->insert(['id' => $id, 'name' => $name, 'code' => $code, 'created_at' => now(), 'updated_at' => now()]);
+    }
+    $this->actingAs($user);
+    Http::fake(['*' => Http::response(['message' => 'offline'], 503)]);
+
+    foreach ([1, 2, 3, 4, 5, 6] as $companyId) {
+        Livewire::test(CustomerCreatePage::class)
+            ->set('name', "Minimal Customer {$companyId}")
+            ->set('company_id', $companyId)
+            ->call('saveCustomer')
+            ->assertHasNoErrors();
+    }
+
+    expect(DB::table('customers')->whereIn('name', collect(range(1, 6))->map(fn ($id) => "Minimal Customer {$id}")->all())->count())->toBe(6)
+        ->and(DB::table('customer_trade_profiles')->whereIn('customer_id', DB::table('customers')->whereIn('name', collect(range(1, 6))->map(fn ($id) => "Minimal Customer {$id}")->all())->select('id'))->count())->toBe(6);
+});
+
+test('switching company profile clears validation state and does not persist stale outlet values', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('companies')->insert(['id' => 2, 'name' => 'FLEET', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+    Http::fake();
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set('name', 'Fleet after switch')
+        ->set('company_id', 1)
+        ->set('active.delivery_detail', 'invalid')
+        ->call('saveCustomer')
+        ->assertHasErrors(['active.delivery_detail'])
+        ->set('company_id', 2)
+        ->assertSet('active', [])
+        ->assertHasNoErrors()
+        ->set('name', 'Fleet after switch')
+        ->call('saveCustomer')
+        ->assertHasNoErrors();
+
+    $customer = DB::table('customers')->where('name', 'Fleet after switch')->first();
+    $profile = DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->first();
+    expect($profile->profile_type)->toBe('fleet')
+        ->and(json_decode($profile->profile_data, true)['active'] ?? [])->toBe([]);
+});
+
 test('customer add page renders the scoped customer-create-form styling hook', function () {
     $user = seedCustomerCreateFixtures();
     $this->actingAs($user);
 
-    Livewire::test(CustomerCreatePage::class)
+    $component = Livewire::test(CustomerCreatePage::class)
         ->assertOk()
         ->assertSee('customer-create-form', false);
+
+    expect(substr_count($component->html(), '<form '))->toBe(1)
+        ->and(substr_count($component->html(), '</form>'))->toBe(1);
 });

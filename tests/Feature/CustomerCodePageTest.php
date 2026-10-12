@@ -82,7 +82,8 @@ test('reservation failure leaves Customer Code blank without local allocation', 
 test('creation keeps the reservation token on the local Customer when its automatic push fails', function () {
     $user = seedCustomerCodePageFixtures('tablet-token');
     $this->actingAs($user);
-    Http::fake(['portal.test/api/sync/push/customer' => Http::response(['message' => 'Unavailable'], 503)]);
+    config(['sync.server_url' => 'http://portal.test']);
+    Http::fake(['portal.test/api/sync/push/customer' => Http::response(['message' => 'Specific Region ID is invalid'], 500)]);
 
     Livewire::test(CustomerCreatePage::class)
         ->set('company_id', 1)
@@ -90,7 +91,8 @@ test('creation keeps the reservation token on the local Customer when its automa
         ->set('unique_id', 'OMMC08738')
         ->set('customer_code_reservation_token', '11111111-1111-4111-8111-111111111111')
         ->call('saveCustomer')
-        ->assertRedirect(CustomerPage::getUrl());
+        ->assertRedirect(CustomerPage::getUrl())
+        ->assertSessionHas('filament.notifications.0.body', 'Portal returned HTTP 500: Specific Region ID is invalid');
 
     $customer = DB::table('customers')->where('name', 'Pending Customer')->first();
     expect($customer->customer_code_reservation_token)->toBe('11111111-1111-4111-8111-111111111111')

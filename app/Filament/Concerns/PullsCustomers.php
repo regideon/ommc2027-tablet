@@ -13,7 +13,7 @@ use Throwable;
 trait PullsCustomers
 {
     /**
-     * @return array{success: bool, done: bool, pulled: int, total: ?int, message: string}
+     * @return array{success: bool, done: bool, customer_pull_succeeded: bool, location_pull_succeeded: ?bool, location_refresh_failed: bool, full_sync_succeeded: bool, pulled: int, returned: int, inserted: int, updated: int, unchanged: int, rejected: int, total: ?int, message: string}
      */
     public function pullCustomersStep(): array
     {

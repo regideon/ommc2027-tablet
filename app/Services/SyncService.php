@@ -22,10 +22,12 @@ use App\Support\ExpensePaymentType;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Spatie\Permission\Models\Role;
 use Throwable;
 
@@ -211,6 +213,13 @@ class SyncService
             return SyncResult::fail('No API token found. Please log in first.', 'no_token');
         }
 
+        if (! DB::table('sync_states')->where('key', 'location_reference_snapshot_complete')->exists()) {
+            $locations = $this->pullLocations();
+            if (! $locations->success) {
+                return $locations;
+            }
+        }
+
         $data = $this->fetchPullPayload($user, '/api/sync/pull/schedule');
 
         if ($data instanceof SyncResult) {
@@ -221,14 +230,6 @@ class SyncService
             DB::transaction(fn () => $this->applyPullPayload($data, $user));
         } catch (\Exception $e) {
             return SyncResult::fail('Pull error: '.$e->getMessage(), 'exception');
-        }
-
-        if (DB::table('municipalities')->doesntExist()) {
-            $locations = $this->pullLocations();
-
-            if (! $locations->success) {
-                return $locations;
-            }
         }
 
         $itineraryCount = count($data['itineraries'] ?? []);
@@ -257,12 +258,241 @@ class SyncService
         }
 
         try {
-            DB::transaction(fn () => $this->applyPullPayload($data, $user));
+            $this->validateLocationSnapshot($data);
+            $data['customer_access_mappings'] ??= [];
+
+            DB::transaction(function () use ($data, $user): void {
+                $this->applyPullPayload($data, $user);
+
+                $this->putSyncState('location_reference_snapshot_complete', [
+                    'completed_at' => now()->toISOString(),
+                    'reference_contract_version' => 1,
+                ]);
+            });
         } catch (\Exception $e) {
             return SyncResult::fail('Pull error: '.$e->getMessage(), 'exception');
         }
 
         return SyncResult::ok('Pulled location references.');
+    }
+
+    private function validateLocationSnapshot(array $data): void
+    {
+        $sections = ['regions', 'region_specifics', 'area_clusters', 'provinces', 'municipalities', 'barangays'];
+        $parentKeys = [
+            'region_specifics' => ['region_id' => 'regions'],
+            'area_clusters' => ['region_specific_id' => 'region_specifics'],
+            'provinces' => ['region_id' => 'regions'],
+            'municipalities' => ['region_id' => 'regions', 'province_id' => 'provinces'],
+            'barangays' => ['municipality_id' => 'municipalities'],
+        ];
+        $requiredParents = [
+            'region_specifics' => ['region_id'],
+            'area_clusters' => ['region_specific_id'],
+            'barangays' => ['municipality_id'],
+        ];
+        $requiredStrings = [
+            'regions' => ['code'],
+            'area_clusters' => ['code'],
+            'barangays' => ['code'],
+        ];
+        $nullableParentKeys = [
+            'provinces' => ['region_id'],
+            'municipalities' => ['region_id', 'province_id'],
+        ];
+
+        if (($data['reference_contract_version'] ?? null) !== 1 || ! is_array($data['reference_counts'] ?? null)) {
+            throw new \RuntimeException('Portal location response is missing supported snapshot metadata.');
+        }
+
+        $ids = [];
+        foreach ($sections as $section) {
+            $rows = $data[$section] ?? null;
+            $expected = $data['reference_counts'][$section] ?? null;
+
+            if (! is_array($rows) || ! array_is_list($rows) || ! is_int($expected) || $expected < 0 || count($rows) !== $expected) {
+                throw new \RuntimeException("Portal location response section {$section} is incomplete or malformed.");
+            }
+
+            $ids[$section] = [];
+            foreach ($rows as $row) {
+                if (! is_array($row) || ! is_int($row['id'] ?? null) || $row['id'] < 1 || ! is_string($row['name'] ?? null) || trim($row['name']) === '') {
+                    throw new \RuntimeException("Portal location response contains an invalid {$section} row.");
+                }
+                foreach ($requiredParents[$section] ?? [] as $parentKey) {
+                    if (! is_int($row[$parentKey] ?? null) || $row[$parentKey] < 1) {
+                        throw new \RuntimeException("Portal location response contains an invalid {$section}.{$parentKey} value.");
+                    }
+                }
+                foreach ($requiredStrings[$section] ?? [] as $stringKey) {
+                    if (! is_string($row[$stringKey] ?? null) || trim($row[$stringKey]) === '') {
+                        throw new \RuntimeException("Portal location response contains an invalid {$section}.{$stringKey} value.");
+                    }
+                }
+                foreach ($nullableParentKeys[$section] ?? [] as $parentKey) {
+                    if (($row[$parentKey] ?? null) !== null && (! is_int($row[$parentKey]) || $row[$parentKey] < 1)) {
+                        throw new \RuntimeException("Portal location response contains an invalid {$section}.{$parentKey} value.");
+                    }
+                }
+                if (in_array($section, ['area_clusters', 'provinces', 'barangays'], true)
+                    && ! (is_bool($row['enabled'] ?? null) || in_array($row['enabled'] ?? null, [0, 1, '0', '1'], true))) {
+                    throw new \RuntimeException("Portal location response contains an invalid {$section}.enabled value.");
+                }
+                if (in_array($row['id'], $ids[$section], true)) {
+                    throw new \RuntimeException("Portal location response contains duplicate {$section} IDs.");
+                }
+                $ids[$section][] = $row['id'];
+            }
+        }
+
+        if (array_diff(array_keys($data['reference_counts']), $sections) !== [] || count($data['reference_counts']) !== count($sections)) {
+            throw new \RuntimeException('Portal location response count metadata does not match its required sections.');
+        }
+
+        if (array_key_exists('customer_access_mappings', $data)) {
+            $this->validateCustomerAccessMappings($data['customer_access_mappings'], $ids['region_specifics']);
+        }
+        if (array_key_exists('location_area_cluster_mappings', $data)) {
+            $this->validateLocationAreaClusterMappings($data['location_area_cluster_mappings'], $data);
+        }
+
+        $idSets = array_map(fn (array $sectionIds): array => array_fill_keys($sectionIds, true), $ids);
+        foreach ($sections as $section) {
+            foreach ($data[$section] as $row) {
+                foreach ($parentKeys[$section] ?? [] as $parentKey => $parentSection) {
+                    $parentId = $row[$parentKey] ?? null;
+                    if ($parentId !== null && (! is_int($parentId) || ! isset($idSets[$parentSection][$parentId]))) {
+                        throw new \RuntimeException("Portal location response contains an invalid {$section}.{$parentKey} parent.");
+                    }
+                }
+            }
+        }
+
+        $provinceRows = collect($data['provinces'])->keyBy('id');
+        foreach ($data['municipalities'] as $municipality) {
+            $province = isset($municipality['province_id']) ? $provinceRows->get($municipality['province_id']) : null;
+            if ($province && $municipality['region_id'] !== null && $province['region_id'] !== null
+                && (int) $municipality['region_id'] !== (int) $province['region_id']) {
+                throw new \RuntimeException('Portal location response contains a Municipality outside its physical Province Region.');
+            }
+        }
+
+    }
+
+    /**
+     * @param  list<int>  $regionSpecificIds
+     */
+    private function validateCustomerAccessMappings(mixed $rows, array $regionSpecificIds): void
+    {
+        if (! is_array($rows) || ! array_is_list($rows)) {
+            throw new \RuntimeException('Portal Customer Access mapping references are incomplete or malformed.');
+        }
+
+        $mappingKeys = [];
+        foreach ($rows as $row) {
+            if (! is_array($row) || ! is_bool($row['is_complete'] ?? null) || ! is_array($row['users'] ?? null) || ! array_is_list($row['users'])) {
+                throw new \RuntimeException('Portal returned an invalid Customer Access mapping row.');
+            }
+
+            if (($row['scope'] ?? null) === 'region_specific') {
+                $mappingKey = $row['region_specific_id'] ?? null;
+                if (! is_int($mappingKey) || $mappingKey < 1 || ! in_array($mappingKey, $regionSpecificIds, true)
+                    || ! is_string($row['group_code'] ?? null) || trim($row['group_code']) === '') {
+                    throw new \RuntimeException('Portal returned an invalid Specific Region Access mapping reference.');
+                }
+                $mappingKey = (string) $mappingKey;
+            } elseif (($row['scope'] ?? null) === 'company') {
+                $mappingKey = $row['company_code'] ?? null;
+                if (! is_string($mappingKey) || ! in_array($mappingKey, ['OE', 'IB'], true)) {
+                    throw new \RuntimeException('Portal returned an invalid Company Access mapping reference.');
+                }
+            } else {
+                throw new \RuntimeException('Portal returned an unsupported Customer Access mapping scope.');
+            }
+
+            $scope = $row['scope'];
+            if (isset($mappingKeys[$scope][$mappingKey])) {
+                throw new \RuntimeException('Portal returned duplicate Customer Access mapping keys.');
+            }
+            $mappingKeys[$scope][$mappingKey] = true;
+
+            $emails = [];
+            foreach ($row['users'] as $reference) {
+                if (! is_array($reference) || ! is_string($reference['email'] ?? null)
+                    || filter_var($reference['email'], FILTER_VALIDATE_EMAIL) === false
+                    || ! is_string($reference['name'] ?? null) || trim($reference['name']) === '') {
+                    throw new \RuntimeException('Portal returned an invalid mapped User identity.');
+                }
+                if (in_array($reference['email'], $emails, true)) {
+                    throw new \RuntimeException('Portal returned a duplicate mapped User email.');
+                }
+                $emails[] = $reference['email'];
+            }
+
+            if ($row['is_complete'] && $emails === []) {
+                throw new \RuntimeException('Portal marked an empty Customer Access mapping complete.');
+            }
+        }
+    }
+
+    /** @param array<string, mixed> $snapshot */
+    private function validateLocationAreaClusterMappings(mixed $rows, array $snapshot): void
+    {
+        if (! is_array($rows) || ! array_is_list($rows)) {
+            throw new \RuntimeException('Portal location mapping references are incomplete or malformed.');
+        }
+
+        $provinces = collect($snapshot['provinces'])->keyBy('id');
+        $municipalities = collect($snapshot['municipalities'])->keyBy('id');
+        $barangays = collect($snapshot['barangays'])->keyBy('id');
+        $regionSpecifics = collect($snapshot['region_specifics'])->keyBy('id');
+        $areaClusters = collect($snapshot['area_clusters'])->keyBy('id');
+        $keys = [];
+
+        foreach ($rows as $row) {
+            if (! is_array($row) || ! is_int($row['id'] ?? null) || $row['id'] < 1
+                || ! in_array($row['location_level'] ?? null, ['province', 'municipality', 'barangay'], true)
+                || ! is_int($row['location_id'] ?? null) || $row['location_id'] < 1
+                || ! in_array($row['decision'] ?? null, ['mapped', 'unresolved', 'requires_finer_location'], true)) {
+                throw new \RuntimeException('Portal returned an invalid location mapping row.');
+            }
+
+            $level = $row['location_level'];
+            $locationId = $row['location_id'];
+            $location = match ($level) {
+                'province' => $provinces->get($locationId),
+                'municipality' => $municipalities->get($locationId),
+                'barangay' => $barangays->get($locationId),
+            };
+            $key = $level.':'.$locationId;
+            if (! $location || isset($keys[$key]) || isset($keys['id:'.$row['id']])) {
+                throw new \RuntimeException('Portal returned a missing or duplicate location mapping key.');
+            }
+            $keys[$key] = true;
+            $keys['id:'.$row['id']] = true;
+
+            if ($row['decision'] !== 'mapped') {
+                if (($row['area_cluster_id'] ?? null) !== null) {
+                    throw new \RuntimeException('A blocked location mapping cannot include an Area Cluster.');
+                }
+
+                continue;
+            }
+
+            $clusterId = $row['area_cluster_id'] ?? null;
+            $cluster = is_int($clusterId) ? $areaClusters->get($clusterId) : null;
+            $specificRegion = $cluster ? $regionSpecifics->get($cluster['region_specific_id']) : null;
+            $physicalRegionId = match ($level) {
+                'province' => $location['region_id'] ?? null,
+                'municipality' => $location['region_id'] ?? null,
+                'barangay' => $municipalities->get($location['municipality_id'])['region_id'] ?? null,
+            };
+
+            if (! $cluster || ! $cluster['enabled'] || ! $specificRegion || ! is_int($physicalRegionId)
+                || (int) $specificRegion['region_id'] !== $physicalRegionId) {
+                throw new \RuntimeException('Portal returned a location mapping with an invalid Area Cluster or physical Region.');
+            }
+        }
     }
 
     /**
@@ -286,13 +516,13 @@ class SyncService
      * repeats until `done` (or a failure), so each request does at most one
      * portal round trip and stays inside the device's execution time limit.
      *
-     * A run with no watermark pulls every customer in scope (plus location
-     * references); later runs ask only for customers changed since the last
-     * completed run. The last page reconciles scope: customers that left it are
+     * Every run refreshes location references before customer pages; the
+     * customer watermark still limits later runs to changed customers. The
+     * last page reconciles scope: customers that left it are
      * deactivated locally and customers that came back into it are re-fetched.
      * Progress is checkpointed after every step, so an interrupted run resumes.
      *
-     * @return array{success: bool, done: bool, pulled: int, total: ?int, message: string}
+     * @return array{success: bool, done: bool, customer_pull_succeeded: bool, location_pull_succeeded: ?bool, location_refresh_failed: bool, full_sync_succeeded: bool, pulled: int, total: ?int, message: string}
      */
     public function pullCustomersStep(): array
     {
@@ -304,23 +534,44 @@ class SyncService
 
         $runKey = self::CUSTOMER_PULL_RUN.$user->id;
         $run = $this->syncState($runKey) ?? $this->startCustomerPullRun($user);
+        $run['counts'] ??= ['returned' => 0, 'inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'rejected' => 0];
+        if (($run['phase'] ?? null) !== 'locations' && ! array_key_exists('location_refresh_attempted', $run)) {
+            // Older interrupted runs entered `pages` only after a successful
+            // location Pull, before these stage results were added to progress.
+            $run['location_refresh_attempted'] = true;
+            $run['location_refresh_failed'] = false;
+            $run['location_failure_message'] = null;
+        }
 
         // A failed step checkpoints the run as it was before the step, so the
         // retry repeats the whole step rather than resuming half-applied state.
         $runBeforeStep = $run;
+        $currentPageReturned = 0;
 
         try {
             if ($run['phase'] === 'locations') {
                 $result = $this->pullLocations();
 
+                $run['location_refresh_attempted'] = true;
+                $run['location_refresh_failed'] = ! $result->success;
+                $run['location_failure_message'] = $result->success ? null : $result->message;
                 if (! $result->success) {
-                    $this->putSyncState($runKey, $run);
-
-                    return $this->customerPullProgress($run, false, false, $result->message);
+                    Log::warning('sync:pull:locations:failed', [
+                        'error_code' => $result->errorCode,
+                        'message' => $result->message,
+                    ]);
                 }
-
                 $run['phase'] = 'pages';
                 $this->putSyncState($runKey, $run);
+
+                if (! $result->success) {
+                    return $this->customerPullProgress(
+                        $run,
+                        true,
+                        false,
+                        'Location references could not be refreshed; existing local reference data was preserved. Continuing Customer Pull.'
+                    );
+                }
 
                 return $this->customerPullProgress($run, true, false, 'Location references updated.');
             }
@@ -337,50 +588,80 @@ class SyncService
 
             if ($data instanceof SyncResult) {
                 $this->putSyncState($runKey, $run);
-
-                return $this->customerPullProgress($run, false, false, $data->message);
-            }
-
-            DB::transaction(fn () => $this->applyPullPayload($data, $user));
-
-            $run['pulled'] += count($data['customers'] ?? []);
-
-            if ($run['phase'] === 'missing') {
-                $this->addToCustomerScope($user, array_column($data['customers'] ?? [], 'id'));
-                $run['missing'] = array_values(array_slice($run['missing'], self::CUSTOMER_PULL_IDS_PER_REQUEST));
-            } else {
-                if ($run['after_id'] === 0) {
-                    $run['total'] = $data['total'] ?? null;
-                    $run['server_time'] = $data['server_time'] ?? null;
+                $message = 'Customer Pull failed: '.$data->message;
+                if ($run['location_refresh_failed'] ?? false) {
+                    $message .= ' Location refresh also failed; existing local reference data was preserved.';
                 }
 
-                $run['after_id'] = $data['next_after_id'] ?? null;
-
-                if ($run['after_id'] === null) {
-                    $run['missing'] = $this->recordCustomerScope($user, $data['scope_ids'] ?? null);
-                    $run['phase'] = 'missing';
-                }
+                return $this->customerPullProgress($run, false, false, $message);
             }
 
-            if ($run['phase'] === 'missing' && $run['missing'] === []) {
-                $this->putSyncState(self::CUSTOMER_PULL_WATERMARK.$user->id, $run['server_time']);
-                $this->forgetSyncState($runKey);
+            $currentPageReturned = is_array($data['customers'] ?? null) ? count($data['customers']) : 0;
+            $pageResult = DB::transaction(function () use ($data, $user, $runKey, &$run): array {
+                $this->validateCustomerPullRequiredReferences($data);
+                $customerStateBefore = $this->customerPullState($data);
+                $this->applyPullPayload($data, $user);
+                $currentPageCounts = $this->classifyCustomerPullChanges($data, $customerStateBefore);
 
-                $message = $run['since'] === null
-                    ? "Pulled {$run['pulled']} customers."
-                    : "Customers up to date ({$run['pulled']} updated).";
+                $run['counts']['returned'] += is_array($data['customers'] ?? null) ? count($data['customers']) : 0;
+                foreach ($currentPageCounts as $count => $value) {
+                    $run['counts'][$count] += $value;
+                }
+                $run['pulled'] += is_array($data['customers'] ?? null) ? count($data['customers']) : 0;
+
+                if ($run['phase'] === 'missing') {
+                    $this->addToCustomerScope($user, array_column($data['customers'] ?? [], 'id'));
+                    $run['missing'] = array_values(array_slice($run['missing'], self::CUSTOMER_PULL_IDS_PER_REQUEST));
+                } else {
+                    if ($run['after_id'] === 0) {
+                        $run['total'] = $data['total'] ?? null;
+                        $run['server_time'] = $data['server_time'] ?? null;
+                    }
+
+                    $run['after_id'] = $data['next_after_id'] ?? null;
+
+                    if ($run['after_id'] === null) {
+                        $run['missing'] = $this->recordCustomerScope($user, $data['scope_ids'] ?? null);
+                        $run['phase'] = 'missing';
+                    }
+                }
+
+                $done = $run['phase'] === 'missing' && $run['missing'] === [];
+                if ($done) {
+                    $this->putSyncState(self::CUSTOMER_PULL_WATERMARK.$user->id, $run['server_time']);
+                    $this->forgetSyncState($runKey);
+                } else {
+                    $this->putSyncState($runKey, $run);
+                }
+
+                return ['done' => $done];
+            });
+
+            if ($pageResult['done']) {
+                $counts = $run['counts'];
+                $message = "Customer Pull succeeded: {$counts['returned']} returned; {$counts['inserted']} inserted, {$counts['updated']} changed, {$counts['unchanged']} unchanged, {$counts['rejected']} rejected.";
+                if ($run['location_refresh_failed'] ?? false) {
+                    $message .= ' Customer records are current. Location references could not be refreshed; existing local reference data was preserved. Full synchronization is incomplete. Contact support to resolve the Portal reference-data issue.';
+                }
 
                 return $this->customerPullProgress($run, true, true, $message);
             }
-
-            $this->putSyncState($runKey, $run);
 
             return $this->customerPullProgress($run, true, false, "Pulled {$run['pulled']} customers…");
         } catch (Throwable $e) {
             report($e);
             $this->putSyncState($runKey, $runBeforeStep);
+            $message = 'Customer Pull failed. '.$e->getMessage();
+            $failedRun = $runBeforeStep;
+            if ($currentPageReturned > 0) {
+                $failedRun['counts']['returned'] += $currentPageReturned;
+                $failedRun['counts']['rejected'] += $currentPageReturned;
+            }
+            if ($runBeforeStep['location_refresh_failed'] ?? false) {
+                $message .= ' Location refresh also failed; existing local reference data was preserved.';
+            }
 
-            return $this->customerPullProgress($run, false, false, 'Customer pull error: '.$e->getMessage());
+            return $this->customerPullProgress($failedRun, false, false, $message);
         }
     }
 
@@ -392,12 +673,16 @@ class SyncService
         $since = $this->syncState(self::CUSTOMER_PULL_WATERMARK.$user->id);
 
         return [
-            'phase' => $since === null || DB::table('municipalities')->doesntExist() ? 'locations' : 'pages',
+            'phase' => 'locations',
+            'location_refresh_attempted' => false,
+            'location_refresh_failed' => false,
+            'location_failure_message' => null,
             'since' => $since,
             'after_id' => 0,
             'server_time' => null,
             'total' => null,
             'pulled' => 0,
+            'counts' => ['returned' => 0, 'inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'rejected' => 0],
             'missing' => [],
         ];
     }
@@ -467,17 +752,126 @@ class SyncService
 
     /**
      * @param  array<string, mixed>  $run
-     * @return array{success: bool, done: bool, pulled: int, total: ?int, message: string}
+     * @return array{success: bool, done: bool, customer_pull_succeeded: bool, location_pull_succeeded: ?bool, location_refresh_failed: bool, full_sync_succeeded: bool, pulled: int, returned: int, inserted: int, updated: int, unchanged: int, rejected: int, total: ?int, message: string}
      */
     private function customerPullProgress(array $run, bool $success, bool $done, string $message): array
     {
+        $locationRefreshAttempted = (bool) ($run['location_refresh_attempted'] ?? false);
+        $locationRefreshFailed = (bool) ($run['location_refresh_failed'] ?? false);
+        $customerPullSucceeded = $success && $done;
+        $locationPullSucceeded = $locationRefreshAttempted && ! $locationRefreshFailed;
+
         return [
             'success' => $success,
             'done' => $done,
+            'customer_pull_succeeded' => $customerPullSucceeded,
+            'location_pull_succeeded' => $locationRefreshAttempted ? $locationPullSucceeded : null,
+            'location_refresh_failed' => $locationRefreshFailed,
+            'full_sync_succeeded' => $customerPullSucceeded && $locationPullSucceeded,
             'pulled' => (int) ($run['pulled'] ?? 0),
+            'returned' => (int) ($run['counts']['returned'] ?? $run['pulled'] ?? 0),
+            'inserted' => (int) ($run['counts']['inserted'] ?? 0),
+            'updated' => (int) ($run['counts']['updated'] ?? 0),
+            'unchanged' => (int) ($run['counts']['unchanged'] ?? 0),
+            'rejected' => (int) ($run['counts']['rejected'] ?? 0),
             'total' => isset($run['total']) ? (int) $run['total'] : null,
             'message' => $message,
         ];
+    }
+
+    /**
+     * Capture a PII-free comparison of each Customer and its Tablet-owned
+     * profile, category history, and Access relationships before a Pull page.
+     * Volatile synchronization timestamps are intentionally excluded.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<int, array{local_id: int|null, fingerprint: string|null}>
+     */
+    private function customerPullState(array $data): array
+    {
+        $states = [];
+
+        foreach ($data['customers'] ?? [] as $customer) {
+            $serverId = (int) $customer['id'];
+            $local = DB::table('customers')->where('server_id', $serverId)->first();
+
+            if (! $local && filled($customer['local_uuid'] ?? null)) {
+                $local = DB::table('customers')->where('local_uuid', $customer['local_uuid'])->first();
+            }
+
+            if (! $local) {
+                $candidate = DB::table('customers')->where('id', $serverId)->first();
+                if ($candidate && ! in_array($candidate->sync_status, self::PROTECTED_CUSTOMER_STATUSES, true)) {
+                    $local = $candidate;
+                }
+            }
+
+            $states[$serverId] = [
+                'local_id' => $local ? (int) $local->id : null,
+                'fingerprint' => $local ? $this->customerPullFingerprint((int) $local->id) : null,
+            ];
+        }
+
+        return $states;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @param  array<int, array{local_id: int|null, fingerprint: string|null}>  $before
+     * @return array{inserted: int, updated: int, unchanged: int}
+     */
+    private function classifyCustomerPullChanges(array $data, array $before): array
+    {
+        $counts = ['inserted' => 0, 'updated' => 0, 'unchanged' => 0];
+
+        foreach ($data['customers'] ?? [] as $customer) {
+            $serverId = (int) $customer['id'];
+            $previous = $before[$serverId] ?? ['local_id' => null, 'fingerprint' => null];
+            $local = DB::table('customers')->where('server_id', $serverId)->first();
+
+            if (! $local && filled($customer['local_uuid'] ?? null)) {
+                $local = DB::table('customers')->where('local_uuid', $customer['local_uuid'])->first();
+            }
+
+            if (! $local) {
+                $counts['inserted']++;
+
+                continue;
+            }
+
+            if ($previous['local_id'] === null) {
+                $counts['inserted']++;
+
+                continue;
+            }
+
+            $fingerprint = $this->customerPullFingerprint((int) $local->id);
+            if ($previous['fingerprint'] !== $fingerprint) {
+                $counts['updated']++;
+            } else {
+                $counts['unchanged']++;
+            }
+        }
+
+        return $counts;
+    }
+
+    private function customerPullFingerprint(int $localCustomerId): string
+    {
+        $customer = DB::table('customers')->where('id', $localCustomerId)->first();
+        $customerValues = (array) $customer;
+        foreach (['created_at', 'updated_at', 'synced_at', 'server_updated_at', 'sync_error', 'sync_status'] as $volatile) {
+            unset($customerValues[$volatile]);
+        }
+
+        $profile = DB::table('customer_trade_profiles')->where('customer_id', $localCustomerId)->first();
+        $history = DB::table('customer_category_histories')->where('customer_id', $localCustomerId)
+            ->orderBy('category_year')->get()->map(fn ($row): array => collect((array) $row)->except(['id', 'created_at', 'updated_at'])->all())->all();
+        $access = DB::table('customer_user')->where('customer_id', $localCustomerId)
+            ->orderBy('user_id')->pluck('user_id')->all();
+        $profileValues = $profile ? collect((array) $profile)->except(['id', 'created_at', 'updated_at'])->all() : null;
+
+        return hash('sha256', json_encode([$customerValues, $profileValues, $history, $access], JSON_THROW_ON_ERROR));
     }
 
     private function syncState(string $key): mixed
@@ -538,6 +932,45 @@ class SyncService
     }
 
     /**
+     * Customer Pull may proceed without a valid location snapshot, but the
+     * Customer's required Company relationship must resolve locally before we
+     * persist it. Location fields are optional scalar IDs and are retained as
+     * supplied even if their local reference rows are unavailable.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function validateCustomerPullRequiredReferences(array $data): void
+    {
+        $customers = $data['customers'] ?? [];
+        if ($customers === []) {
+            return;
+        }
+
+        $companyIds = [];
+        foreach ($customers as $customer) {
+            $companyId = $customer['company_id'] ?? null;
+            if ((! is_int($companyId) && (! is_string($companyId) || ! ctype_digit($companyId))) || (int) $companyId < 1) {
+                throw new \RuntimeException('A Portal Customer has no valid required Company ID.');
+            }
+            $companyIds[(int) $companyId] = true;
+        }
+
+        $payloadCompanyIds = array_fill_keys(array_map(
+            static fn (array $company): int => (int) ($company['id'] ?? 0),
+            $data['companies'] ?? [],
+        ), true);
+        $localCompanyIds = DB::table('companies')->whereIn('id', array_keys($companyIds))->pluck('id')
+            ->mapWithKeys(static fn ($id): array => [(int) $id => true])->all();
+        $availableCompanyIds = $payloadCompanyIds + $localCompanyIds;
+
+        foreach (array_keys($companyIds) as $companyId) {
+            if (! isset($availableCompanyIds[$companyId])) {
+                throw new \RuntimeException('A required Company is unavailable on this device. Refresh Portal lookups before retrying.');
+            }
+        }
+    }
+
+    /**
      * Writes whichever pull sections the payload carries. Reference/lookup
      * tables are written before anything that holds a foreign key into them.
      *
@@ -545,6 +978,86 @@ class SyncService
      */
     private function applyPullPayload(array $data, User $user): void
     {
+        $localUserIdsByEmail = [];
+
+        foreach ($data['customer_users'] ?? [] as $customerUser) {
+            $email = $customerUser['email'] ?? null;
+
+            if (! is_string($email) || $email === '') {
+                throw new \RuntimeException('Portal returned a Customer User reference without an email.');
+            }
+
+            $matches = User::query()->get(['id', 'email'])->filter(fn (User $candidate): bool => $candidate->email === $email)->values();
+
+            if ($matches->count() > 1) {
+                throw new \RuntimeException('Portal returned a Customer User email that matches multiple local Users.');
+            }
+
+            $local = $matches->first();
+
+            if (! $local) {
+                $local = User::create([
+                    'name' => $customerUser['name'],
+                    'email' => $email,
+                    'password' => Str::random(64),
+                ]);
+            } elseif ($local->name !== $customerUser['name']) {
+                $local->update(['name' => $customerUser['name']]);
+            }
+
+            $localUserIdsByEmail[$email] = (int) $local->id;
+        }
+
+        if (array_key_exists('customer_access_mappings', $data)) {
+            $mappings = [];
+            foreach ($data['customer_access_mappings'] as $mapping) {
+                $scope = $mapping['scope'];
+                $mappingKey = $scope === 'region_specific'
+                    ? (string) $mapping['region_specific_id']
+                    : $mapping['company_code'];
+
+                foreach ($mapping['users'] as $reference) {
+                    $email = $reference['email'];
+                    if (! array_key_exists($email, $localUserIdsByEmail)) {
+                        $matches = User::query()->get(['id', 'email'])
+                            ->filter(fn (User $candidate): bool => $candidate->email === $email)
+                            ->values();
+
+                        if ($matches->count() > 1) {
+                            throw new \RuntimeException('Portal returned a mapped User email that matches multiple local Users.');
+                        }
+
+                        $local = $matches->first();
+                        if (! $local) {
+                            $local = User::create([
+                                'name' => $reference['name'],
+                                'email' => $email,
+                                'password' => Str::random(64),
+                            ]);
+                        } elseif ($local->name !== $reference['name']) {
+                            $local->update(['name' => $reference['name']]);
+                        }
+
+                        $localUserIdsByEmail[$email] = (int) $local->id;
+                    }
+                }
+
+                $mappings[] = [
+                    'scope' => $scope,
+                    'mapping_key' => $mappingKey,
+                    'is_complete' => $mapping['is_complete'],
+                    'user_references' => json_encode($mapping['users'], JSON_THROW_ON_ERROR),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ];
+            }
+
+            DB::table('customer_access_mappings')->delete();
+            foreach (array_chunk($mappings, 400) as $chunk) {
+                DB::table('customer_access_mappings')->insert($chunk);
+            }
+        }
+
         // Refresh the logged-in rep's itinerary base location from the pulled
         // users list. Portal user ids differ from tablet ids, so match on the
         // unique email instead of the numeric id.
@@ -649,65 +1162,155 @@ class SyncService
             'enabled' => $areaCluster['enabled'] ?? true,
         ], $data['area_clusters'] ?? []));
 
+        if (array_key_exists('location_area_cluster_mappings', $data)) {
+            DB::table('location_area_cluster_mappings')->delete();
+            foreach (array_chunk(array_map(fn (array $mapping): array => [
+                'id' => $mapping['id'],
+                'location_level' => $mapping['location_level'],
+                'location_id' => $mapping['location_id'],
+                'decision' => $mapping['decision'],
+                'area_cluster_id' => $mapping['area_cluster_id'] ?? null,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ], $data['location_area_cluster_mappings']), 400) as $chunk) {
+                DB::table('location_area_cluster_mappings')->insert($chunk);
+            }
+        }
+
         $protectedStatuses = self::PROTECTED_CUSTOMER_STATUSES;
         $serverToLocalCustomer = [];
-        $protectedCustomerIds = DB::table('customers')->whereIn('sync_status', $protectedStatuses)->pluck('id', 'server_id')->filter()->all();
+        $protectedLocalCustomerIds = DB::table('customers')
+            ->whereIn('sync_status', $protectedStatuses)
+            ->pluck('id')
+            ->mapWithKeys(fn ($id): array => [(string) $id => true])
+            ->all();
 
-        // Resolve every incoming customer's local row with two queries per
-        // chunk rather than one SELECT per customer: match on server_id first,
-        // then a same-id local row that is not holding unsynced edits.
+        // Resolve local identity before falling back to the Portal primary key.
+        // local_uuid recovers a Tablet row when Portal committed a push but its
+        // response was lost before the Tablet could store server_id.
         $incomingCustomerIds = array_column($data['customers'] ?? [], 'id');
+        $incomingCustomerUuids = array_values(array_filter(array_column($data['customers'] ?? [], 'local_uuid')));
         $localIdByServerId = [];
+        $localCustomerByUuid = [];
         $localIdBySameId = [];
 
         foreach (array_chunk($incomingCustomerIds, 500) as $chunk) {
-            $localIdByServerId += DB::table('customers')->whereIn('server_id', $chunk)->orderBy('id')->pluck('id', 'server_id')->all();
+            $localCustomersByServerId = DB::table('customers')
+                ->whereIn('server_id', $chunk)
+                ->orderBy('id')
+                ->get(['id', 'server_id']);
+            foreach ($localCustomersByServerId->groupBy('server_id') as $matches) {
+                if ($matches->count() > 1) {
+                    throw new \RuntimeException('A Portal Customer ID is already mapped to multiple Tablet Customers.');
+                }
+            }
+            $localIdByServerId += $localCustomersByServerId->pluck('id', 'server_id')->all();
             $localIdBySameId += DB::table('customers')->whereIn('id', $chunk)->whereNotIn('sync_status', $protectedStatuses)->pluck('id', 'id')->all();
         }
 
+        foreach (array_chunk(array_values(array_unique($incomingCustomerUuids)), 500) as $chunk) {
+            foreach (DB::table('customers')->whereIn('local_uuid', $chunk)->get(['id', 'local_uuid', 'server_id']) as $localCustomer) {
+                $localCustomerByUuid[$localCustomer->local_uuid] = $localCustomer;
+            }
+        }
+
         foreach ($data['customers'] ?? [] as $customer) {
-            $localId = $localIdByServerId[$customer['id']] ?? $localIdBySameId[$customer['id']] ?? $customer['id'];
+            $localUuid = $customer['local_uuid'] ?? null;
+            $localCustomerForUuid = filled($localUuid) ? ($localCustomerByUuid[$localUuid] ?? null) : null;
+            $portalCustomerId = (int) $customer['id'];
+
+            if ($localCustomerForUuid && filled($localCustomerForUuid->server_id)
+                && (int) $localCustomerForUuid->server_id !== $portalCustomerId) {
+                throw new \RuntimeException('Portal Customer identity conflicts with the Tablet local UUID mapping.');
+            }
+
+            $localIdForServerId = $localIdByServerId[$customer['id']] ?? null;
+            if ($localCustomerForUuid && $localIdForServerId !== null
+                && (int) $localCustomerForUuid->id !== (int) $localIdForServerId) {
+                throw new \RuntimeException('Portal Customer ID and local UUID resolve to different Tablet Customers.');
+            }
+
+            $localId = $localCustomerForUuid->id
+                ?? $localIdForServerId
+                ?? $localIdBySameId[$customer['id']]
+                ?? $customer['id'];
             $serverToLocalCustomer[$customer['id']] = $localId;
-            if (isset($protectedCustomerIds[$customer['id']])) {
+
+            if (isset($protectedLocalCustomerIds[(string) $localId])) {
+                if ($localCustomerForUuid && blank($localCustomerForUuid->server_id)) {
+                    DB::table('customers')->where('id', $localId)->whereNull('server_id')->update([
+                        'server_id' => $portalCustomerId,
+                        'server_updated_at' => $customer['updated_at'] ?? null,
+                    ]);
+                }
+
                 continue;
             }
 
-            DB::table('customers')->updateOrInsert(
-                ['id' => $localId],
-                [
-                    'server_id' => $customer['id'],
-                    'company_id' => $customer['company_id'] ?? null,
-                    'general_category_id' => $customer['general_category_id'] ?? null,
-                    'region_specific_id' => $customer['region_specific_id'] ?? null,
-                    'municipality_id' => $customer['municipality_id'] ?? null,
-                    'province_id' => $customer['province_id'] ?? null,
-                    'barangay_id' => $customer['barangay_id'] ?? null,
-                    'area_cluster_id' => $customer['area_cluster_id'] ?? null,
-                    'name' => $customer['name'],
-                    'unique_id' => $customer['unique_id'] ?? null,
-                    'contact_person' => $customer['contact_person'] ?? null,
-                    'contact_number' => $customer['contact_number'] ?? null,
-                    'business_landline_number' => $customer['business_landline_number'] ?? null,
-                    'business_mobile_number' => $customer['business_mobile_number'] ?? null,
-                    'date_established' => $customer['date_established'] ?? null,
-                    'person_in_charge_id' => $customer['person_in_charge_id'] ?? null,
-                    'address' => $customer['address'] ?? null,
-                    'latitude' => $customer['latitude'] ?? null,
-                    'longitude' => $customer['longitude'] ?? null,
-                    'is_active' => $customer['is_active'] ?? true,
-                    'competitor_volume' => $customer['competitor_volume'] ?? null,
-                    'sync_status' => 'synced',
-                    'sync_error' => null,
-                    'synced_at' => now(),
-                    'server_updated_at' => $customer['updated_at'] ?? null,
-                    'updated_at' => now(),
-                ]
-            );
+            if (array_key_exists('person_in_charge_id', $customer) && ! array_key_exists('person_in_charge_email', $customer)) {
+                throw new \RuntimeException('Portal Customer pull omitted the Person in Charge email identity.');
+            }
+
+            $personInChargeId = filled($customer['person_in_charge_email'] ?? null)
+                ? $this->localUserIdForPortalEmail($customer['person_in_charge_email'], $localUserIdsByEmail)
+                : null;
+
+            $customerAttributes = [
+                'server_id' => $customer['id'],
+                'company_id' => $customer['company_id'] ?? null,
+                'general_category_id' => $customer['general_category_id'] ?? null,
+                'region_specific_id' => $customer['region_specific_id'] ?? null,
+                'municipality_id' => $customer['municipality_id'] ?? null,
+                'province_id' => $customer['province_id'] ?? null,
+                'barangay_id' => $customer['barangay_id'] ?? null,
+                'area_cluster_id' => $customer['area_cluster_id'] ?? null,
+                'name' => $customer['name'],
+                'unique_id' => $customer['unique_id'] ?? null,
+                'contact_person' => $customer['contact_person'] ?? null,
+                'contact_number' => $customer['contact_number'] ?? null,
+                'business_landline_number' => $customer['business_landline_number'] ?? null,
+                'business_mobile_number' => $customer['business_mobile_number'] ?? null,
+                'date_established' => $customer['date_established'] ?? null,
+                'person_in_charge_id' => $personInChargeId,
+                'address' => $customer['address'] ?? null,
+                'latitude' => $customer['latitude'] ?? null,
+                'longitude' => $customer['longitude'] ?? null,
+                'is_active' => $customer['is_active'] ?? true,
+                'competitor_volume' => $customer['competitor_volume'] ?? null,
+                'sync_status' => 'synced',
+                'sync_error' => null,
+                'synced_at' => now(),
+                'server_updated_at' => $customer['updated_at'] ?? null,
+                'updated_at' => now(),
+            ];
+            if (filled($customer['local_uuid'] ?? null)) {
+                $customerAttributes['local_uuid'] = $customer['local_uuid'];
+            }
+
+            DB::table('customers')->updateOrInsert(['id' => $localId], $customerAttributes);
+
+            if (array_key_exists('access_user_emails', $customer)) {
+                $localAccessUserIds = array_map(
+                    fn (string $email): int => $this->localUserIdForPortalEmail($email, $localUserIdsByEmail),
+                    $customer['access_user_emails'] ?? [],
+                );
+
+                DB::table('customer_user')->where('customer_id', $localId)->delete();
+
+                if ($localAccessUserIds !== []) {
+                    DB::table('customer_user')->insert(array_map(fn (int $localUserId): array => [
+                        'customer_id' => $localId,
+                        'user_id' => $localUserId,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ], $localAccessUserIds));
+                }
+            }
         }
 
         foreach ($data['customer_trade_profiles'] ?? [] as $profile) {
             $localCustomerId = $serverToLocalCustomer[$profile['customer_id']] ?? $profile['customer_id'];
-            if (isset($protectedCustomerIds[$profile['customer_id']])) {
+            if (isset($protectedLocalCustomerIds[(string) $localCustomerId])) {
                 continue;
             }
             DB::table('customer_trade_profiles')->updateOrInsert(
@@ -736,7 +1339,7 @@ class SyncService
 
         foreach ($data['customer_category_histories'] ?? [] as $history) {
             $localCustomerId = $serverToLocalCustomer[$history['customer_id']] ?? $history['customer_id'];
-            if (isset($protectedCustomerIds[$history['customer_id']])) {
+            if (isset($protectedLocalCustomerIds[(string) $localCustomerId])) {
                 continue;
             }
             DB::table('customer_category_histories')->updateOrInsert(
@@ -747,7 +1350,7 @@ class SyncService
 
         foreach ($data['customer_category_events'] ?? [] as $event) {
             $localCustomerId = $serverToLocalCustomer[$event['customer_id']] ?? $event['customer_id'];
-            if (isset($protectedCustomerIds[$event['customer_id']])) {
+            if (isset($protectedLocalCustomerIds[(string) $localCustomerId])) {
                 continue;
             }
             $supersedesId = filled($event['supersedes_event_key'] ?? null)
@@ -1018,6 +1621,16 @@ class SyncService
         }
     }
 
+    /** @param array<string, int> $localUserIdsByEmail */
+    private function localUserIdForPortalEmail(string $email, array $localUserIdsByEmail): int
+    {
+        if (! array_key_exists($email, $localUserIdsByEmail)) {
+            throw new \RuntimeException('Portal Customer User email is unresolved on this Tablet.');
+        }
+
+        return $localUserIdsByEmail[$email];
+    }
+
     /** @return array<int, array<string, mixed>> */
     public function readExpensesForSalescall(int $serverSalescallId): array
     {
@@ -1140,6 +1753,7 @@ class SyncService
 
     public function push(): SyncResult
     {
+        $this->releaseStaleCustomerPushClaims();
         $user = auth()->user() ?? User::whereNotNull('api_token')->first();
 
         if (! $user || blank($user->api_token)) {
@@ -1729,6 +2343,7 @@ class SyncService
 
     public function pushCustomer(int $customerId): SyncResult
     {
+        $this->releaseStaleCustomerPushClaims();
         $user = auth()->user() ?? User::whereNotNull('api_token')->first();
 
         if (! $user || blank($user->api_token)) {
@@ -1746,6 +2361,7 @@ class SyncService
 
     public function pushPendingCustomers(): SyncResult
     {
+        $this->releaseStaleCustomerPushClaims();
         $user = auth()->user() ?? User::whereNotNull('api_token')->first();
 
         if (! $user || blank($user->api_token)) {
@@ -1755,6 +2371,37 @@ class SyncService
         $customers = $this->pendingCustomerPushQuery()->get();
 
         return $this->pushCustomerRecords($this->client($user->api_token), $customers);
+    }
+
+    public function retryExhaustedCustomer(int $customerId): SyncResult
+    {
+        $this->releaseStaleCustomerPushClaims();
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+        if (! $user || blank($user->api_token)) {
+            return SyncResult::fail('No API token found. Please log in first.', 'no_token');
+        }
+
+        $customer = Customer::with(['tradeProfile', 'categoryHistories', 'categoryEvents', 'users', 'personInCharge'])->find($customerId);
+        if (! $customer || $customer->sync_status !== 'failed' || (int) $customer->sync_attempts < 3) {
+            return SyncResult::fail('Only an exhausted failed Customer can be retried here.', 'not_retryable');
+        }
+
+        $readyKey = 'customer.manual_retry_ready.'.$customer->id;
+        $readyHash = json_decode((string) DB::table('sync_states')->where('key', $readyKey)->value('value'), true);
+        $payload = $this->customerPushPayload($customer);
+        $fingerprint = hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR));
+        if (! is_string($readyHash) || ! hash_equals($readyHash, $fingerprint)) {
+            return SyncResult::fail('Open this Customer, correct and save at least one value, then retry.', 'correction_required');
+        }
+
+        return $this->pushCustomerRecords($this->client($user->api_token), collect([$customer]), true);
+    }
+
+    public function customerPayloadFingerprint(Customer $customer): string
+    {
+        $customer->loadMissing(['tradeProfile', 'categoryHistories', 'categoryEvents', 'users', 'personInCharge']);
+
+        return hash('sha256', json_encode($this->customerPushPayload($customer), JSON_THROW_ON_ERROR));
     }
 
     public function hasPendingCustomerPushWork(): bool
@@ -1771,10 +2418,28 @@ class SyncService
             });
     }
 
+    private function releaseStaleCustomerPushClaims(): void
+    {
+        $cutoff = now()->subSeconds(max($this->timeout * 4, 120));
+        $staleClaims = Customer::query()->where('sync_status', 'syncing')->where('updated_at', '<', $cutoff)->get(['id', 'sync_attempts']);
+
+        foreach ($staleClaims as $claim) {
+            Customer::query()->whereKey($claim->id)
+                ->where('sync_status', 'syncing')
+                ->where('updated_at', '<', $cutoff)
+                ->update([
+                    'sync_status' => 'failed',
+                    'sync_attempts' => min((int) $claim->sync_attempts + 1, 255),
+                    'sync_error' => 'A previous push ended without a recorded response. Review Portal by Customer Code before retrying.',
+                    'updated_at' => now(),
+                ]);
+        }
+    }
+
     /**
      * @param  Collection<int, Customer>  $customers
      */
-    private function pushCustomerRecords(PendingRequest $client, Collection $customers): SyncResult
+    private function pushCustomerRecords(PendingRequest $client, Collection $customers, bool $allowExhausted = false): SyncResult
     {
         $pushed = 0;
         $failed = 0;
@@ -1782,7 +2447,7 @@ class SyncService
         $failureReasons = [];
 
         foreach ($customers as $customer) {
-            $result = $this->pushCustomerRecord($client, $customer);
+            $result = $this->pushCustomerRecord($client, $customer, $allowExhausted);
 
             if ($result->errorCode === 'token_expired') {
                 return SyncResult::fail(
@@ -1799,79 +2464,59 @@ class SyncService
             $failed += $result->failedCount;
             $retryable += $result->retryableCount;
             $failureReasons = array_values(array_unique([...$failureReasons, ...$result->failureReasons]));
+
+            // A single-Customer action can show the exact Portal response in its UI.
+            if ($customers->count() === 1 && $result->failedCount > 0) {
+                return $result;
+            }
         }
 
         return $this->buildPushResult($pushed, $failed, $retryable, $failureReasons);
     }
 
-    private function pushCustomerRecord(PendingRequest $client, Customer $customer): SyncResult
+    private function pushCustomerRecord(PendingRequest $client, Customer $customer, bool $allowExhausted = false): SyncResult
     {
-        try {
-            $payload = [
-                'local_uuid' => $customer->local_uuid,
-                'server_id' => $customer->server_id,
-                'base_updated_at' => $customer->server_updated_at,
-                'sync_intent' => $customer->server_id ? 'update' : 'create',
-                'name' => $customer->name,
-                'unique_id' => $customer->unique_id,
-                'customer_code_reservation_token' => $customer->customer_code_reservation_token,
-                'company_id' => $customer->company_id,
-                'general_category_id' => $customer->general_category_id,
-                'competitor_volume' => $customer->competitor_volume,
-                'region_specific_id' => $customer->region_specific_id,
-                'municipality_id' => $customer->municipality_id,
-                'address' => $customer->address,
-                'latitude' => $customer->latitude,
-                'longitude' => $customer->longitude,
-                'contact_person' => $customer->contact_person,
-                'contact_number' => $customer->contact_number,
-                'business_landline_number' => $customer->business_landline_number,
-                'business_mobile_number' => $customer->business_mobile_number,
-                'date_established' => optional($customer->date_established)->format('Y-m-d'),
-                'is_active' => $customer->is_active,
-                'profile_type' => $customer->tradeProfile?->profile_type,
-                'person_in_charge_id' => $customer->person_in_charge_id,
-                'trade_profile' => $customer->tradeProfile?->toArray() ?? [],
-                'profile_data' => $customer->tradeProfile?->profile_data ?? [],
-                'category_histories' => $customer->categoryHistories->map(fn ($history) => [
-                    'profile_type' => $history->profile_type ?: $customer->tradeProfile?->profile_type,
-                    'stream' => $history->stream ?: (($customer->tradeProfile?->profile_type === 'outlet') ? match ($customer->tradeProfile?->entry_detail) {
-                        'AB' => 'ab', 'MCB' => 'mcb', default => (str_starts_with((string) $history->category, 'AB ') ? 'ab' : (str_starts_with((string) $history->category, 'MCB ') ? 'mcb' : null)),
-                    } : $customer->tradeProfile?->profile_type),
-                    'category_year' => $history->category_year,
-                    'category' => $history->category,
-                ])->values()->all(),
-                'category_events' => $customer->categoryEvents->map(fn ($event) => [
-                    'event_key' => $event->event_key,
-                    'profile_type' => $event->profile_type,
-                    'stream' => $event->stream,
-                    'category' => $event->category,
-                    'effective_at' => $event->effective_at?->toISOString(),
-                    'source' => $event->source,
-                    'supersedes_event_key' => $event->supersedes_event_key,
-                ])->values()->all(),
-            ];
+        $originalStatus = $customer->sync_status;
+        $claim = Customer::query()->whereKey($customer->id)
+            ->where('sync_status', $customer->sync_status)
+            ->where('sync_attempts', $customer->sync_attempts)
+            ->where(fn (Builder $query) => $query->where('sync_status', 'pending')
+                ->orWhere(fn (Builder $retry) => $retry->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
+                ->when($allowExhausted, fn (Builder $retry) => $retry->orWhere(fn (Builder $exhausted) => $exhausted->where('sync_status', 'failed')->where('sync_attempts', '>=', 3))))
+            ->update(['sync_status' => 'syncing', 'updated_at' => now()]);
 
-            foreach (['province_id', 'barangay_id', 'area_cluster_id'] as $locationId) {
-                if ($customer->{$locationId} !== null) {
-                    $payload[$locationId] = $customer->{$locationId};
-                }
-            }
+        if ($claim !== 1) {
+            return SyncResult::ok('Customer push was already claimed or is no longer eligible.');
+        }
+        $customer->sync_status = 'syncing';
+        // The claim was written with a query builder, so keep Eloquent's
+        // original value aligned with the database before later transitions.
+        $customer->syncOriginalAttribute('sync_status');
+
+        try {
+            $payload = $this->customerPushPayload($customer);
+            $fingerprint = hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR));
 
             $response = $client->post("{$this->serverUrl}/api/sync/push/customer", $payload);
 
             if ($response->status() === 401) {
+                $customer->update(['sync_status' => $originalStatus]);
+
                 return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
             }
 
-            if ($response->successful()) {
+            if ($response->successful() && filter_var($response->json('server_id'), FILTER_VALIDATE_INT) && (int) $response->json('server_id') > 0) {
                 $this->markSynced($customer, [
                     'server_id' => $response->json('server_id'),
                     'server_updated_at' => $response->json('updated_at'),
                     'unique_id' => $response->json('unique_id') ?: $customer->unique_id,
                     'customer_code_reservation_token' => null,
                     'synced_at' => now(),
-                ]);
+                ], ! $allowExhausted);
+                DB::table('sync_states')->whereIn('key', [
+                    'customer.manual_retry_ready.'.$customer->id,
+                    'customer.last_failed_payload.'.$customer->id,
+                ])->delete();
 
                 return SyncResult::ok('Customer synced.', 1);
             }
@@ -1882,18 +2527,120 @@ class SyncService
                 return SyncResult::fail('Customer changed on the server and needs review.', 'customer_conflict', 0, 1, 0, ['customer_conflict']);
             }
 
-            $this->recordItemFailure($customer, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
+            $portalError = $this->customerPortalError($response);
+            $previousError = $customer->sync_error;
+            $this->recordItemFailure($customer, 'portal_rejected', $portalError, [
                 'stage' => 'customer:portal',
                 'endpoint' => '/api/sync/push/customer',
                 'http_status' => $response->status(),
             ]);
+            $this->recordCustomerPushErrorHistory($customer, $previousError);
+            $this->rememberFailedCustomerPayload($customer, $fingerprint);
 
-            return SyncResult::fail('Customer push failed and will retry later.', 'push_failed', 0, 1, 1, ['portal_rejected']);
+            $retryable = (int) $customer->sync_attempts < 3 ? 1 : 0;
+
+            return SyncResult::fail($portalError, 'push_failed', 0, 1, $retryable, ['portal_rejected']);
         } catch (Throwable $exception) {
+            $previousError = $customer->sync_error;
             $this->recordUnexpectedItemFailure($customer, $exception, 'customer:unexpected');
+            $this->recordCustomerPushErrorHistory($customer, $previousError);
+            if (isset($fingerprint)) {
+                $this->rememberFailedCustomerPayload($customer, $fingerprint);
+            }
 
-            return SyncResult::fail('Customer push failed and will retry later.', 'push_failed', 0, 1, 1, ['unexpected_sync_error']);
+            $retryable = (int) $customer->sync_attempts < 3 ? 1 : 0;
+
+            return SyncResult::fail($retryable ? 'Customer push failed and will retry on the next sync.' : 'Customer push failed and reached the automatic retry limit. Correct and save the Customer before using Retry Customer.', 'push_failed', 0, 1, $retryable, ['unexpected_sync_error']);
         }
+    }
+
+    private function customerPushPayload(Customer $customer): array
+    {
+        $customer->loadMissing(['tradeProfile', 'categoryHistories', 'categoryEvents', 'users', 'personInCharge']);
+        $payload = [
+            'local_uuid' => $customer->local_uuid,
+            'server_id' => $customer->server_id,
+            'base_updated_at' => $customer->server_updated_at,
+            'sync_intent' => $customer->server_id ? 'update' : 'create',
+            'name' => $customer->name,
+            'unique_id' => $customer->unique_id,
+            'customer_code_reservation_token' => $customer->customer_code_reservation_token,
+            'company_id' => $customer->company_id,
+            'general_category_id' => $customer->general_category_id,
+            'competitor_volume' => $customer->competitor_volume,
+            'region_specific_id' => $customer->region_specific_id,
+            'municipality_id' => $customer->municipality_id,
+            'address' => $customer->address,
+            'latitude' => $customer->latitude,
+            'longitude' => $customer->longitude,
+            'contact_person' => $customer->contact_person,
+            'contact_number' => $customer->contact_number,
+            'business_landline_number' => $customer->business_landline_number,
+            'business_mobile_number' => $customer->business_mobile_number,
+            'date_established' => optional($customer->date_established)->format('Y-m-d'),
+            'is_active' => $customer->is_active,
+            'profile_type' => $customer->tradeProfile?->profile_type,
+            'person_in_charge_email' => $customer->personInCharge?->email,
+            'access_user_emails' => $customer->users->pluck('email')->values()->all(),
+            'trade_profile' => $customer->tradeProfile?->toArray() ?? [],
+            'profile_data' => $customer->tradeProfile?->profile_data ?? [],
+            'category_histories' => $customer->categoryHistories->map(fn ($history) => [
+                'profile_type' => $history->profile_type ?: $customer->tradeProfile?->profile_type,
+                'stream' => $history->stream ?: (($customer->tradeProfile?->profile_type === 'outlet') ? match ($customer->tradeProfile?->entry_detail) {
+                    'AB' => 'ab', 'MCB' => 'mcb', default => (str_starts_with((string) $history->category, 'AB ') ? 'ab' : (str_starts_with((string) $history->category, 'MCB ') ? 'mcb' : null)),
+                } : $customer->tradeProfile?->profile_type),
+                'category_year' => $history->category_year,
+                'category' => $history->category,
+            ])->values()->all(),
+            'category_events' => $customer->categoryEvents->map(fn ($event) => [
+                'event_key' => $event->event_key,
+                'profile_type' => $event->profile_type,
+                'stream' => $event->stream,
+                'category' => $event->category,
+                'effective_at' => $event->effective_at?->toISOString(),
+                'source' => $event->source,
+                'supersedes_event_key' => $event->supersedes_event_key,
+            ])->values()->all(),
+        ];
+
+        foreach (['province_id', 'barangay_id', 'area_cluster_id'] as $locationId) {
+            if ($customer->{$locationId} !== null) {
+                $payload[$locationId] = $customer->{$locationId};
+            }
+        }
+
+        return $payload;
+    }
+
+    private function rememberFailedCustomerPayload(Customer $customer, string $fingerprint): void
+    {
+        DB::table('sync_states')->updateOrInsert(
+            ['key' => 'customer.last_failed_payload.'.$customer->id],
+            ['value' => json_encode($fingerprint), 'created_at' => now(), 'updated_at' => now()],
+        );
+        DB::table('sync_states')->where('key', 'customer.manual_retry_ready.'.$customer->id)->delete();
+    }
+
+    private function recordCustomerPushErrorHistory(Customer $customer, ?string $previousError): void
+    {
+        $key = 'customer.push_error_history.'.$customer->id;
+        $history = json_decode((string) DB::table('sync_states')->where('key', $key)->value('value'), true);
+        $history = is_array($history) ? $history : [];
+
+        foreach ([
+            ['attempt' => max(0, (int) $customer->sync_attempts - 1), 'message' => $previousError],
+            ['attempt' => (int) $customer->sync_attempts, 'message' => $customer->sync_error],
+        ] as $entry) {
+            if (is_string($entry['message']) && $entry['message'] !== '' && ($history === [] || ($history[array_key_last($history)]['message'] ?? null) !== $entry['message'])) {
+                $history[] = $entry;
+            }
+        }
+
+        $history = array_slice($history, -10);
+        DB::table('sync_states')->updateOrInsert(
+            ['key' => $key],
+            ['value' => json_encode($history), 'created_at' => now(), 'updated_at' => now()],
+        );
     }
 
     /**
@@ -1999,12 +2746,12 @@ class SyncService
         ]);
     }
 
-    private function markSynced(Model $model, array $attributes = []): void
+    private function markSynced(Model $model, array $attributes = [], bool $clearError = true): void
     {
         $model->update([
             ...$attributes,
             'sync_status' => 'synced',
-            'sync_error' => null,
+            'sync_error' => $clearError ? null : $model->sync_error,
         ]);
     }
 
@@ -2569,9 +3316,9 @@ class SyncService
 
         if ($failed > 0 && $pushed === 0) {
             return SyncResult::fail(
-                $failed === 1
-                    ? '1 item could not be uploaded and will retry later.'
-                    : "{$failed} items could not be uploaded and will retry later.",
+                $retryable > 0
+                    ? ($failed === 1 ? '1 item could not be uploaded and will retry later.' : "{$failed} items could not be uploaded and will retry later.")
+                    : ($failed === 1 ? '1 item failed and reached its automatic retry limit. Correct and save it before using Retry Customer.' : "{$failed} items failed and reached their automatic retry limit. Correct and save them before using Retry Customer."),
                 'push_failed',
                 0,
                 $failed,
@@ -2582,7 +3329,7 @@ class SyncService
 
         if ($failed > 0) {
             return SyncResult::ok(
-                "{$pushed} item".($pushed === 1 ? '' : 's')." synced. {$failed} item".($failed === 1 ? '' : 's').' could not be uploaded and will retry later.',
+                "{$pushed} item".($pushed === 1 ? '' : 's')." synced. {$failed} item".($failed === 1 ? '' : 's').($retryable > 0 ? ' could not be uploaded and will retry later.' : ' failed and reached their automatic retry limit.'),
                 $pushed,
                 $failed,
                 $retryable,
@@ -2608,6 +3355,35 @@ class SyncService
         }
 
         return mb_substr($trimmed, 0, 300);
+    }
+
+    /** Return a concise, human-readable Portal response for the Create Customer notification. */
+    private function customerPortalError(Response $response): string
+    {
+        $status = $response->status();
+        $payload = $response->json();
+        $details = [];
+
+        if (is_array($payload)) {
+            if (is_string($payload['message'] ?? null) && trim($payload['message']) !== '') {
+                $details[] = trim(strip_tags($payload['message']));
+            }
+
+            foreach (($payload['errors'] ?? []) as $field => $messages) {
+                foreach ((array) $messages as $message) {
+                    if (is_string($message) && trim($message) !== '') {
+                        $details[] = trim((string) $field).': '.trim(strip_tags($message));
+                    }
+                }
+            }
+        }
+
+        $detail = implode(' ', array_unique($details));
+        if ($detail === '') {
+            $detail = 'The Portal did not provide a readable error message.';
+        }
+
+        return mb_substr("Portal returned HTTP {$status}: {$detail}", 0, 300);
     }
 
     private function trimSyncError(string $error): string

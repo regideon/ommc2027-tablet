@@ -37,6 +37,7 @@ test('pull populates reference tables before rows that hold foreign keys into th
     expect(Customer::count())->toBe(0);
 
     Http::fake([
+        'portal.test/api/sync/pull/locations' => Http::response(emptyLocationReferenceSnapshot(), 200),
         'portal.test/api/sync/pull/*' => Http::response([
             'customers' => [
                 ['id' => 501, 'name' => 'Fresh Customer', 'is_active' => true],
@@ -113,6 +114,7 @@ test('pull skips a single dangling brand reference instead of aborting the whole
     $this->actingAs($user);
 
     Http::fake([
+        'portal.test/api/sync/pull/locations' => Http::response(emptyLocationReferenceSnapshot(), 200),
         'portal.test/api/sync/pull/*' => Http::response([
             'customers' => [
                 ['id' => 501, 'name' => 'Customer A', 'is_active' => true],
