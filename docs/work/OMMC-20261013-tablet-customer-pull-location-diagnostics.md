@@ -1,9 +1,9 @@
 # OMMC V2 — Tablet Customer Pull and Location Diagnostics
 
 - **Work ID:** `OMMC-20261013-tablet-customer-pull-location-diagnostics`
-- **State:** Packages A/B `TERMINAL_DELIVERED`; Package C `READY_FOR_HUMAN_REVIEW`.
-- **Repository:** Tablet `ommc2027-tablet`; Portal `ommc2027` inspected as read-only reference.
-- **Authorization:** Read-only investigation and this Work note only. No implementation, retained database access or writes, Customer Pull/Push, migration, token/cursor changes, commit, push, or deployment.
+- **State:** Packages A/B and Package C `TERMINAL_DELIVERED`.
+- **Repositories:** Tablet `ommc2027-tablet`; Portal `ommc2027`.
+- **Authorization:** Human accepted Packages A/B, authorized Package C implementation, then accepted Package C and authorized scoped documentation/implementation commits and pushes. No retained database operation, Customer Pull/Push execution, migration, checkpoint/watermark changes, or deployment.
 - **Pre-existing worktree state:** Tablet had modified files and an untracked Work note/test for `OMMC-20261013-tablet-customer-interaction-reconciliation` before this note was added. Those changes were left untouched. Portal worktree was clean at inspection. The previous Interaction Work’s terminal delivery is not verified by this investigation; its note says `READY_FOR_TERMINAL_REVIEW`, and its files remain uncommitted in this Tablet checkout.
 
 ## Findings at a glance
@@ -753,3 +753,16 @@ The prior Package C focused totals remain as recorded above. The full Tablet sui
 - PHP lint, targeted Pint, and `git diff --check` passed in both isolated checkouts. The known clean-base Portal location contract test still fails because v3 is returned while the stale test expects v2; it is not part of the changed location behavior.
 - Only the reviewed Package C implementation and tests are in these commits. Work-note changes are being committed separately. Original dirty worktrees remain unchanged. No synchronization, retained database operation, migration, checkpoint/watermark change, or deployment was performed.
 - Delivery is not yet verified. State remains `READY_FOR_HUMAN_REVIEW` until both implementation and paired Work-note commits are pushed and fetched successfully; only then may the Work be marked `TERMINAL_DELIVERED`.
+
+## Package C terminal delivery closure — 2026-10-13
+
+**Package C state: TERMINAL_DELIVERED.** This closure supersedes the earlier readiness statements above, which record the state before the authorized push and post-push verification.
+
+- Portal implementation: `1307de3`; Portal paired Work-note delivery record: `e5e5ff2`.
+- Tablet implementation: `bc5c6a6`; Tablet paired Work-note delivery record: `8752d92`.
+- Verified Portal `origin/main` after push: `e5e5ff2d75bd02dbe8a98af4ef560757765163dc`.
+- Verified Tablet `origin/main` after push: `8752d92b41d2f11b0f58a99ccc71ee24fdd7ee77`.
+- Portal final focused assurance: **41 tests / 255 assertions**. Tablet final focused assurance: **86 tests / 617 assertions**. PHP lint, targeted Pint, and diff checks passed.
+- Known unrelated Portal baseline failure remains: the location snapshot test expects contract v2 while the unchanged base emits v3; reproduced on a clean copy of the accepted base. No full-suite green claim is made.
+- The original dirty Portal and Tablet worktrees were preserved without edits. Only scoped Package C implementation/tests and paired Work-note changes were delivered from the isolated checkouts.
+- No retained Customer Pull/Push, retained database modifications, migrations, checkpoint/watermark changes, or deployment were performed. Packages D–G remain future work.
