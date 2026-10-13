@@ -310,9 +310,11 @@
         // Per-visit forms opened from this sales call carry ?salescall=<local_uuid>
         // so the form page preselects and locks the call.
         formUrls: {
+            crr: @js(\App\Filament\Pages\CrrFormPage::getUrl()),
             signage: @js(\App\Filament\Pages\SignageFormPage::getUrl()),
             marketing: @js(\App\Filament\Pages\MarketingFormPage::getUrl()),
             tradeCheck: @js(\App\Filament\Pages\TradeCheckFormPage::getUrl()),
+            giveaway: @js(\App\Filament\Pages\GiveawayFormPage::getUrl()),
         },
         openSalescallForm(form) {
             if (!this.selectedCall?.local_uuid) return;
@@ -1817,9 +1819,11 @@
                                 </button>
                                 @endforeach
                                 @foreach([
+                                    ['assignment', 'CRR', 'Customer Call Report', 'crr'],
                                     ['image', 'CRR Signage', 'Signage request form', 'signage'],
                                     ['campaign', 'Marketing', 'Local Store Marketing', 'marketing'],
                                     ['checklist', 'Trade Check', 'Trade check form', 'tradeCheck'],
+                                    ['redeem', 'Giveaway', 'Giveaway form', 'giveaway'],
                                 ] as [$icon, $label, $sub, $formKey])
                                 <button
                                     title="{{ $label }} — {{ $sub }}"

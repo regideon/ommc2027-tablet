@@ -2,8 +2,11 @@
 
 use App\Filament\Pages\CrrFormPage;
 use App\Filament\Pages\FormsPage;
+use App\Models\Customer;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrProgram;
+use App\Models\Itinerary;
+use App\Models\Salescall;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -149,4 +152,62 @@ test('the CRR form surfaces a warning when programs cannot be loaded', function 
 
     Livewire::test(CrrFormPage::class)
         ->assertSee('CRR programs could not be loaded');
+});
+
+function crrFormPageSalescall(User $user): Salescall
+{
+    $customer = Customer::create(['name' => 'CRR Salescall Customer', 'is_active' => true]);
+    $itinerary = Itinerary::create(['created_by' => $user->id, 'itinerary_status_id' => 2]);
+
+    return Salescall::create([
+        'itinerary_id' => $itinerary->id,
+        'customer_id' => $customer->id,
+        'created_by' => $user->id,
+        'local_uuid' => (string) Str::uuid(),
+        'sync_status' => 'pending',
+        'actual_in' => now(),
+    ]);
+}
+
+test('opening the CRR form from a sales call preselects and locks that sales call', function () {
+    $user = crrFormPageUser();
+    crrFormPageProgram();
+    $this->actingAs($user);
+
+    $salescall = crrFormPageSalescall($user);
+
+    Livewire::withQueryParams(['salescall' => $salescall->local_uuid])
+        ->test(CrrFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', $salescall->local_uuid, true)
+        ->assertSet('salescallLocked', true, true)
+        ->assertSee('Started from this Sales Call')
+        ->assertSeeHtml('wire:model="salescall_uuid" class="field-input bg-white" disabled');
+});
+
+test('opening the CRR form with an unknown sales call uuid does not preselect or lock', function () {
+    $user = crrFormPageUser();
+    crrFormPageProgram();
+    $this->actingAs($user);
+
+    Livewire::withQueryParams(['salescall' => (string) Str::uuid()])
+        ->test(CrrFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', null, true)
+        ->assertSet('salescallLocked', false, true);
+});
+
+test('a sales call owned by another rep is ignored when opening the CRR form', function () {
+    $user = crrFormPageUser();
+    crrFormPageProgram();
+    $otherUser = User::factory()->create();
+    $this->actingAs($user);
+
+    $foreignSalescall = crrFormPageSalescall($otherUser);
+
+    Livewire::withQueryParams(['salescall' => $foreignSalescall->local_uuid])
+        ->test(CrrFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', null, true)
+        ->assertSet('salescallLocked', false, true);
 });

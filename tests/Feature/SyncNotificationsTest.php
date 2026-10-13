@@ -146,7 +146,7 @@ test('pull notifications fails with a token error on 401', function () {
         ->and($result->errorCode)->toBe('token_expired');
 });
 
-test('the schedule pull succeeds even when the notifications pull fails', function () {
+test('the schedule pull does not pull notifications', function () {
     config(['sync.server_url' => 'http://portal.test']);
 
     $user = syncNotificationsUser();
@@ -160,12 +160,12 @@ test('the schedule pull succeeds even when the notifications pull fails', functi
             'itineraries' => [],
             'customer_notes' => [],
         ], 200),
-        'portal.test/api/sync/pull/notifications*' => Http::response(['error' => 'Server error'], 500),
+        'portal.test/api/sync/pull/notifications*' => Http::response(['notifications' => [], 'has_more' => false], 200),
     ]);
 
     $result = app(SyncService::class)->pull();
 
     expect($result->success)->toBeTrue($result->message);
 
-    Http::assertSent(fn ($request): bool => str_contains($request->url(), '/api/sync/pull/notifications'));
+    Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/api/sync/pull/notifications'));
 });

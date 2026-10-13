@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Enums\FormKey;
 use App\Enums\Giveaway\GiveawayCategory;
+use App\Filament\Concerns\LocksRequestedSalescall;
 use App\Filament\Concerns\StagesAttachments;
 use App\Models\Forms\Giveaway\Giveaway;
 use App\Models\Forms\Giveaway\GiveawayItem;
@@ -19,6 +20,7 @@ use Throwable;
 
 class GiveawayFormPage extends Page
 {
+    use LocksRequestedSalescall;
     use StagesAttachments;
 
     protected string $view = 'filament.pages.giveaway-form-page';
@@ -120,6 +122,8 @@ class GiveawayFormPage extends Page
                 return;
             }
         }
+
+        $this->applyRequestedSalescallLock();
 
         $this->items = [$this->blankItemRow()];
     }
