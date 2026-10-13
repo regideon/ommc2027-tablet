@@ -5,6 +5,7 @@ use App\Models\Brand;
 use App\Models\Customer;
 use App\Models\Itinerary;
 use App\Models\MaterialGroup;
+use App\Models\RegionType;
 use App\Models\Salescall;
 use App\Models\SalescallBrand;
 use App\Models\User;
@@ -67,7 +68,10 @@ test('finish flow persists exit gps for completed, partially completed, and canc
     bool $requiresBrand,
 ) {
     seedFinishFlowSalescallStatuses();
-    $user = User::factory()->create();
+    // This rep is in an exempt team, so the finish flow stays focused on
+    // outcome and GPS persistence rather than the photo requirement.
+    $exempt = RegionType::create(['name' => 'IB Team', 'sort' => 1, 'is_image_required' => false]);
+    $user = User::factory()->create(['region_type_id' => $exempt->id]);
     $this->actingAs($user);
 
     $salescall = makeFinishFlowCheckedInSalescall($user);

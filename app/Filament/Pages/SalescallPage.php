@@ -1239,8 +1239,9 @@ class SalescallPage extends Page
     /**
      * Reason a Completed visit cannot be submitted yet, or null when it can.
      *
-     * Brands are always required. When the rep's region type requires a photo
-     * (is_image_required), at least one salescall image must exist.
+     * Brands are always required. A photo is required unless the rep's region
+     * type is exempt (is_image_required false); a rep with no linked region
+     * type is treated as requiring one.
      */
     private function salescallSubmitBlocker(int $salescallId): ?string
     {
@@ -1248,7 +1249,9 @@ class SalescallPage extends Page
             return 'brands';
         }
 
-        if (auth()->user()?->regionType?->is_image_required
+        $requiresImage = auth()->user()?->regionType?->is_image_required ?? true;
+
+        if ($requiresImage
             && ! SalescallImage::where('salescall_id', $salescallId)->exists()) {
             return 'image';
         }
