@@ -1,7 +1,7 @@
 # OMMC V2 — Tablet Customer Pull and Location Diagnostics
 
 - **Work ID:** `OMMC-20261013-tablet-customer-pull-location-diagnostics`
-- **State:** `TERMINAL_DELIVERED`
+- **State:** Packages A/B `TERMINAL_DELIVERED`; Package C `READY_FOR_HUMAN_REVIEW`.
 - **Repository:** Tablet `ommc2027-tablet`; Portal `ommc2027` inspected as read-only reference.
 - **Authorization:** Read-only investigation and this Work note only. No implementation, retained database access or writes, Customer Pull/Push, migration, token/cursor changes, commit, push, or deployment.
 - **Pre-existing worktree state:** Tablet had modified files and an untracked Work note/test for `OMMC-20261013-tablet-customer-interaction-reconciliation` before this note was added. Those changes were left untouched. Portal worktree was clean at inspection. The previous Interaction Work’s terminal delivery is not verified by this investigation; its note says `READY_FOR_TERMINAL_REVIEW`, and its files remain uncommitted in this Tablet checkout.
@@ -672,3 +672,84 @@ The integrated diffs are reviewable in `/private/tmp/ommc20261013-portal-upstrea
 The final focused Tablet identity/Push/Pull and notification regression group exited successfully with **2,264 assertions** and Pest warnings, but no failed tests. The corrected Sales Call test exited successfully with 7 assertions; `CustomerCodeSyncTest` exited successfully with 6 assertions. Portal paired acknowledgment/notification tests passed **42 tests, 241 assertions**. Targeted PHP lint, Pint, and `git diff --check` passed. The full Tablet suite was not rerun, so full-suite green is not claimed. The upstream baseline's stale Sales Call snapshot fixture failure was reproduced and corrected only in the approved test fixture.
 
 No retained database operation, Customer Pull/Push, checkpoint or watermark update, migration, or deployment occurred. Packages C–G and historical Pull recovery remain future work; retained synchronization remains NO GO. The original Tablet worktree was not modified. Terminal state applies to Packages A/B only.
+
+## Package C — shared aggregate reconciliation — 2026-10-13
+
+**Decision:** Packages A/B remain accepted and terminal-delivered. Human authorized bounded Package C implementation in isolated checkouts only. Current status: `READY_FOR_HUMAN_REVIEW`. No commit/push, retained database operation, Customer Pull/Push, migration execution, checkpoint/watermark change, or deployment occurred.
+
+**Verified bases:** Portal `9c2d085097afaa48aaa5b7f65e97b347895d0354`; Tablet `5a1704bce2a4db031a85200f542dc65773e2955f`. The isolated checkouts were based on these exact `origin/main` tips. The original dirty worktrees were left untouched.
+
+**Contract and behavior:** Portal now emits the Package A version-1 aggregate capability and explicit complete-collection list on full, scheduled, paginated Customer Pull responses as well as Push acknowledgment snapshots. Tablet uses `CustomerAggregateReconciler` for both versioned Push acknowledgments and Pull pages. It reuses Package B UUID-first identity resolution, preserves `customers.id`, writes Portal `server_id`, applies Portal synchronized fields, and reconciles Access/PIC, profile, history/events, brands, and categories in the existing local transaction boundaries. Pull still applies one page inside its original transaction; page cursor and final watermark code were not changed.
+
+A versioned Push snapshot must satisfy the complete contract or the Customer is marked `conflict`; identity-only legacy acknowledgment updates identity/sync metadata only and does not claim aggregate reconciliation. Pull without completeness metadata updates scalar fields and upserts present child rows, while leaving absent child rows intact. Complete collection replacement is limited to a supported v1 contract declaring all collections complete. Pending parent edits are preserved; Portal advancement from the stored synchronized base (or no known base) records a durable `conflict` through the existing `sync_status`/`sync_error` fields. A fingerprint guards edits made during an in-flight Push. Tablet-originated category events and derived histories, and Customers with pending/failed/syncing/conflicted Sales Call brand/category rows, are retained during complete Portal refresh. No conflict schema or UI was introduced.
+
+**Files changed in this isolated Tablet checkout:**
+- `app/Services/CustomerAggregateReconciler.php` (new)
+- `app/Services/SyncService.php`
+- `tests/Feature/CustomerAggregateReconcilerTest.php` (new)
+- `tests/Feature/CustomerOnlyPushTest.php`
+- `tests/Feature/CustomerPagedPullTest.php`
+- `docs/work/OMMC-20261013-tablet-customer-pull-location-diagnostics.md`
+
+**Validation:** Tablet focused aggregate, Push, Pull, identity resolver, Customer Code, and notification tests: **86 passed, 617 assertions**. Portal targeted contract/split Pull tests: **41 passed, 255 assertions**. These used disposable SQLite test databases and mocked Portal HTTP. The Tablet set includes the exact Customer 23591 duplicate-server-ID regression (both local rows preserved and the ambiguity rejected), stable local ID/child mapping, repeated Pull idempotence, complete/partial snapshot behavior, pending-edit conflict protection, legacy ACK safety, and notification compatibility. Targeted PHP lint, Pint, and `git diff --check` passed for changed PHP files.
+
+The full Portal `TabletSplitPullTest` has one unrelated existing assertion failure: its location snapshot test expects `reference_contract_version=2`, while the current base implementation returns version 3. The six schedule/customer Pull cases that exercise the changed routes pass. The full Tablet suite was not run; no full-suite green claim is made. An initial fixture run exposed the above legacy partial-child behavior and pending local history preservation gap; both are addressed and covered by the final passing tests.
+
+**Limitations and follow-up:** Conflict resolution remains manual through the existing status/error fields; there is no resolution UI. The shared reconciler intentionally covers the defined Customer aggregate collections only. Packages D–G, historical Pull recovery, retained identity repair, retained synchronization, schema migrations, and deployment remain separate human gates. Original Portal and Tablet worktrees were not modified.
+
+## Package C final assurance and remote reconciliation — 2026-10-13
+
+**State:** READY_FOR_HUMAN_REVIEW. Package C remains uncommitted and unpublished. This gate made no application or test changes, did not touch retained databases or synchronization, and did not modify either original dirty worktree.
+
+### Remote verification
+
+Fetched origin/main in both isolated Package C checkouts. The live tips still equal the accepted bases:
+
+- Portal: 9c2d085097afaa48aaa5b7f65e97b347895d0354.
+- Tablet: 5a1704bce2a4db031a85200f542dc65773e2955f.
+
+Each accepted base is an ancestor of its remote tip; HEAD..origin/main contains no commits and no changed files. There are no incoming commits or overlapping incoming hunks to integrate. The isolated working diffs remain limited to the Package C files already listed above. Hunk review found Portal changes only add the Customer aggregate contract to full, scheduled, and paged Customer Pull responses and refactor the existing Push snapshot metadata helper; the Tablet diff routes Customer aggregate writes through the shared reconciler and adds its focused coverage. Neither diff changes Notification Pull, Sales Call processing, location snapshot generation or validation, Pull page transaction boundaries, checkpoint, or watermark code. No merge, rebase, or reset was performed.
+
+The original repositories were inspected read-only and remain dirty with their pre-existing unrelated work. Portal original main remains five commits behind its cached upstream; Tablet original main remains seven commits behind its cached upstream. Their local changes remain in place and were not used for Package C validation. The isolated clones are the only Package C implementation checkouts.
+
+### Portal location snapshot failure classification
+
+Exact failing test: “locations pull returns the location reference tables” in tests/Feature/TabletSplitPullTest.php.
+
+The test expects reference_contract_version = 2; the response is version 3. I reproduced the failure from a clean git archive of the unchanged accepted Portal base 9c2d085, without Package C changes: 1 failed, 8 assertions, at the version assertion. The unchanged base serializer emits location reference version 3. Therefore the mismatch predates Package C and is an outdated test expectation; Package C only adds customer_snapshot_contract to Customer Pull JSON responses and does not modify the location stream or its version. The fixture was not changed in this gate. This one known Portal test failure remains outside Package C’s change impact and should be handled in a separately authorized test-fixture change.
+
+### Authority and reconciliation evidence
+
+Portal acknowledgment tests passed: 2 tests, 16 assertions for create/update acknowledgment behavior. They exercise persisted Portal aggregate serialization, including authoritative saved values and response scoping. Portal scheduled and paged Pull contract tests passed: 2 tests, 28 assertions.
+
+Tablet authoritative Push acknowledgment/reconciler tests passed: 6 tests, 42 assertions. The complete reconciler suite passed: 9 tests, 51 assertions. Tablet stable-ID, idempotent Pull, duplicate identity and Customer 23591 collision regressions passed: 4 tests, 20 assertions. These assert the same local row is updated, Portal values replace synchronized fields, repeat application does not duplicate the Customer, and ambiguous duplicate server_id associations do not merge or alter either distinct aggregate.
+
+Complete snapshots reconcile only their declared complete collections. Partial/legacy snapshots leave absent child records intact. Pending parent edits and Tablet-originated child history are protected; pending Sales Call child work is retained. Child relationships are written against the canonical local Customer ID. Disposable regressions read back resulting records and cover local foreign-key stability and unrelated Customer preservation.
+
+### Shared sync and transaction compatibility
+
+Tablet notification and Sales Call compatibility tests passed: 18 tests, 45 assertions, including the repeated schedule Pull fixture. The Portal location snapshot failure is independently reproduced on the unchanged base and is not a Package C regression. Code review confirms the existing Pull page transaction/checkpoint flow is unchanged; the reconciler executes within the existing local transaction. No retained checkpoint or watermark behavior was exercised or modified.
+
+### Validation and remaining status
+
+Additional tests executed in this gate:
+
+- Portal Push acknowledgment: 2 passed, 16 assertions.
+- Portal scheduled/paged Pull: 2 passed, 28 assertions.
+- Tablet aggregate reconciler: 9 passed, 51 assertions.
+- Tablet Push/reconciler identity regressions: 6 passed, 42 assertions.
+- Tablet stable-ID/idempotent Pull/collision regressions: 4 passed, 20 assertions.
+- Tablet notifications/Sales Call compatibility: 18 passed, 45 assertions.
+- Clean Portal base location test: 1 known baseline failure, 8 assertions (3 actual versus 2 expected).
+- PHP lint and targeted Pint passed for all Package C PHP files; git diff --check passed after the review. No source or test files changed in this assurance gate.
+
+The prior Package C focused totals remain as recorded above. The full Tablet suite was not run; no full-suite green claim is made. No Package C defect was found in the executed assurance. Terminal delivery is not authorized in this gate and remains pending separate Human review/authorization. Packages D–G, historical Pull recovery, retained identity repair, retained synchronization, migrations, and deployment remain separate work/gates.
+
+### Package C implementation commit and delivery gate
+
+- Portal implementation commit: `1307de3` (`Add shared Tablet Customer aggregate reconciliation`).
+- Tablet implementation commit: `bc5c6a6` (`Reconcile Tablet Customer aggregates on sync`).
+- Final rerun immediately before commit: Portal acknowledgment + Pull coverage **41 tests / 255 assertions**; Tablet aggregate, Push/Pull identity, notifications, and Sales Call coverage **86 tests / 617 assertions**.
+- PHP lint, targeted Pint, and `git diff --check` passed in both isolated checkouts. The known clean-base Portal location contract test still fails because v3 is returned while the stale test expects v2; it is not part of the changed location behavior.
+- Only the reviewed Package C implementation and tests are in these commits. Work-note changes are being committed separately. Original dirty worktrees remain unchanged. No synchronization, retained database operation, migration, checkpoint/watermark change, or deployment was performed.
+- Delivery is not yet verified. State remains `READY_FOR_HUMAN_REVIEW` until both implementation and paired Work-note commits are pushed and fetched successfully; only then may the Work be marked `TERMINAL_DELIVERED`.
