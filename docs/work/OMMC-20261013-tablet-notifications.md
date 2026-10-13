@@ -1,8 +1,8 @@
 # OMMC-20261013-tablet-notifications
 
-- **State:** READY_FOR_TERMINAL_REVIEW
+- **State:** TERMINAL_DELIVERED
 - **Repositories:** Tablet `ommc2027-tablet` and Portal `ommc2027`
-- **Authorization:** Human authorized local implementation and validation of per-user tablet notifications: the tablet pulls the authenticated user's Portal notifications into the local app, showing a topbar bell with unread badge and a Notifications page with local read state. Terminal delivery is not authorized; no commit or push.
+- **Authorization:** Human authorized local implementation and validation of per-user tablet notifications: the tablet pulls the authenticated user's Portal notifications into the local app, showing a topbar bell with unread badge and a Notifications page with local read state. Terminal delivery was authorized on 2026-10-13 ("Push both branches").
 
 ## Objective and accepted decisions
 
@@ -37,6 +37,13 @@ Deliver each user's existing Portal notifications (form status updates) to their
 
 Pending Human review: on a device or local run, confirm the topbar bell badge appears for the logged-in user when notifications exist, the page lists them newest-first with tap-to-read/expand and mark-all-read, and offline behavior keeps local rows visible. Confirm a second user on the same device sees only their own notifications.
 
+## Delivery evidence
+
+- Terminal authorization: Human, 2026-10-13 ("Push both branches").
+- Tablet branch `21-tablet-forms-training`, work commit `beb2aa2` (`feat(notifications): add per-user notifications with bell and page`).
+- Portal branch `18-fixes-requiring-image-for-specific-region-type`, work commit `d27448a` (`feat(sync): add per-user notifications pull endpoint`).
+- Delivery record: the `docs(work)` commit on the same branch (hash reported in the delivery report).
+
 ## Blockers and remaining work
 
-None blocking. Remaining: terminal delivery only, under separate explicit Human authorization.
+None. Terminal delivery completed 2026-10-13.
