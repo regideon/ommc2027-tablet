@@ -349,8 +349,11 @@ test('the salescall pull uses the schedule endpoint and fetches locations only w
     expect(app(SyncService::class)->pull()->success)->toBeTrue();
     expect(app(SyncService::class)->pull()->success)->toBeTrue();
 
-    Http::assertSentCount(3);
-    Http::assertSent(fn (Request $request) => str_ends_with($request->url(), '/api/sync/pull/locations'));
+    Http::assertSentCount(5);
+    expect(Http::recorded(fn (Request $request) => str_ends_with($request->url(), '/api/sync/pull/locations'))->count())->toBe(1)
+        ->and(Http::recorded(fn (Request $request) => str_contains($request->url(), '/api/sync/pull/schedule'))->count())->toBe(2)
+        ->and(Http::recorded(fn (Request $request) => str_contains($request->url(), '/api/sync/pull/notifications'))->count())->toBe(2);
+
     Http::assertNotSent(fn (Request $request) => str_ends_with($request->url(), '/api/sync/pull'));
 });
 

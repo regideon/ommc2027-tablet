@@ -48,16 +48,17 @@
                 <span class="material-symbols-outlined text-gray-300 text-xl">chevron_right</span>
             </a>
 
-            <div class="flex items-center gap-4 px-5 py-4 opacity-50">
+            <a href="/app/notifications"
+               class="flex items-center gap-4 px-5 py-4 hover:bg-gray-50 transition-colors active:bg-gray-100">
                 <div class="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center shrink-0">
                     <span class="material-symbols-outlined text-blue-600">notifications</span>
                 </div>
                 <div class="flex-1 min-w-0">
                     <p class="font-semibold text-sm text-[#191c1e]">Notifications</p>
-                    <p class="text-xs text-[#737685]">Manage alerts and reminders</p>
+                    <p class="text-xs text-[#737685]">Form approval updates</p>
                 </div>
-                <span class="text-[10px] font-black text-gray-400 uppercase tracking-wider">Soon</span>
-            </div>
+                <span class="material-symbols-outlined text-gray-300 text-xl">chevron_right</span>
+            </a>
 
             <div class="flex items-center gap-4 px-5 py-4 opacity-50">
                 <div class="w-10 h-10 bg-purple-50 rounded-xl flex items-center justify-center shrink-0">
