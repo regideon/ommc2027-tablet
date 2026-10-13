@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Enums\FormKey;
+use App\Filament\Concerns\LocksRequestedSalescall;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrProgram;
 use App\Models\Salescall;
@@ -21,6 +22,8 @@ use Native\Mobile\Facades\Camera;
 
 class CrrFormPage extends Page
 {
+    use LocksRequestedSalescall;
+
     protected string $view = 'filament.pages.crr-form-page';
 
     protected static bool $shouldRegisterNavigation = false;
@@ -113,6 +116,8 @@ class CrrFormPage extends Page
                 return;
             }
         }
+
+        $this->applyRequestedSalescallLock();
 
         $this->date_implemented = now()->toDateString();
     }

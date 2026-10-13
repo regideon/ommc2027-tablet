@@ -105,6 +105,35 @@ test('a failed background refresh keeps local rows visible', function () {
         ->assertSee('Offline visible');
 });
 
+test('refreshing the page pulls new notifications from the portal', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+
+    $user = User::factory()->create(['api_token' => 'page-pull-token', 'server_id' => 9002]);
+    $this->actingAs($user);
+
+    $id = (string) Str::uuid();
+
+    Http::fake([
+        'portal.test/api/ping' => Http::response([], 200),
+        'portal.test/api/sync/pull/notifications*' => Http::response([
+            'notifications' => [[
+                'id' => $id,
+                'title' => 'Pulled on visit',
+                'body' => 'Body for pulled row',
+                'module' => 'crr',
+                'created_at' => now()->toIso8601String(),
+            ]],
+            'has_more' => false,
+        ], 200),
+    ]);
+
+    Livewire::test(NotificationsPage::class)
+        ->call('refresh')
+        ->assertSee('Pulled on visit');
+
+    expect(DB::table('notifications')->where('id', $id)->exists())->toBeTrue();
+});
+
 test('the notifications page renders an empty state without rows', function () {
     $user = User::factory()->create();
     $this->actingAs($user);

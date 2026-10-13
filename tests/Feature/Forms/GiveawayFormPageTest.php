@@ -4,11 +4,14 @@ use App\Enums\Giveaway\GiveawayCategory;
 use App\Enums\RSMStatus;
 use App\Filament\Pages\FormsPage;
 use App\Filament\Pages\GiveawayFormPage;
+use App\Models\Customer;
 use App\Models\Forms\Giveaway\Giveaway;
 use App\Models\Forms\Giveaway\GiveawayAnswer;
 use App\Models\Forms\Giveaway\GiveawayAnswerItem;
 use App\Models\Forms\Giveaway\GiveawayItem;
 use App\Models\Forms\Giveaway\GiveawaySignature;
+use App\Models\Itinerary;
+use App\Models\Salescall;
 use App\Models\StagedAttachment;
 use App\Models\User;
 use App\Services\Forms\GiveawayService;
@@ -265,4 +268,59 @@ test('the edit route aborts 403 for a non-pending submission', function () {
 
     $this->get(GiveawayFormPage::getUrl(['submission' => $giveaway->id]))
         ->assertForbidden();
+});
+
+function giveawayFormPageSalescall(User $user): Salescall
+{
+    $customer = Customer::create(['name' => 'Giveaway Salescall Customer', 'is_active' => true]);
+    $itinerary = Itinerary::create(['created_by' => $user->id, 'itinerary_status_id' => 2]);
+
+    return Salescall::create([
+        'itinerary_id' => $itinerary->id,
+        'customer_id' => $customer->id,
+        'created_by' => $user->id,
+        'local_uuid' => (string) Str::uuid(),
+        'sync_status' => 'pending',
+        'actual_in' => now(),
+    ]);
+}
+
+test('opening the Giveaway form from a sales call preselects and locks that sales call', function () {
+    $user = giveawayFormPageUser();
+    $this->actingAs($user);
+
+    $salescall = giveawayFormPageSalescall($user);
+
+    Livewire::withQueryParams(['salescall' => $salescall->local_uuid])
+        ->test(GiveawayFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', $salescall->local_uuid, true)
+        ->assertSet('salescallLocked', true, true)
+        ->assertSee('Started from this Sales Call')
+        ->assertSeeHtml('wire:model="salescall_uuid" class="field-input bg-white" disabled');
+});
+
+test('opening the Giveaway form with an unknown sales call uuid does not preselect or lock', function () {
+    $user = giveawayFormPageUser();
+    $this->actingAs($user);
+
+    Livewire::withQueryParams(['salescall' => (string) Str::uuid()])
+        ->test(GiveawayFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', null, true)
+        ->assertSet('salescallLocked', false, true);
+});
+
+test('a sales call owned by another rep is ignored when opening the Giveaway form', function () {
+    $user = giveawayFormPageUser();
+    $otherUser = User::factory()->create();
+    $this->actingAs($user);
+
+    $foreignSalescall = giveawayFormPageSalescall($otherUser);
+
+    Livewire::withQueryParams(['salescall' => $foreignSalescall->local_uuid])
+        ->test(GiveawayFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', null, true)
+        ->assertSet('salescallLocked', false, true);
 });

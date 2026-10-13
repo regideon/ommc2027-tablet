@@ -269,12 +269,6 @@ class SyncService
             return SyncResult::fail('Pull error: '.$e->getMessage(), 'exception');
         }
 
-        try {
-            $this->pullNotifications();
-        } catch (Throwable $exception) {
-            Log::warning('Notification pull skipped: '.$exception->getMessage());
-        }
-
         $itineraryCount = count($data['itineraries'] ?? []);
         $salescallCount = array_sum(
             array_map(fn ($i) => count($i['salescalls'] ?? []), $data['itineraries'] ?? [])
