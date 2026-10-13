@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Enums\FormKey;
 use App\Enums\TradeCheck\FieldType;
+use App\Filament\Concerns\LocksRequestedSalescall;
 use App\Filament\Concerns\StagesAttachments;
 use App\Models\Forms\TradeCheck\TradeCheck;
 use App\Models\Forms\TradeCheck\TradeCheckAttachment;
@@ -27,6 +28,7 @@ use Throwable;
 
 class TradeCheckFormPage extends Page
 {
+    use LocksRequestedSalescall;
     use StagesAttachments;
 
     protected string $view = 'filament.pages.trade-check-form-page';
@@ -138,6 +140,8 @@ class TradeCheckFormPage extends Page
                 return;
             }
         }
+
+        $this->applyRequestedSalescallLock();
 
         $templateId = filter_var(request()->query('template'), FILTER_VALIDATE_INT);
 

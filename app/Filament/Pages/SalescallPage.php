@@ -12,6 +12,9 @@ use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
 use App\Models\CustomerProfileAttachment;
 use App\Models\ExpenseType;
+use App\Models\Forms\CRRSignage\Signage;
+use App\Models\Forms\Marketing\Marketing;
+use App\Models\Forms\TradeCheck\TradeCheck;
 use App\Models\Itinerary;
 use App\Models\MaterialGroup;
 use App\Models\Salescall;
@@ -1069,9 +1072,11 @@ class SalescallPage extends Page
 
             if ($blocker !== null) {
                 Notification::make()
-                    ->title($blocker === 'image'
-                        ? 'Add at least one photo before completing this visit.'
-                        : 'Save brands before submitting.')
+                    ->title(match ($blocker) {
+                        'image' => 'Add at least one photo before completing this visit.',
+                        'forms' => 'Create the CRR Signage, Marketing, and Trade Check forms for this sales call before completing.',
+                        default => 'Save brands before submitting.',
+                    })
                     ->danger()
                     ->send();
 
@@ -1241,7 +1246,8 @@ class SalescallPage extends Page
      *
      * Brands are always required. A photo is required unless the rep's region
      * type is exempt (is_image_required false); a rep with no linked region
-     * type is treated as requiring one.
+     * type is treated as requiring one. A CRR Signage, a Marketing, and a
+     * Trade Check submission for this sales call are always required.
      */
     private function salescallSubmitBlocker(int $salescallId): ?string
     {
@@ -1256,7 +1262,24 @@ class SalescallPage extends Page
             return 'image';
         }
 
+        if (! $this->hasAllRequiredForms($salescallId)) {
+            return 'forms';
+        }
+
         return null;
+    }
+
+    /**
+     * Whether the submitting rep has created a CRR Signage, a Marketing, and
+     * a Trade Check for this sales call.
+     */
+    private function hasAllRequiredForms(int $salescallId): bool
+    {
+        $submittedBy = auth()->id();
+
+        return Signage::where('salescall_id', $salescallId)->where('submitted_by', $submittedBy)->exists()
+            && Marketing::where('salescall_id', $salescallId)->where('submitted_by', $submittedBy)->exists()
+            && TradeCheck::where('salescall_id', $salescallId)->where('submitted_by', $submittedBy)->exists();
     }
 
     public function syncNow(): void

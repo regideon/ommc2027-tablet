@@ -3,12 +3,15 @@
 use App\Enums\Marketing\RealizationStage;
 use App\Filament\Pages\FormsPage;
 use App\Filament\Pages\MarketingFormPage;
+use App\Models\Customer;
 use App\Models\Forms\Marketing\Marketing;
 use App\Models\Forms\Marketing\MarketingMechanic;
 use App\Models\Forms\Marketing\MarketingProgram;
 use App\Models\Forms\Marketing\MarketingRealization;
 use App\Models\Forms\Marketing\MarketingVolume;
+use App\Models\Itinerary;
 use App\Models\RegionType;
+use App\Models\Salescall;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -214,4 +217,65 @@ test('the edit route aborts 403 for a non-pending Marketing recommendation', fun
     $this->actingAs($user)
         ->get(MarketingFormPage::getUrl(['marketing' => $marketing->id]))
         ->assertForbidden();
+});
+
+function marketingFormPageSalescall(User $user): Salescall
+{
+    $customer = Customer::create(['name' => 'Marketing Salescall Customer', 'is_active' => true]);
+    $itinerary = Itinerary::create(['created_by' => $user->id, 'itinerary_status_id' => 2]);
+
+    return Salescall::create([
+        'itinerary_id' => $itinerary->id,
+        'customer_id' => $customer->id,
+        'created_by' => $user->id,
+        'local_uuid' => (string) Str::uuid(),
+        'sync_status' => 'pending',
+        'actual_in' => now(),
+    ]);
+}
+
+test('opening the Marketing form from a sales call preselects and locks that sales call', function () {
+    $user = marketingFormPageUser();
+    marketingFormPageProgram();
+    marketingFormPageRegion();
+    $this->actingAs($user);
+
+    $salescall = marketingFormPageSalescall($user);
+
+    Livewire::withQueryParams(['salescall' => $salescall->local_uuid])
+        ->test(MarketingFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', $salescall->local_uuid, true)
+        ->assertSet('salescallLocked', true, true)
+        ->assertSee('Started from this Sales Call')
+        ->assertSeeHtml('wire:model="salescall_uuid" class="field-input bg-white" disabled');
+});
+
+test('opening the Marketing form with an unknown sales call uuid does not preselect or lock', function () {
+    $user = marketingFormPageUser();
+    marketingFormPageProgram();
+    marketingFormPageRegion();
+    $this->actingAs($user);
+
+    Livewire::withQueryParams(['salescall' => (string) Str::uuid()])
+        ->test(MarketingFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', null, true)
+        ->assertSet('salescallLocked', false, true);
+});
+
+test('a sales call owned by another rep is ignored when opening the Marketing form', function () {
+    $user = marketingFormPageUser();
+    marketingFormPageProgram();
+    marketingFormPageRegion();
+    $otherUser = User::factory()->create();
+    $this->actingAs($user);
+
+    $foreignSalescall = marketingFormPageSalescall($otherUser);
+
+    Livewire::withQueryParams(['salescall' => $foreignSalescall->local_uuid])
+        ->test(MarketingFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', null, true)
+        ->assertSet('salescallLocked', false, true);
 });

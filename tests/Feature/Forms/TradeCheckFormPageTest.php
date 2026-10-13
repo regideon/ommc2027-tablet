@@ -2,10 +2,13 @@
 
 use App\Filament\Pages\FormsPage;
 use App\Filament\Pages\TradeCheckFormPage;
+use App\Models\Customer;
 use App\Models\Forms\TradeCheck\TradeCheck;
 use App\Models\Forms\TradeCheck\TradeCheckAnswer;
 use App\Models\Forms\TradeCheck\TradeCheckAnswerItems;
 use App\Models\Forms\TradeCheck\TradeCheckAttachment;
+use App\Models\Itinerary;
+use App\Models\Salescall;
 use App\Models\User;
 use App\Services\Forms\TradeCheckService;
 use App\Services\StagedAttachmentService;
@@ -232,4 +235,63 @@ test('the edit route aborts 403 for a non-pending submission', function () {
 
     $this->get(TradeCheckFormPage::getUrl(['submission' => $template->id]))
         ->assertForbidden();
+});
+
+function tradeCheckFormPageSalescall(User $user): Salescall
+{
+    $customer = Customer::create(['name' => 'Trade Check Salescall Customer', 'is_active' => true]);
+    $itinerary = Itinerary::create(['created_by' => $user->id, 'itinerary_status_id' => 2]);
+
+    return Salescall::create([
+        'itinerary_id' => $itinerary->id,
+        'customer_id' => $customer->id,
+        'created_by' => $user->id,
+        'local_uuid' => (string) Str::uuid(),
+        'sync_status' => 'pending',
+        'actual_in' => now(),
+    ]);
+}
+
+test('opening the Trade Check form from a sales call preselects and locks that sales call', function () {
+    $user = tradeCheckFormPageUser();
+    $this->actingAs($user);
+
+    tradeCheckFormPageTemplate();
+    $salescall = tradeCheckFormPageSalescall($user);
+
+    Livewire::withQueryParams(['salescall' => $salescall->local_uuid])
+        ->test(TradeCheckFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', $salescall->local_uuid, true)
+        ->assertSet('salescallLocked', true, true)
+        ->assertSee('Started from this Sales Call')
+        ->assertSeeHtml('wire:model="salescall_uuid" class="field-input bg-white" disabled');
+});
+
+test('opening the Trade Check form with an unknown sales call uuid does not preselect or lock', function () {
+    $user = tradeCheckFormPageUser();
+    $this->actingAs($user);
+
+    tradeCheckFormPageTemplate();
+
+    Livewire::withQueryParams(['salescall' => (string) Str::uuid()])
+        ->test(TradeCheckFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', null, true)
+        ->assertSet('salescallLocked', false, true);
+});
+
+test('a sales call owned by another rep is ignored when opening the Trade Check form', function () {
+    $user = tradeCheckFormPageUser();
+    $otherUser = User::factory()->create();
+    $this->actingAs($user);
+
+    tradeCheckFormPageTemplate();
+    $foreignSalescall = tradeCheckFormPageSalescall($otherUser);
+
+    Livewire::withQueryParams(['salescall' => $foreignSalescall->local_uuid])
+        ->test(TradeCheckFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', null, true)
+        ->assertSet('salescallLocked', false, true);
 });

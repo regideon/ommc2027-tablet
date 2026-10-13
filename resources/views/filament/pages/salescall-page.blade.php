@@ -307,6 +307,19 @@
         expenseTypes: @js($expenseTypes),
         expenseSupportedTypes: ['communication_expenses', 'emergency_expenses', 'lodging', 'per_diem', 'ancillary_expenses', 'airfare', 'representation', 'staff_meeting', 'repairs_and_maintenance', 'transportation_toll', 'transportation_gas', 'transportation_parking', 'transportation_commute'],
         expenseCreateUrl: @js(\App\Filament\Pages\ExpenseCreatePage::getUrl()),
+        // Per-visit forms opened from this sales call carry ?salescall=<local_uuid>
+        // so the form page preselects and locks the call.
+        formUrls: {
+            signage: @js(\App\Filament\Pages\SignageFormPage::getUrl()),
+            marketing: @js(\App\Filament\Pages\MarketingFormPage::getUrl()),
+            tradeCheck: @js(\App\Filament\Pages\TradeCheckFormPage::getUrl()),
+        },
+        openSalescallForm(form) {
+            if (!this.selectedCall?.local_uuid) return;
+            const url = new URL(this.formUrls[form], window.location.origin);
+            url.searchParams.set('salescall', this.selectedCall.local_uuid);
+            window.location.assign(url.toString());
+        },
         showExpenseModal: false,
         openExpenseForm() {
             if (!this.selectedCall) return;
@@ -1793,6 +1806,24 @@
                                 <button
                                     title="{{ $label }} — {{ $sub }}"
                                     @if($targetTab) @click="tab = '{{ $targetTab }}'" @endif
+                                    class="h-18 lg:h-20 bg-white border border-gray-200 rounded-2xl flex items-center px-4 lg:px-5 gap-3 lg:gap-4 hover:border-[#890f00] hover:bg-red-50 group transition-all">
+                                    <div class="w-9 h-9 lg:w-10 lg:h-10 rounded-full bg-[#edeef0] group-hover:bg-[#ffdad3] flex items-center justify-center shrink-0">
+                                        <span class="material-symbols-outlined text-lg text-[#737685] group-hover:text-[#890f00]">{{ $icon }}</span>
+                                    </div>
+                                    <div class="text-left min-w-0">
+                                        <p class="font-bold text-sm text-[#191c1e]">{{ $label }}</p>
+                                        <p class="text-xs text-[#737685] truncate">{{ $sub }}</p>
+                                    </div>
+                                </button>
+                                @endforeach
+                                @foreach([
+                                    ['image', 'CRR Signage', 'Signage request form', 'signage'],
+                                    ['campaign', 'Marketing', 'Local Store Marketing', 'marketing'],
+                                    ['checklist', 'Trade Check', 'Trade check form', 'tradeCheck'],
+                                ] as [$icon, $label, $sub, $formKey])
+                                <button
+                                    title="{{ $label }} — {{ $sub }}"
+                                    @click="openSalescallForm('{{ $formKey }}')"
                                     class="h-18 lg:h-20 bg-white border border-gray-200 rounded-2xl flex items-center px-4 lg:px-5 gap-3 lg:gap-4 hover:border-[#890f00] hover:bg-red-50 group transition-all">
                                     <div class="w-9 h-9 lg:w-10 lg:h-10 rounded-full bg-[#edeef0] group-hover:bg-[#ffdad3] flex items-center justify-center shrink-0">
                                         <span class="material-symbols-outlined text-lg text-[#737685] group-hover:text-[#890f00]">{{ $icon }}</span>
