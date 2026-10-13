@@ -37,9 +37,18 @@ test('Customer-only push sends pending and retryable failed customers and reconc
     insertPushCustomer('Exhausted Shop', 'failed', 3);
     DB::table('itineraries')->insert(['local_uuid' => (string) Str::uuid(), 'sync_status' => 'pending', 'created_at' => now(), 'updated_at' => now()]);
 
-    Http::fake(['portal.test/api/sync/push/customer' => Http::sequence()
-        ->push(['server_id' => 301, 'unique_id' => 'PORTAL-CODE', 'updated_at' => now()->toISOString()])
-        ->push(['server_id' => 302, 'updated_at' => now()->toISOString()])]);
+    $ackIds = [301, 302];
+    $ackIndex = 0;
+    Http::fake(function ($request) use (&$ackIndex, $ackIds) {
+        $serverId = $ackIds[$ackIndex++];
+
+        return Http::response([
+            'server_id' => $serverId,
+            'local_uuid' => $request['local_uuid'],
+            'unique_id' => $serverId === 301 ? 'PORTAL-CODE' : null,
+            'updated_at' => now()->toISOString(),
+        ]);
+    });
 
     $result = app(SyncService::class)->pushPendingCustomers();
 
@@ -74,15 +83,67 @@ test('Customer-only push retains a failed local record as retryable', function (
         ->and($customer->sync_error)->not->toBeNull();
 });
 
+test('Customer Push acknowledgment resolves the existing local row by UUID and preserves its local key', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    $customerId = insertPushCustomer('Acknowledged Offline Shop');
+    $localUuid = DB::table('customers')->where('id', $customerId)->value('local_uuid');
+    Http::fake(['portal.test/api/sync/push/customer' => Http::response([
+        'server_id' => 72011,
+        'local_uuid' => $localUuid,
+        'unique_id' => 'PORTAL-72011',
+        'updated_at' => now()->toISOString(),
+    ])]);
+
+    $result = app(SyncService::class)->pushCustomer($customerId);
+
+    expect($result->success)->toBeTrue()
+        ->and($result->message)->toContain('Portal lacks the authoritative aggregate snapshot contract')
+        ->and(DB::table('customers')->where('id', $customerId)->value('id'))->toBe($customerId)
+        ->and(DB::table('customers')->where('id', $customerId)->value('server_id'))->toBe(72011)
+        ->and(DB::table('customers')->where('id', $customerId)->value('local_uuid'))->toBe($localUuid);
+});
+
+test('Customer Push acknowledgment with a conflicting UUID does not bind the Portal identity', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    $customerId = insertPushCustomer('Conflicting Acknowledgment Shop');
+    $unrelatedId = insertPushCustomer('Unrelated Existing Portal Shop', 'synced');
+    DB::table('customers')->where('id', $unrelatedId)->update(['server_id' => 72012]);
+    $localUuid = DB::table('customers')->where('id', $customerId)->value('local_uuid');
+    Http::fake(['portal.test/api/sync/push/customer' => Http::response([
+        'server_id' => 72012,
+        'local_uuid' => (string) Str::uuid(),
+        'unique_id' => 'UNRELATED-CODE',
+        'updated_at' => now()->toISOString(),
+    ])]);
+
+    $result = app(SyncService::class)->pushCustomer($customerId);
+
+    expect($result->success)->toBeFalse()
+        ->and($result->errorCode)->toBe('customer_identity_conflict')
+        ->and(DB::table('customers')->where('id', $customerId)->value('server_id'))->toBeNull()
+        ->and(DB::table('customers')->where('id', $customerId)->value('local_uuid'))->toBe($localUuid)
+        ->and(DB::table('customers')->where('id', $customerId)->value('sync_status'))->toBe('conflict')
+        ->and(DB::table('customers')->where('id', $unrelatedId)->value('server_id'))->toBe(72012);
+});
+
 test('Customer-only push reports partial success and failure accurately', function () {
     config(['sync.server_url' => 'http://portal.test']);
     $user = User::factory()->create(['api_token' => 'tablet-token']);
     $this->actingAs($user);
     insertPushCustomer('Synced Shop');
     $failedId = insertPushCustomer('Failed Shop');
-    Http::fake(['portal.test/api/sync/push/customer' => Http::sequence()
-        ->push(['server_id' => 305, 'updated_at' => now()->toISOString()])
-        ->push(['message' => 'Unavailable'], 503)]);
+    $ackCount = 0;
+    Http::fake(function ($request) use (&$ackCount) {
+        if ($ackCount++ > 0) {
+            return Http::response(['message' => 'Unavailable'], 503);
+        }
+
+        return Http::response(['server_id' => 305, 'local_uuid' => $request['local_uuid'], 'updated_at' => now()->toISOString()]);
+    });
 
     $result = app(SyncService::class)->pushPendingCustomers();
 
@@ -99,7 +160,9 @@ test('Customer-only push targets the requested customer and excludes ineligible 
     $this->actingAs($user);
     $targetId = insertPushCustomer('Target Shop');
     insertPushCustomer('Other Shop');
-    Http::fake(['portal.test/api/sync/push/customer' => Http::response(['server_id' => 303, 'updated_at' => now()->toISOString()])]);
+    Http::fake(function ($request) {
+        return Http::response(['server_id' => 303, 'local_uuid' => $request['local_uuid'], 'updated_at' => now()->toISOString()]);
+    });
 
     $result = app(SyncService::class)->pushCustomer($targetId);
 
@@ -161,7 +224,7 @@ test('an in-flight claim prevents a concurrent Customer push from issuing anothe
         if (str_ends_with($request->url(), '/api/sync/push/customer')) {
             $concurrent = app(SyncService::class)->pushCustomer($customerId);
 
-            return Http::response(['server_id' => 992, 'updated_at' => now()->toISOString()]);
+            return Http::response(['server_id' => 992, 'local_uuid' => $request['local_uuid'], 'updated_at' => now()->toISOString()]);
         }
 
         return Http::response([], 404);
@@ -253,7 +316,9 @@ test('Customer page manual action uses Customer-only push and exposes loading co
     $user = User::factory()->create(['api_token' => 'tablet-token']);
     $this->actingAs($user);
     insertPushCustomer('Manual Shop');
-    Http::fake(['portal.test/api/sync/push/customer' => Http::response(['server_id' => 304, 'updated_at' => now()->toISOString()])]);
+    $customerId = DB::table('customers')->latest('id')->value('id');
+    $localUuid = DB::table('customers')->where('id', $customerId)->value('local_uuid');
+    Http::fake(['portal.test/api/sync/push/customer' => Http::response(['server_id' => 304, 'local_uuid' => $localUuid, 'updated_at' => now()->toISOString()])]);
 
     Livewire::test(CustomerPage::class)
         ->assertSee('Push Customers')
@@ -318,9 +383,11 @@ test('indicator eligibility matches records attempted by Customer-only push', fu
     insertPushCustomer('Retry Parity Shop', 'failed', 2);
     insertPushCustomer('Exhausted Parity Shop', 'failed', 3);
     insertPushCustomer('Synced Parity Shop', 'synced');
-    Http::fake(['portal.test/api/sync/push/customer' => Http::sequence()
-        ->push(['server_id' => 401, 'updated_at' => now()->toISOString()])
-        ->push(['server_id' => 402, 'updated_at' => now()->toISOString()])]);
+    $ackIds = [401, 402];
+    $ackIndex = 0;
+    Http::fake(function ($request) use (&$ackIndex, $ackIds) {
+        return Http::response(['server_id' => $ackIds[$ackIndex++], 'local_uuid' => $request['local_uuid'], 'updated_at' => now()->toISOString()]);
+    });
 
     $sync = app(SyncService::class);
     expect($sync->hasPendingCustomerPushWork())->toBeTrue();
@@ -340,7 +407,9 @@ test('successful manual push immediately clears red state when no customer work 
     $user = User::factory()->create(['api_token' => 'tablet-token']);
     $this->actingAs($user);
     insertPushCustomer('Successful Indicator Shop');
-    Http::fake(['portal.test/api/sync/push/customer' => Http::response(['server_id' => 403, 'updated_at' => now()->toISOString()])]);
+    Http::fake(function ($request) {
+        return Http::response(['server_id' => 403, 'local_uuid' => $request['local_uuid'], 'updated_at' => now()->toISOString()]);
+    });
 
     Livewire::test(CustomerPage::class)
         ->assertSee('text-red-500 hover:text-red-600', false)
@@ -368,9 +437,14 @@ test('partial manual push keeps Push Customers red while retryable customer work
     $this->actingAs($user);
     insertPushCustomer('Partial Success Indicator Shop');
     insertPushCustomer('Partial Failure Indicator Shop');
-    Http::fake(['portal.test/api/sync/push/customer' => Http::sequence()
-        ->push(['server_id' => 404, 'updated_at' => now()->toISOString()])
-        ->push(['message' => 'Unavailable'], 503)]);
+    $ackCount = 0;
+    Http::fake(function ($request) use (&$ackCount) {
+        if ($ackCount++ > 0) {
+            return Http::response(['message' => 'Unavailable'], 503);
+        }
+
+        return Http::response(['server_id' => 404, 'local_uuid' => $request['local_uuid'], 'updated_at' => now()->toISOString()]);
+    });
 
     Livewire::test(CustomerPage::class)
         ->assertSee('text-red-500 hover:text-red-600', false)

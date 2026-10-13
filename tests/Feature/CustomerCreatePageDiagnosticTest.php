@@ -645,7 +645,9 @@ test('customer add page pushes Access and PIC using user emails instead of local
     $pic = User::factory()->create(['email' => 'pic@example.test']);
     $user->forceFill(['api_token' => 'tablet-token'])->save();
     $this->actingAs($user);
-    Http::fake(['*api/sync/push/customer' => Http::response(['server_id' => 100, 'updated_at' => now()->toISOString()], 200)]);
+    Http::fake(['*api/sync/push/customer' => function ($request) {
+        return Http::response(['server_id' => 100, 'local_uuid' => $request['local_uuid'], 'updated_at' => now()->toISOString()], 200);
+    }]);
 
     Livewire::test(CustomerCreatePage::class)
         ->set(validCustomerCreateState())
@@ -1260,7 +1262,13 @@ test('customer add validates supplied Warehouse Code and Delivery Detail values 
     $user = seedCustomerCreateFixtures();
     $user->forceFill(['api_token' => 'tablet-token'])->save();
     $this->actingAs($user);
-    Http::fake(['*' => Http::response(['server_id' => 100, 'updated_at' => now()->toISOString()], 200)]);
+    Http::fake(function ($request) {
+        if (str_ends_with($request->url(), '/api/sync/push/customer')) {
+            return Http::response(['server_id' => 100, 'local_uuid' => $request['local_uuid'], 'updated_at' => now()->toISOString()], 200);
+        }
+
+        return Http::response(['server_id' => 100, 'updated_at' => now()->toISOString()], 200);
+    });
 
     Livewire::test(CustomerCreatePage::class)
         ->set(array_replace_recursive(validCustomerCreateState(), [

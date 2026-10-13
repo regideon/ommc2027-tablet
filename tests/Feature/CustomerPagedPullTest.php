@@ -245,20 +245,26 @@ test('zero changed Customer count means returned Portal data matched local value
 test('a later customer pull asks only for changes and fetches customers that re-entered scope', function () {
     DB::table('sync_states')->insert(['key' => 'customers.pulled_through.'.$this->user->id, 'value' => json_encode('2026-10-04T00:00:00.000000Z')]);
     DB::table('municipalities')->insert(['id' => 1, 'name' => 'M1']);
+    $firstLocalUuid = (string) Str::uuid();
+    $secondLocalUuid = (string) Str::uuid();
     DB::table('customers')->insert([
-        ['id' => 1, 'server_id' => 1, 'name' => 'Customer 1', 'is_active' => true, 'sync_status' => 'synced'],
-        ['id' => 2, 'server_id' => 2, 'name' => 'Customer 2', 'is_active' => false, 'sync_status' => 'synced'],
+        ['id' => 1, 'server_id' => 1, 'local_uuid' => $firstLocalUuid, 'name' => 'Customer 1', 'is_active' => true, 'sync_status' => 'synced'],
+        ['id' => 2, 'server_id' => 2, 'local_uuid' => $secondLocalUuid, 'name' => 'Customer 2', 'is_active' => false, 'sync_status' => 'synced'],
     ]);
+    $firstPortalCustomer = ($this->customer)(1, 'Renamed');
+    $firstPortalCustomer['local_uuid'] = $firstLocalUuid;
+    $reenteredPortalCustomer = ($this->customer)(2);
+    $reenteredPortalCustomer['local_uuid'] = $secondLocalUuid;
 
     ($this->fakePortal)([
         0 => Http::response([
-            'customers' => [($this->customer)(1, 'Renamed')],
+            'customers' => [$firstPortalCustomer],
             'next_after_id' => null,
             'total' => 1,
             'server_time' => '2026-10-05T01:00:00.000000Z',
             'scope_ids' => [1, 2],
         ]),
-        'ids' => Http::response(['customers' => [($this->customer)(2)]]),
+        'ids' => Http::response(['customers' => [$reenteredPortalCustomer]]),
     ]);
 
     $steps = ($this->runToCompletion)();
@@ -344,10 +350,21 @@ test('an interrupted customer pull resumes from the page that failed', function 
 });
 
 test('the salescall pull uses the schedule endpoint and fetches locations only when missing', function () {
-    Http::fake([
-        'portal.test/api/sync/pull/schedule' => Http::response(['itineraries' => [], 'customers' => []]),
-        'portal.test/api/sync/pull/locations' => Http::response(($this->makeLocationPayload)(['municipalities' => [['id' => 1, 'region_id' => null, 'province_id' => null, 'name' => 'M1', 'enabled' => true]]])),
-    ]);
+    $locationPayload = ($this->makeLocationPayload)(['municipalities' => [['id' => 1, 'region_id' => null, 'province_id' => null, 'name' => 'M1', 'enabled' => true]]]);
+    $locationPayload['reference_contract_version'] = 3;
+    $locationPayload['landmass_options'] = [];
+
+    Http::fake(function (Request $request) use ($locationPayload) {
+        if (str_ends_with($request->url(), '/api/sync/pull/locations')) {
+            return Http::response($locationPayload);
+        }
+
+        if (str_ends_with($request->url(), '/api/sync/pull/notifications')) {
+            return Http::response(['notifications' => [], 'has_more' => false]);
+        }
+
+        return Http::response(['itineraries' => [], 'customers' => []]);
+    });
 
     expect(app(SyncService::class)->pull()->success)->toBeTrue();
     expect(app(SyncService::class)->pull()->success)->toBeTrue();
@@ -502,6 +519,10 @@ test('pull refreshes a synced Customer by server ID without replacing its negati
     $localId = -7_166_839_558_920_329_640;
     $serverId = 98001;
     $localUuid = (string) Str::uuid();
+    DB::table('material_groups')->insert(['id' => 1, 'name' => 'Group', 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('brands')->insert(['id' => 1, 'material_group_id' => 1, 'name' => 'Brand', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('categories')->insert(['id' => 1, 'name' => 'Category', 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('sub_categories')->insert(['id' => 1, 'category_id' => 1, 'name' => 'Subcategory', 'with_form' => false, 'is_active' => true, 'created_at' => now(), 'updated_at' => now()]);
     DB::table('customers')->insert([
         'id' => $localId,
         'server_id' => $serverId,
@@ -528,6 +549,8 @@ test('pull refreshes a synced Customer by server ID without replacing its negati
     ($this->fakePortal)([
         0 => Http::response([
             'customers' => [$portalCustomer],
+            'customer_brands' => [['customer_id' => $serverId, 'material_group_id' => 1, 'brand_id' => 1, 'quantity' => 4]],
+            'customer_categories' => [['customer_id' => $serverId, 'category_id' => 1, 'sub_category_id' => 1]],
             'next_after_id' => null,
             'total' => 1,
             'server_time' => '2026-10-09T01:00:00.000000Z',
@@ -542,6 +565,10 @@ test('pull refreshes a synced Customer by server ID without replacing its negati
         ->and($saved)->toHaveCount(1)
         ->and($saved->first()->id)->toBe($localId)
         ->and($saved->first()->name)->toBe('After pull')
+        ->and(DB::table('customer_brands')->where('customer_id', $localId)->value('quantity'))->toBe(4)
+        ->and(DB::table('customer_categories')->where('customer_id', $localId)->value('category_id'))->toBe(1)
+        ->and(DB::table('customer_brands')->where('customer_id', $serverId)->exists())->toBeFalse()
+        ->and(DB::table('customer_categories')->where('customer_id', $serverId)->exists())->toBeFalse()
         ->and(DB::table('salescalls')->where('customer_id', $localId)->exists())->toBeTrue();
 });
 
@@ -740,6 +767,210 @@ test('pull fails safely when a Portal ID is already duplicated across Tablet row
         ->toBe(['Local duplicate B', 'Local duplicate A']);
 });
 
+test('pull does not bind a Portal Customer to a different Customer occupying the same numeric local ID', function () {
+    $portalId = 98009;
+    DB::table('customers')->insert([
+        'id' => $portalId,
+        'local_uuid' => (string) Str::uuid(),
+        'unique_id' => 'UNRELATED-98009',
+        'company_id' => 1,
+        'name' => 'Unrelated numeric collision',
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_trade_profiles')->insert([
+        'customer_id' => $portalId,
+        'profile_type' => 'ib',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    $beforeCustomer = (array) DB::table('customers')->where('id', $portalId)->first();
+    $beforeProfile = (array) DB::table('customer_trade_profiles')->where('customer_id', $portalId)->first();
+    $portalCustomer = ($this->customer)($portalId, 'Different Portal Customer');
+    $portalCustomer['local_uuid'] = (string) Str::uuid();
+    $portalCustomer['unique_id'] = 'PORTAL-98009';
+
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-13T01:00:00.000000Z',
+            'scope_ids' => [$portalId],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+
+    expect(end($steps)['success'])->toBeFalse()
+        ->and((array) DB::table('customers')->where('id', $portalId)->first())->toBe($beforeCustomer)
+        ->and((array) DB::table('customer_trade_profiles')->where('customer_id', $portalId)->first())->toBe($beforeProfile)
+        ->and(DB::table('customers')->where('server_id', $portalId)->exists())->toBeFalse();
+});
+
+test('clearing only an incorrect server ID preserves the local Customer and lets repeated Pull resolve the canonical row', function () {
+    $serverId = 23591;
+    $canonicalId = -687143025929916172;
+    $canonicalUuid = '25a4b477-d5f8-48e4-aca7-3b61346f1f06';
+    $otherUuid = 'ed72ddcd-d2e0-48fc-ba08-a6369eaeff9d';
+    $accessUsers = collect([$this->user]);
+    for ($index = 1; $index < 8; $index++) {
+        $accessUsers->push(User::factory()->create([
+            'email' => "collision-access-{$index}@example.test",
+        ]));
+    }
+    DB::table('companies')->insert(['id' => 3, 'name' => 'CAR CLUBS', 'code' => 'CAR_CLUBS', 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('customers')->insert([
+        [
+            'id' => $canonicalId,
+            'server_id' => $serverId,
+            'local_uuid' => $canonicalUuid,
+            'unique_id' => 'CARCLUBS00013',
+            'company_id' => 3,
+            'name' => 'Canonical fixture',
+            'is_active' => true,
+            'sync_status' => 'synced',
+            'created_at' => '2026-10-13 04:49:21',
+            'updated_at' => '2026-10-13 04:49:21',
+        ],
+        [
+            'id' => $serverId,
+            'server_id' => $serverId,
+            'local_uuid' => $otherUuid,
+            'unique_id' => 'IB53385',
+            'company_id' => 6,
+            'name' => 'Separate local fixture',
+            'is_active' => true,
+            'sync_status' => 'synced',
+            'created_at' => null,
+            'updated_at' => '2026-10-09 16:28:51',
+        ],
+        [
+            'id' => -77800,
+            'server_id' => 77800,
+            'local_uuid' => 'f94eb23d-84eb-4527-8495-ccfd306312b8',
+            'unique_id' => 'UNRELATED00001',
+            'company_id' => 1,
+            'name' => 'Unrelated fixture',
+            'is_active' => true,
+            'sync_status' => 'synced',
+            'created_at' => '2026-10-01 00:00:00',
+            'updated_at' => '2026-10-01 00:00:00',
+        ],
+    ]);
+    DB::table('customer_trade_profiles')->insert([
+        ['customer_id' => $canonicalId, 'profile_type' => 'outlet', 'entry_detail' => 'AB', 'classifications' => json_encode(['Battery Specialist', 'Hardware', 'General Merchandise']), 'created_at' => now(), 'updated_at' => now()],
+        ['customer_id' => $serverId, 'profile_type' => 'ib', 'entry_detail' => null, 'classifications' => null, 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    foreach ($accessUsers as $accessUser) {
+        DB::table('customer_user')->insert(['customer_id' => $canonicalId, 'user_id' => $accessUser->id, 'created_at' => now(), 'updated_at' => now()]);
+    }
+    DB::table('customer_user')->insert(['customer_id' => $serverId, 'user_id' => $this->user->id, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('customer_trade_profiles')->insert(['customer_id' => -77800, 'profile_type' => 'ib', 'entry_detail' => null, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('customer_user')->insert(['customer_id' => -77800, 'user_id' => $this->user->id, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('customer_scopes')->insert(['customer_id' => -77800, 'user_id' => $this->user->id]);
+    foreach (range(2018, 2026) as $year) {
+        DB::table('customer_category_histories')->insert([
+            'customer_id' => $canonicalId,
+            'category_year' => $year,
+            'profile_type' => 'outlet',
+            'stream' => 'ab',
+            'category' => $year < 2023 || $year === 2026 ? 'AB Company Owned' : 'AB JV Equity',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+
+    $affected = DB::table('customers')->where('id', $serverId)
+        ->where('server_id', $serverId)
+        ->where('local_uuid', $otherUuid)
+        ->update(['server_id' => null]);
+    $otherCustomerAfterPreparedRepair = (array) DB::table('customers')->where('id', $serverId)->first();
+    $otherProfileAfterPreparedRepair = (array) DB::table('customer_trade_profiles')->where('customer_id', $serverId)->first();
+    $otherAccessAfterPreparedRepair = DB::table('customer_user')->where('customer_id', $serverId)->orderBy('user_id')->pluck('user_id')->all();
+    $unrelatedCustomerBeforePull = (array) DB::table('customers')->where('id', -77800)->first();
+    $unrelatedProfileBeforePull = (array) DB::table('customer_trade_profiles')->where('customer_id', -77800)->first();
+    $unrelatedAccessBeforePull = DB::table('customer_user')->where('customer_id', -77800)->orderBy('user_id')->pluck('user_id')->all();
+
+    $portalCustomer = ($this->customer)($serverId, 'Canonical fixture');
+    $portalCustomer['local_uuid'] = $canonicalUuid;
+    $portalCustomer['unique_id'] = 'CARCLUBS00013';
+    $portalCustomer['company_id'] = 3;
+    $portalCustomer['customer_code_reservation_token'] = null;
+    $portalCustomer['person_in_charge_id'] = null;
+    $portalCustomer['person_in_charge_email'] = $this->user->email;
+    $portalCustomer['access_user_emails'] = $accessUsers->pluck('email')->all();
+    $history = collect(range(2018, 2026))->map(fn (int $year): array => [
+        'customer_id' => $serverId,
+        'category_year' => $year,
+        'profile_type' => 'outlet',
+        'stream' => 'ab',
+        'category' => $year < 2023 || $year === 2026 ? 'AB Company Owned' : 'AB JV Equity',
+    ])->all();
+    $payload = [
+        'customers' => [$portalCustomer],
+        'customer_users' => $accessUsers->map(fn (User $user): array => [
+            'name' => $user->name,
+            'last_name' => $user->last_name,
+            'email' => $user->email,
+        ])->all(),
+        'customer_trade_profiles' => [[
+            'customer_id' => $serverId,
+            'profile_type' => 'outlet',
+            'entry_detail' => 'AB',
+            'classifications' => ['Battery Specialist', 'Hardware', 'General Merchandise'],
+        ]],
+        'customer_category_histories' => $history,
+        'next_after_id' => null,
+        'total' => 1,
+        'server_time' => '2026-10-13T05:00:00.000000Z',
+        'scope_ids' => [$serverId, 77800],
+    ];
+    ($this->fakePortal)([0 => Http::response($payload)]);
+    $firstRun = ($this->runToCompletion)();
+
+    DB::table('sync_states')->whereIn('key', [
+        'customers.pull_run.'.$this->user->id,
+        'customers.pulled_through.'.$this->user->id,
+    ])->delete();
+    ($this->fakePortal)([0 => Http::response($payload)]);
+    $secondRun = ($this->runToCompletion)();
+
+    $canonical = DB::table('customers')->where('id', $canonicalId)->first();
+    $other = (array) DB::table('customers')->where('id', $serverId)->first();
+
+    expect($affected)->toBe(1)
+        ->and(end($firstRun)['success'])->toBeTrue()
+        ->and(end($secondRun)['success'])->toBeTrue()
+        ->and(end($secondRun)['unchanged'])->toBe(1)
+        ->and(end($secondRun)['updated'])->toBe(0)
+        ->and(DB::table('customers')->count())->toBe(3)
+        ->and(DB::table('customers')->where('server_id', $serverId)->count())->toBe(1)
+        ->and(DB::table('customers')->where('local_uuid', $canonicalUuid)->count())->toBe(1)
+        ->and(DB::table('customers')->where('local_uuid', $canonicalUuid)->value('id'))->toBe($canonicalId)
+        ->and($canonical->server_id)->toBe($serverId)
+        ->and($canonical->local_uuid)->toBe($canonicalUuid)
+        ->and($canonical->unique_id)->toBe('CARCLUBS00013')
+        ->and($other)->toBe($otherCustomerAfterPreparedRepair)
+        ->and((array) DB::table('customer_trade_profiles')->where('customer_id', $serverId)->first())->toBe($otherProfileAfterPreparedRepair)
+        ->and(DB::table('customer_user')->where('customer_id', $serverId)->orderBy('user_id')->pluck('user_id')->all())->toBe($otherAccessAfterPreparedRepair)
+        ->and(DB::table('customer_category_histories')->where('customer_id', $canonicalId)->count())->toBe(9)
+        ->and(DB::table('customer_category_histories')->where('customer_id', $canonicalId)->orderBy('category_year')->pluck('category_year')->all())->toBe(range(2018, 2026))
+        ->and(DB::table('customer_category_histories')->where('customer_id', $canonicalId)->orderBy('category_year')->pluck('category')->all())->toBe(array_merge(array_fill(0, 5, 'AB Company Owned'), array_fill(0, 3, 'AB JV Equity'), ['AB Company Owned']))
+        ->and(DB::table('customer_category_histories')->where('customer_id', $serverId)->count())->toBe(0)
+        ->and(DB::table('customer_user')->where('customer_id', $canonicalId)->count())->toBe(8)
+        ->and(DB::table('customer_user')->where('customer_id', $canonicalId)->orderBy('user_id')->pluck('user_id')->all())->toBe($accessUsers->pluck('id')->sort()->values()->all())
+        ->and(DB::table('customers')->where('id', $canonicalId)->value('person_in_charge_id'))->toBe($this->user->id)
+        ->and(DB::table('customer_trade_profiles')->where('customer_id', $canonicalId)->value('classifications'))->toBe(json_encode(['Battery Specialist', 'Hardware', 'General Merchandise']))
+        ->and(DB::table('customer_trade_profiles')->where('customer_id', $canonicalId)->value('entry_detail'))->toBe('AB')
+        ->and((array) DB::table('customers')->where('id', -77800)->first())->toBe($unrelatedCustomerBeforePull)
+        ->and((array) DB::table('customer_trade_profiles')->where('customer_id', -77800)->first())->toBe($unrelatedProfileBeforePull)
+        ->and(DB::table('customer_user')->where('customer_id', -77800)->orderBy('user_id')->pluck('user_id')->all())->toBe($unrelatedAccessBeforePull)
+        ->and(app(SyncService::class)->hasPendingCustomerPushWork())->toBeFalse();
+});
+
 test('an invalid location snapshot is rejected atomically while the independent Customer Pull completes with canonical location IDs intact', function () {
     Log::spy();
     DB::table('regions')->insert(['id' => 1, 'code' => 'OLD', 'name' => 'Existing local Region', 'created_at' => now(), 'updated_at' => now()]);
@@ -807,9 +1038,11 @@ test('an invalid location snapshot is rejected atomically while the independent 
 
 test('Customer Pull accepts null Company IDs across mixed pages without changing Customer identities or Access', function () {
     $now = now();
+    $existingLocalUuid = (string) Str::uuid();
     DB::table('customers')->insert([
         'id' => -90012,
         'server_id' => 90012,
+        'local_uuid' => $existingLocalUuid,
         'company_id' => 1,
         'name' => 'Existing Company-less Customer',
         'is_active' => true,
@@ -849,9 +1082,12 @@ test('Customer Pull accepts null Company IDs across mixed pages without changing
         ]],
     ]];
 
-    $companyLessCustomer = function (int $id, ?string $name = null): array {
+    $companyLessCustomer = function (int $id, ?string $name = null) use ($existingLocalUuid): array {
         $customer = ($this->customer)($id, $name);
         $customer['company_id'] = null;
+        if ($id === 90012) {
+            $customer['local_uuid'] = $existingLocalUuid;
+        }
 
         return $customer;
     };

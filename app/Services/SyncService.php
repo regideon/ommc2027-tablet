@@ -1367,59 +1367,36 @@ class SyncService
             ->mapWithKeys(fn ($id): array => [(string) $id => true])
             ->all();
 
-        // Resolve local identity before falling back to the Portal primary key.
-        // local_uuid recovers a Tablet row when Portal committed a push but its
-        // response was lost before the Tablet could store server_id.
-        $incomingCustomerIds = array_column($data['customers'] ?? [], 'id');
-        $incomingCustomerUuids = array_values(array_filter(array_column($data['customers'] ?? [], 'local_uuid')));
-        $localIdByServerId = [];
-        $localCustomerByUuid = [];
-        $localIdBySameId = [];
-
-        foreach (array_chunk($incomingCustomerIds, 500) as $chunk) {
-            $localCustomersByServerId = DB::table('customers')
-                ->whereIn('server_id', $chunk)
-                ->orderBy('id')
-                ->get(['id', 'server_id']);
-            foreach ($localCustomersByServerId->groupBy('server_id') as $matches) {
-                if ($matches->count() > 1) {
-                    throw new \RuntimeException('A Portal Customer ID is already mapped to multiple Tablet Customers.');
-                }
-            }
-            $localIdByServerId += $localCustomersByServerId->pluck('id', 'server_id')->all();
-            $localIdBySameId += DB::table('customers')->whereIn('id', $chunk)->whereNotIn('sync_status', $protectedStatuses)->pluck('id', 'id')->all();
+        // Resolve every Portal identity before writing any Customer or child row.
+        // A numeric primary-key coincidence is not evidence that these are the
+        // same Customer; the local primary key remains stable after resolution.
+        $incomingCustomers = $data['customers'] ?? [];
+        $incomingCustomerIds = array_map('strval', array_column($incomingCustomers, 'id'));
+        $incomingCustomerUuids = array_values(array_filter(array_column($incomingCustomers, 'local_uuid')));
+        if (count($incomingCustomerIds) !== count(array_unique($incomingCustomerIds))
+            || count($incomingCustomerUuids) !== count(array_unique($incomingCustomerUuids))) {
+            throw new \RuntimeException('Portal Customer page contains duplicate identity records.');
         }
 
-        foreach (array_chunk(array_values(array_unique($incomingCustomerUuids)), 500) as $chunk) {
-            foreach (DB::table('customers')->whereIn('local_uuid', $chunk)->get(['id', 'local_uuid', 'server_id']) as $localCustomer) {
-                $localCustomerByUuid[$localCustomer->local_uuid] = $localCustomer;
+        $identityResolver = app(CustomerIdentityResolver::class);
+        $identityByPortalId = [];
+        foreach ($incomingCustomers as $customer) {
+            $identity = $identityResolver->resolve($customer);
+            if ($identity->isConflict()) {
+                throw new \RuntimeException('Portal Customer identity conflict: '.$identity->reason.'.');
             }
+            $identityByPortalId[(string) $customer['id']] = $identity;
+            $serverToLocalCustomer[$customer['id']] = $identity->localId;
         }
 
-        foreach ($data['customers'] ?? [] as $customer) {
-            $localUuid = $customer['local_uuid'] ?? null;
-            $localCustomerForUuid = filled($localUuid) ? ($localCustomerByUuid[$localUuid] ?? null) : null;
+        foreach ($incomingCustomers as $customer) {
             $portalCustomerId = (int) $customer['id'];
-
-            if ($localCustomerForUuid && filled($localCustomerForUuid->server_id)
-                && (int) $localCustomerForUuid->server_id !== $portalCustomerId) {
-                throw new \RuntimeException('Portal Customer identity conflicts with the Tablet local UUID mapping.');
-            }
-
-            $localIdForServerId = $localIdByServerId[$customer['id']] ?? null;
-            if ($localCustomerForUuid && $localIdForServerId !== null
-                && (int) $localCustomerForUuid->id !== (int) $localIdForServerId) {
-                throw new \RuntimeException('Portal Customer ID and local UUID resolve to different Tablet Customers.');
-            }
-
-            $localId = $localCustomerForUuid->id
-                ?? $localIdForServerId
-                ?? $localIdBySameId[$customer['id']]
-                ?? $customer['id'];
-            $serverToLocalCustomer[$customer['id']] = $localId;
+            $identity = $identityByPortalId[(string) $customer['id']];
+            $localId = $identity->localId;
+            $localCustomer = DB::table('customers')->where('id', $localId)->first(['id', 'local_uuid', 'server_id']);
 
             if (isset($protectedLocalCustomerIds[(string) $localId])) {
-                if ($localCustomerForUuid && blank($localCustomerForUuid->server_id)) {
+                if ($localCustomer && blank($localCustomer->server_id)) {
                     DB::table('customers')->where('id', $localId)->whereNull('server_id')->update([
                         'server_id' => $portalCustomerId,
                         'server_updated_at' => $customer['updated_at'] ?? null,
@@ -1726,16 +1703,18 @@ class SyncService
             : SalescallBrand::where('sync_status', 'pending')->distinct()->pluck('customer_id')->flip()->all();
 
         foreach ($incomingCustomerBrands as $customerId => $rows) {
-            if (isset($customersWithPendingBrands[$customerId])) {
+            $localCustomerId = $serverToLocalCustomer[$customerId] ?? $customerId;
+
+            if (isset($customersWithPendingBrands[$localCustomerId])) {
                 continue;
             }
 
-            CustomerBrand::where('customer_id', $customerId)->delete();
+            CustomerBrand::where('customer_id', $localCustomerId)->delete();
 
             foreach ($rows as $row) {
                 try {
                     CustomerBrand::create([
-                        'customer_id' => $customerId,
+                        'customer_id' => $localCustomerId,
                         'material_group_id' => $row['material_group_id'],
                         'brand_id' => $row['brand_id'],
                         'quantity' => $row['quantity'] ?? null,
@@ -1754,13 +1733,15 @@ class SyncService
             : SalescallCategory::where('sync_status', 'pending')->distinct()->pluck('customer_id')->flip()->all();
 
         foreach ($data['customer_categories'] ?? [] as $categoryRow) {
-            if (isset($customersWithPendingCategories[$categoryRow['customer_id']])) {
+            $localCustomerId = $serverToLocalCustomer[$categoryRow['customer_id']] ?? $categoryRow['customer_id'];
+
+            if (isset($customersWithPendingCategories[$localCustomerId])) {
                 continue;
             }
 
             try {
                 CustomerCategory::updateOrCreate(
-                    ['customer_id' => $categoryRow['customer_id']],
+                    ['customer_id' => $localCustomerId],
                     [
                         'category_id' => $categoryRow['category_id'],
                         'sub_category_id' => $categoryRow['sub_category_id'],
@@ -3407,10 +3388,35 @@ class SyncService
             }
 
             if ($response->successful() && filter_var($response->json('server_id'), FILTER_VALIDATE_INT) && (int) $response->json('server_id') > 0) {
+                $acknowledgment = $response->json();
+                $identity = app(CustomerIdentityResolver::class)->resolve([
+                    'id' => $acknowledgment['server_id'],
+                    'local_uuid' => $acknowledgment['local_uuid'] ?? null,
+                    'unique_id' => $acknowledgment['unique_id'] ?? null,
+                    'company_id' => $customer->company_id,
+                ], (int) $customer->id);
+
+                if ($identity->isConflict()) {
+                    $customer->update([
+                        'sync_status' => 'conflict',
+                        'sync_error' => 'Portal acknowledged a Customer identity that conflicts with this Tablet row ('.$identity->reason.'). Review is required.',
+                    ]);
+
+                    return SyncResult::fail('Customer identity conflict requires review.', 'customer_identity_conflict', 0, 1, 0, ['customer_identity_conflict']);
+                }
+
+                $snapshotCapabilityAvailable = $this->hasCompleteCustomerSnapshotCapability($acknowledgment['customer_snapshot'] ?? null);
+                if (! $snapshotCapabilityAvailable) {
+                    Log::notice('sync:customer:acknowledged_without_snapshot_capability', [
+                        'local_customer_id' => $customer->id,
+                        'portal_customer_id' => (int) $acknowledgment['server_id'],
+                    ]);
+                }
+
                 $this->markSynced($customer, [
-                    'server_id' => $response->json('server_id'),
-                    'server_updated_at' => $response->json('updated_at'),
-                    'unique_id' => $response->json('unique_id') ?: $customer->unique_id,
+                    'server_id' => $acknowledgment['server_id'],
+                    'server_updated_at' => $acknowledgment['updated_at'] ?? null,
+                    'unique_id' => ($acknowledgment['unique_id'] ?? null) ?: $customer->unique_id,
                     'customer_code_reservation_token' => null,
                     'synced_at' => now(),
                 ], ! $allowExhausted);
@@ -3419,7 +3425,19 @@ class SyncService
                     'customer.last_failed_payload.'.$customer->id,
                 ])->delete();
 
-                return SyncResult::ok('Customer synced.', 1);
+                $snapshotOutcome = $snapshotCapabilityAvailable
+                    ? 'customer_snapshot_not_reconciled'
+                    : 'customer_snapshot_unsupported';
+
+                return SyncResult::ok(
+                    $snapshotCapabilityAvailable
+                        ? 'Customer delivery acknowledged; the authoritative aggregate snapshot has not been applied by this Tablet build.'
+                        : 'Customer delivery acknowledged; Portal does not support the authoritative aggregate snapshot contract, so aggregate refresh is not claimed.',
+                    1,
+                    0,
+                    0,
+                    [$snapshotOutcome],
+                );
             }
 
             if ($response->status() === 409 && $response->json('code') === 'customer_conflict') {
@@ -3453,6 +3471,31 @@ class SyncService
 
             return SyncResult::fail($retryable ? 'Customer push failed and will retry on the next sync.' : 'Customer push failed and reached the automatic retry limit. Correct and save the Customer before using Retry Customer.', 'push_failed', 0, 1, $retryable, ['unexpected_sync_error']);
         }
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $snapshot
+     */
+    private function hasCompleteCustomerSnapshotCapability(?array $snapshot): bool
+    {
+        $requiredCollections = [
+            'customers',
+            'customer_users',
+            'customer_brands',
+            'customer_categories',
+            'customer_trade_profiles',
+            'customer_category_histories',
+            'customer_category_events',
+        ];
+
+        $capabilities = $snapshot['capabilities'] ?? null;
+        $completeCollections = $snapshot['complete_collections'] ?? null;
+
+        return ($snapshot['contract_version'] ?? null) === 1
+            && is_array($capabilities)
+            && in_array('customer.aggregate.snapshot.v1', $capabilities, true)
+            && is_array($completeCollections)
+            && array_diff($requiredCollections, $completeCollections) === [];
     }
 
     private function customerPushPayload(Customer $customer): array
@@ -4683,12 +4726,18 @@ class SyncService
             );
         }
 
+        $snapshotNotice = in_array('customer_snapshot_unsupported', $failureReasons, true)
+            ? ' Portal lacks the authoritative aggregate snapshot contract; aggregate refresh is not claimed.'
+            : (in_array('customer_snapshot_not_reconciled', $failureReasons, true)
+                ? ' The Portal snapshot has not been applied by this Tablet build.'
+                : '');
+
         return SyncResult::ok(
-            "{$pushed} item".($pushed === 1 ? '' : 's').' synced successfully.',
+            "{$pushed} item".($pushed === 1 ? '' : 's').' delivery acknowledged successfully.'.$snapshotNotice,
             $pushed,
             0,
             0,
-            [],
+            $failureReasons,
         );
     }
 
