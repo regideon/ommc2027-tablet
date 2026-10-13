@@ -1,17 +1,18 @@
 # OMMC-20261004-region-type-image-required
 
-- **Title:** Require a salescall image for selected region types (IB Team, OE Team)
-- **Objective:** The Portal owns a per-`RegionType` flag `is_image_required` (true only for IB Team and OE Team, set by a re-runnable seeder). The tablet syncs `region_types` and links the logged-in user via `users.region_type_id`; a salescall cannot be marked Completed without at least one photo when the user's region type requires it.
+- **Title:** Require a salescall image for every region type except IB Team and OE Team
+- **Objective:** The Portal owns a per-`RegionType` flag `is_image_required` (true for every type except IB Team and OE Team, set by a re-runnable seeder; 2026-10-13 Human re-specification). The tablet syncs `region_types` and links the logged-in user via `users.region_type_id`; a salescall cannot be marked Completed without at least one photo unless the user's region type is exempt. A user with no linked region type is treated as requiring a photo.
 - **Repositories:** Portal `ommc2027`; Tablet `ommc2027-tablet` (cross-repository Work, same ID in both).
 - **State:** READY_FOR_TERMINAL_REVIEW
-- **Implementation authorization:** Granted by explicit Human reply "implement then". Local implementation and validation only.
+- **Implementation authorization:** Original work granted by explicit Human reply "implement then"; the 2026-10-13 rule inversion granted by explicit Human answer "Flip it; no-type also required". Local implementation and validation only.
 - **Terminal authorization:** None.
-- **Human-authorized scope:** Add `region_types.is_image_required`; forbid duplicating that boolean onto `users` (tablet links via `region_type_id` only); enforce "at least one image" on Completed only; schema + seeder only (no admin UI).
+- **Human-authorized scope:** Add `region_types.is_image_required`; forbid duplicating that boolean onto `users` (tablet links via `region_type_id` only); enforce "at least one image" on Completed only; no admin UI. 2026-10-13: invert the rule — IB Team and OE Team are exempt; every other region type, and a user with no region type, requires a photo.
 - **Accepted decisions:**
   - The flag is defined only in `region_types`. The tablet stores the reference (`users.region_type_id`), not a copy.
   - Requirement is "at least one salescall image" (not a specific type, not all types).
   - Validation applies to the Completed outcome only; Partially Completed / Cancel-Void unchanged.
   - Tablet gets a synced `region_types` reference table and `users.region_type_id` (no FK constraint, mirroring other reference columns).
+  - 2026-10-13: exemption belongs to IB Team/OE Team; a rep with no linked region type is treated as non-exempt and must attach a photo.
 - **Implementation constraints:** No commit/push. Preserve unrelated worktree changes.
 - **Task-owned files/components (Tablet `ommc2027-tablet`):**
   - `database/migrations/2026_10_04_000001_create_region_types_table.php` (new)
@@ -22,17 +23,20 @@
   - `app/Console/Commands/SyncLoginCommand.php`
   - `app/Filament/Pages/SalescallPage.php`
   - `tests/Feature/RegionTypeImageRequiredTest.php` (new)
+  - `tests/Feature/SalescallFinishLocationCorrelationTest.php` (fixture only: exempt region type)
   - this Work note
-- **Unrelated/pre-existing worktree changes to preserve (Tablet):** the separate, in-progress Work `OMMC-20261004-tablet-sync-pull-reliability` owns uncommitted changes in `app/Services/SyncService.php` (file sink + `upsertRows`), `tests/Feature/SyncPullResponseSinkTest.php`, `tests/Feature/SyncPullReferenceBulkUpsertTest.php`, and its own Work note. They were preserved, not reverted or entangled.
+- **Unrelated/pre-existing worktree changes to preserve (Tablet):** none at present — the worktree is clean on 2026-10-13; the previously noted uncommitted `OMMC-20261004-tablet-sync-pull-reliability` changes are no longer present in the worktree.
 - **Implementation decisions:**
   - `region_types` is ingested through the existing `upsertRows()` bulk helper (from `OMMC-20261004-tablet-sync-pull-reliability`), so the whole reference table is a handful of statements.
   - The logged-in user's `region_type_id` is applied outside the `base_location_pending` guard, because region type is portal-authoritative and not locally editable.
   - `SalescallPage` replaces the boolean `canSubmitSalescall()` with `salescallSubmitBlocker()` returning `brands` / `image` / `null`, so the blocked-action notification names the actual missing requirement. Brands remain required regardless of region type.
-- **Validation:**
-  - New: `php artisan test --compact tests/Feature/RegionTypeImageRequiredTest.php` → 4 passed (12 assertions): pull syncs region types + links the user; login stores the link; flagged user blocked from Completed without a photo and allowed with one; unflagged user allowed without one.
-  - Full suite: `php artisan test --compact` → 145 passed, 3 skipped, 12 failed. The same 12 pre-existing/environmental failures reproduce on clean `HEAD` (`CustomerCreatePageDiagnosticTest`, `ExampleTest`, `FirstLoginPersistenceTest` ×3, `IosNativeRegenerationArtifactsTest` ×2, `SalescallPhotoUploadTest` ×4, `StartupMigrationClassicDiagnosticsTest`); no regressions.
-  - `vendor/bin/pint` on the new/small files → clean.
-- **Manual acceptance:** Pending — after both repos are built, confirm a rep in IB Team/OE Team cannot Complete a visit without a photo.
+  - 2026-10-13: `salescallSubmitBlocker()` computes `$requiresImage = auth()->user()?->regionType?->is_image_required ?? true`, so only reps linked to an exempt region type can Complete without a photo.
+- **Validation (2026-10-13):**
+  - `php -d memory_limit=512M vendor/pestphp/pest/bin/pest tests/Feature/RegionTypeImageRequiredTest.php` → 5 passed (16 assertions): pull syncs region types + links the user; login stores the link; non-exempt rep blocked from Completed without a photo and allowed with one; exempt team allowed without one; rep with no region type blocked without a photo and allowed with one.
+  - `tests/Feature/SalescallFinishLocationCorrelationTest.php` → passes with its fixture rep placed in an exempt region type (the completed dataset previously relied on completing without a photo).
+  - Full suite (512M): 20 failures whose junit failure set is identical to clean `HEAD` — all pre-existing/environmental (`CustomerLocationSaveTest`, `CustomerMapLocationAutomationTest` ×4, `ExampleTest`, `FirstLoginPersistenceTest` ×3, `IosNativeRegenerationArtifactsTest` ×2, `PhilippineAddressResolverTest` ×4, `SalescallPhotoUploadTest` ×4, `StartupMigrationClassicDiagnosticsTest`); no regressions. Note: `php artisan test` at the default 128M aborts with memory exhaustion in `SyncPullResponseSinkTest`; the full suite requires `php -d memory_limit=512M vendor/pestphp/pest/bin/pest`.
+  - `vendor/bin/pint` on the changed files → clean.
+- **Manual acceptance:** Pending — after both repos are built, confirm a rep in IB Team/OE Team can Complete a visit without a photo, and a rep in any other region type (or with no region type) cannot.
 - **Blockers:** None.
 - **Remaining work:** Human manual verification on device; then terminal authorization (both repos must be ready and delivered together).
 - **Delivery evidence status:** Not delivered.

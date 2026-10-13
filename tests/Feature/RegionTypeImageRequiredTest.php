@@ -74,8 +74,8 @@ test('pull syncs region types and links the logged-in user to their region type'
         'portal.test/api/sync/pull/locations' => Http::response(emptyLocationReferenceSnapshot(), 200),
         'portal.test/api/sync/pull/*' => Http::response([
             'region_types' => [
-                ['id' => 5, 'name' => 'IB Team', 'sort' => 8, 'is_image_required' => true],
-                ['id' => 6, 'name' => 'Metro Manila', 'sort' => 1, 'is_image_required' => false],
+                ['id' => 5, 'name' => 'Metro Manila', 'sort' => 1, 'is_image_required' => true],
+                ['id' => 6, 'name' => 'IB Team', 'sort' => 8, 'is_image_required' => false],
             ],
             'users' => [
                 ['id' => 1, 'email' => 'rep@example.com', 'region_type_id' => 5],
@@ -114,7 +114,7 @@ test('tablet login stores the region type id on the user', function () {
 test('completing a visit requires an image when the region type requires one', function () {
     seedRegionTypeImageStatuses();
 
-    $type = RegionType::create(['name' => 'IB Team', 'sort' => 1, 'is_image_required' => true]);
+    $type = RegionType::create(['name' => 'Metro Manila', 'sort' => 1, 'is_image_required' => true]);
     $user = User::factory()->create(['region_type_id' => $type->id]);
     $this->actingAs($user);
 
@@ -144,11 +144,40 @@ test('completing a visit requires an image when the region type requires one', f
 test('completing a visit without an image still works when the region type does not require one', function () {
     seedRegionTypeImageStatuses();
 
-    $type = RegionType::create(['name' => 'Metro Manila', 'sort' => 1, 'is_image_required' => false]);
+    $type = RegionType::create(['name' => 'IB Team', 'sort' => 1, 'is_image_required' => false]);
     $user = User::factory()->create(['region_type_id' => $type->id]);
     $this->actingAs($user);
 
     $salescall = makeRegionTypeSalescall($user);
+
+    Livewire::test(SalescallPage::class)
+        ->call('initiateFinish', $salescall->id, 'completed')
+        ->assertDispatched('finish-done', salescallId: $salescall->id, outcome: 'completed');
+
+    expect($salescall->fresh()->status)->toBe('completed');
+});
+
+test('completing a visit requires an image when the rep has no region type', function () {
+    seedRegionTypeImageStatuses();
+
+    $user = User::factory()->create(['region_type_id' => null]);
+    $this->actingAs($user);
+
+    $salescall = makeRegionTypeSalescall($user);
+
+    Livewire::test(SalescallPage::class)
+        ->call('initiateFinish', $salescall->id, 'completed')
+        ->assertNotDispatched('finish-done');
+
+    expect($salescall->fresh()->status)->not->toBe('completed');
+
+    SalescallImage::create([
+        'salescall_id' => $salescall->id,
+        'salescall_image_type_id' => 1,
+        'local_path' => '/tmp/photo.jpg',
+        'local_uuid' => (string) Str::uuid(),
+        'sync_status' => 'pending',
+    ]);
 
     Livewire::test(SalescallPage::class)
         ->call('initiateFinish', $salescall->id, 'completed')
