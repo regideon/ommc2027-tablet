@@ -172,6 +172,72 @@ test('Customer Pull inserts new Portal Customers and applies changed rows across
         ->and(DB::table('customers')->where('server_id', 91003)->value('name'))->toBe('Unchanged customer');
 });
 
+test('versioned Customer Pull applies Portal values to the stable local identity idempotently', function () {
+    $localId = -99101;
+    $portalId = 99101;
+    $uuid = (string) Str::uuid();
+    DB::table('customers')->insert([
+        'id' => $localId,
+        'server_id' => $portalId,
+        'local_uuid' => $uuid,
+        'company_id' => 1,
+        'name' => 'Before Portal refresh',
+        'unique_id' => 'LOCAL-CODE',
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    $page = [
+        'customers' => [[
+            'id' => $portalId,
+            'local_uuid' => $uuid,
+            'company_id' => 1,
+            'name' => 'Portal-authoritative name',
+            'unique_id' => 'PORTAL-CODE',
+            'is_active' => true,
+            'person_in_charge_email' => null,
+            'access_user_emails' => [],
+            'updated_at' => '2026-10-10T00:00:00.000000Z',
+        ]],
+        'customer_users' => [],
+        'customer_brands' => [],
+        'customer_categories' => [],
+        'customer_trade_profiles' => [],
+        'customer_category_histories' => [],
+        'customer_category_events' => [],
+        'customer_snapshot_contract' => [
+            'contract_version' => 1,
+            'capabilities' => ['customer.aggregate.snapshot.v1'],
+            'complete_collections' => [
+                'customers', 'customer_users', 'customer_brands', 'customer_categories',
+                'customer_trade_profiles', 'customer_category_histories', 'customer_category_events',
+            ],
+        ],
+        'next_after_id' => null,
+        'total' => 1,
+        'server_time' => '2026-10-10T00:00:00.000000Z',
+        'scope_ids' => [$portalId],
+    ];
+    ($this->fakePortal)([0 => Http::response($page)]);
+    $firstRun = ($this->runToCompletion)();
+    $first = DB::table('customers')->where('id', $localId)->first();
+
+    ($this->fakePortal)([0 => Http::response($page)]);
+    $secondRun = ($this->runToCompletion)();
+    $second = DB::table('customers')->where('id', $localId)->first();
+
+    expect(end($firstRun)['success'])->toBeTrue()
+        ->and(end($secondRun)['success'])->toBeTrue()
+        ->and(DB::table('customers')->where('server_id', $portalId)->count())->toBe(1)
+        ->and($second->id)->toBe($localId)
+        ->and($second->local_uuid)->toBe($uuid)
+        ->and($second->name)->toBe('Portal-authoritative name')
+        ->and($second->unique_id)->toBe('PORTAL-CODE')
+        ->and(DB::table('customer_scopes')->where('user_id', $this->user->id)->where('customer_id', $localId)->exists())->toBeTrue();
+});
+
 test('a successful empty Customer Pull reports success with zero diagnostics counts', function () {
     ($this->fakePortal)([
         0 => Http::response([
@@ -613,7 +679,8 @@ test('pull reconciles a Portal-committed Customer by local UUID after a lost pus
         ->and($customer->name)->toBe('Tablet value retained')
         ->and($customer->unique_id)->toBe('FLEET-RESERVED-IDENTITY')
         ->and($customer->customer_code_reservation_token)->not->toBeNull()
-        ->and($customer->sync_status)->toBe('failed')
+        ->and($customer->sync_status)->toBe('conflict')
+        ->and($customer->sync_error)->toContain('pending local edits')
         ->and(DB::table('customers')->where('server_id', $serverId)->count())->toBe(1);
 });
 

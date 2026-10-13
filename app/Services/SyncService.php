@@ -3,8 +3,6 @@
 namespace App\Services;
 
 use App\Models\Customer;
-use App\Models\CustomerBrand;
-use App\Models\CustomerCategory;
 use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
 use App\Models\CustomerProfileAttachment;
@@ -1359,17 +1357,6 @@ class SyncService
             }
         }
 
-        $protectedStatuses = self::PROTECTED_CUSTOMER_STATUSES;
-        $serverToLocalCustomer = [];
-        $protectedLocalCustomerIds = DB::table('customers')
-            ->whereIn('sync_status', $protectedStatuses)
-            ->pluck('id')
-            ->mapWithKeys(fn ($id): array => [(string) $id => true])
-            ->all();
-
-        // Resolve every Portal identity before writing any Customer or child row.
-        // A numeric primary-key coincidence is not evidence that these are the
-        // same Customer; the local primary key remains stable after resolution.
         $incomingCustomers = $data['customers'] ?? [];
         $incomingCustomerIds = array_map('strval', array_column($incomingCustomers, 'id'));
         $incomingCustomerUuids = array_values(array_filter(array_column($incomingCustomers, 'local_uuid')));
@@ -1378,157 +1365,38 @@ class SyncService
             throw new \RuntimeException('Portal Customer page contains duplicate identity records.');
         }
 
+        $reconciler = app(CustomerAggregateReconciler::class);
+        $hasPullContract = array_key_exists('customer_snapshot_contract', $data);
+        $contract = $hasPullContract ? $data['customer_snapshot_contract'] : null;
+        if ($hasPullContract && (! is_array($contract) || ! $reconciler->supportsCompleteSnapshot($contract))) {
+            throw new \RuntimeException('Portal Customer Pull supplied an unsupported aggregate snapshot contract.');
+        }
+
+        // Resolve the whole page before mutating any Customer aggregate. This
+        // keeps a duplicate or cross-identity collision atomic at the page boundary.
         $identityResolver = app(CustomerIdentityResolver::class);
-        $identityByPortalId = [];
         foreach ($incomingCustomers as $customer) {
             $identity = $identityResolver->resolve($customer);
-            if ($identity->isConflict()) {
-                throw new \RuntimeException('Portal Customer identity conflict: '.$identity->reason.'.');
+            if ($identity->isConflict() || $identity->localId === null) {
+                throw new \RuntimeException('Portal Customer identity conflict: '.($identity->reason ?? 'unresolved').'.');
             }
-            $identityByPortalId[(string) $customer['id']] = $identity;
-            $serverToLocalCustomer[$customer['id']] = $identity->localId;
         }
 
         foreach ($incomingCustomers as $customer) {
-            $portalCustomerId = (int) $customer['id'];
-            $identity = $identityByPortalId[(string) $customer['id']];
-            $localId = $identity->localId;
-            $localCustomer = DB::table('customers')->where('id', $localId)->first(['id', 'local_uuid', 'server_id']);
-
-            if (isset($protectedLocalCustomerIds[(string) $localId])) {
-                if ($localCustomer && blank($localCustomer->server_id)) {
-                    DB::table('customers')->where('id', $localId)->whereNull('server_id')->update([
-                        'server_id' => $portalCustomerId,
-                        'server_updated_at' => $customer['updated_at'] ?? null,
-                    ]);
-                }
-
-                continue;
-            }
-
-            if (array_key_exists('person_in_charge_id', $customer) && ! array_key_exists('person_in_charge_email', $customer)) {
-                throw new \RuntimeException('Portal Customer pull omitted the Person in Charge email identity.');
-            }
-
-            $personInChargeId = filled($customer['person_in_charge_email'] ?? null)
-                ? $this->localUserIdForPortalEmail($customer['person_in_charge_email'], $localUserIdsByEmail)
-                : null;
-
-            $customerAttributes = [
-                'server_id' => $customer['id'],
-                'company_id' => $customer['company_id'] ?? null,
-                'general_category_id' => $customer['general_category_id'] ?? null,
-                'region_specific_id' => $customer['region_specific_id'] ?? null,
-                'municipality_id' => $customer['municipality_id'] ?? null,
-                'province_id' => $customer['province_id'] ?? null,
-                'barangay_id' => $customer['barangay_id'] ?? null,
-                'area_cluster_id' => $customer['area_cluster_id'] ?? null,
-                'name' => $customer['name'],
-                'unique_id' => $customer['unique_id'] ?? null,
-                'contact_person' => $customer['contact_person'] ?? null,
-                'contact_number' => $customer['contact_number'] ?? null,
-                'business_landline_number' => $customer['business_landline_number'] ?? null,
-                'business_mobile_number' => $customer['business_mobile_number'] ?? null,
-                'date_established' => $customer['date_established'] ?? null,
-                'person_in_charge_id' => $personInChargeId,
-                'address' => $customer['address'] ?? null,
-                'latitude' => $customer['latitude'] ?? null,
-                'longitude' => $customer['longitude'] ?? null,
-                'is_active' => $customer['is_active'] ?? true,
-                'competitor_volume' => $customer['competitor_volume'] ?? null,
-                'sync_status' => 'synced',
-                'sync_error' => null,
-                'synced_at' => now(),
-                'server_updated_at' => $customer['updated_at'] ?? null,
-                'updated_at' => now(),
+            $aggregate = [
+                'customers' => [$customer],
+                'customer_users' => $data['customer_users'] ?? [],
+                'customer_brands' => $data['customer_brands'] ?? [],
+                'customer_categories' => $data['customer_categories'] ?? [],
+                'customer_trade_profiles' => $data['customer_trade_profiles'] ?? [],
+                'customer_category_histories' => $data['customer_category_histories'] ?? [],
+                'customer_category_events' => $data['customer_category_events'] ?? [],
             ];
-            if (filled($customer['local_uuid'] ?? null)) {
-                $customerAttributes['local_uuid'] = $customer['local_uuid'];
+            if ($hasPullContract) {
+                $aggregate['customer_snapshot_contract'] = $contract;
             }
 
-            DB::table('customers')->updateOrInsert(['id' => $localId], $customerAttributes);
-
-            if (array_key_exists('access_user_emails', $customer)) {
-                $localAccessUserIds = array_map(
-                    fn (string $email): int => $this->localUserIdForPortalEmail($email, $localUserIdsByEmail),
-                    $customer['access_user_emails'] ?? [],
-                );
-
-                DB::table('customer_user')->where('customer_id', $localId)->delete();
-
-                if ($localAccessUserIds !== []) {
-                    DB::table('customer_user')->insert(array_map(fn (int $localUserId): array => [
-                        'customer_id' => $localId,
-                        'user_id' => $localUserId,
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ], $localAccessUserIds));
-                }
-            }
-        }
-
-        foreach ($data['customer_trade_profiles'] ?? [] as $profile) {
-            $localCustomerId = $serverToLocalCustomer[$profile['customer_id']] ?? $profile['customer_id'];
-            if (isset($protectedLocalCustomerIds[(string) $localCustomerId])) {
-                continue;
-            }
-            DB::table('customer_trade_profiles')->updateOrInsert(
-                ['customer_id' => $localCustomerId],
-                [
-                    'profile_type' => $profile['profile_type'] ?? null,
-                    'profile_data' => isset($profile['profile_data']) ? json_encode($profile['profile_data']) : null,
-                    'house_number' => $profile['house_number'] ?? null,
-                    'entry_detail' => $profile['entry_detail'] ?? null,
-                    'classifications' => isset($profile['classifications']) ? json_encode($profile['classifications']) : null,
-                    'ommc_brands' => isset($profile['ommc_brands']) ? json_encode($profile['ommc_brands']) : null,
-                    'ommc_mcb_brands' => isset($profile['ommc_mcb_brands']) ? json_encode($profile['ommc_mcb_brands']) : null,
-                    'tpl_pollux' => isset($profile['tpl_pollux']) ? json_encode($profile['tpl_pollux']) : null,
-                    'other_competitor_brands' => isset($profile['other_competitor_brands']) ? json_encode($profile['other_competitor_brands']) : null,
-                    'mcb_competitors' => isset($profile['mcb_competitors']) ? json_encode($profile['mcb_competitors']) : null,
-                    'other_competitors_note' => $profile['other_competitors_note'] ?? null,
-                    'working_days' => isset($profile['working_days']) ? json_encode($profile['working_days']) : null,
-                    'operating_hours' => isset($profile['operating_hours']) ? json_encode($profile['operating_hours']) : null,
-                    'motiv_user' => $profile['motiv_user'] ?? null,
-                    'delivery_method' => $profile['delivery_method'] ?? null,
-                    'ulab' => $profile['ulab'] ?? null,
-                    'updated_at' => now(),
-                ]
-            );
-        }
-
-        foreach ($data['customer_category_histories'] ?? [] as $history) {
-            $localCustomerId = $serverToLocalCustomer[$history['customer_id']] ?? $history['customer_id'];
-            if (isset($protectedLocalCustomerIds[(string) $localCustomerId])) {
-                continue;
-            }
-            DB::table('customer_category_histories')->updateOrInsert(
-                ['customer_id' => $localCustomerId, 'profile_type' => $history['profile_type'] ?? null, 'stream' => $history['stream'] ?? null, 'category_year' => $history['category_year']],
-                ['category' => $history['category'], 'updated_at' => now()]
-            );
-        }
-
-        foreach ($data['customer_category_events'] ?? [] as $event) {
-            $localCustomerId = $serverToLocalCustomer[$event['customer_id']] ?? $event['customer_id'];
-            if (isset($protectedLocalCustomerIds[(string) $localCustomerId])) {
-                continue;
-            }
-            $supersedesId = filled($event['supersedes_event_key'] ?? null)
-                ? DB::table('customer_category_events')->where('event_key', $event['supersedes_event_key'])->value('id')
-                : null;
-            DB::table('customer_category_events')->updateOrInsert(
-                ['event_key' => $event['event_key']],
-                [
-                    'customer_id' => $localCustomerId,
-                    'profile_type' => $event['profile_type'],
-                    'stream' => $event['stream'],
-                    'category' => $event['category'],
-                    'effective_at' => $event['effective_at'],
-                    'source' => $event['source'],
-                    'supersedes_event_id' => $supersedesId,
-                    'supersedes_event_key' => $event['supersedes_event_key'] ?? null,
-                    'updated_at' => now(),
-                ]
-            );
+            $reconciler->reconcile($aggregate, $localUserIdsByEmail);
         }
 
         $this->upsertRows('salescall_statuses', array_map(fn (array $status): array => [
@@ -1693,64 +1561,6 @@ class SyncService
                         report($e);
                     }
                 }
-            }
-        }
-
-        $incomingCustomerBrands = collect($data['customer_brands'] ?? [])->groupBy('customer_id');
-
-        $customersWithPendingBrands = $incomingCustomerBrands->isEmpty()
-            ? []
-            : SalescallBrand::where('sync_status', 'pending')->distinct()->pluck('customer_id')->flip()->all();
-
-        foreach ($incomingCustomerBrands as $customerId => $rows) {
-            $localCustomerId = $serverToLocalCustomer[$customerId] ?? $customerId;
-
-            if (isset($customersWithPendingBrands[$localCustomerId])) {
-                continue;
-            }
-
-            CustomerBrand::where('customer_id', $localCustomerId)->delete();
-
-            foreach ($rows as $row) {
-                try {
-                    CustomerBrand::create([
-                        'customer_id' => $localCustomerId,
-                        'material_group_id' => $row['material_group_id'],
-                        'brand_id' => $row['brand_id'],
-                        'quantity' => $row['quantity'] ?? null,
-                        'brand_other' => $row['brand_other'] ?? null,
-                        'last_salescall_id' => $row['last_salescall_id'] ?? null,
-                        'last_updated_by' => $row['last_updated_by'] ?? null,
-                    ]);
-                } catch (Throwable $e) {
-                    report($e);
-                }
-            }
-        }
-
-        $customersWithPendingCategories = empty($data['customer_categories'])
-            ? []
-            : SalescallCategory::where('sync_status', 'pending')->distinct()->pluck('customer_id')->flip()->all();
-
-        foreach ($data['customer_categories'] ?? [] as $categoryRow) {
-            $localCustomerId = $serverToLocalCustomer[$categoryRow['customer_id']] ?? $categoryRow['customer_id'];
-
-            if (isset($customersWithPendingCategories[$localCustomerId])) {
-                continue;
-            }
-
-            try {
-                CustomerCategory::updateOrCreate(
-                    ['customer_id' => $localCustomerId],
-                    [
-                        'category_id' => $categoryRow['category_id'],
-                        'sub_category_id' => $categoryRow['sub_category_id'],
-                        'last_salescall_id' => $categoryRow['last_salescall_id'] ?? null,
-                        'last_updated_by' => $categoryRow['last_updated_by'] ?? null,
-                    ]
-                );
-            } catch (Throwable $e) {
-                report($e);
             }
         }
 
@@ -3378,6 +3188,7 @@ class SyncService
         try {
             $payload = $this->customerPushPayload($customer);
             $fingerprint = hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR));
+            $aggregateFingerprint = app(CustomerAggregateReconciler::class)->fingerprint((int) $customer->id);
 
             $response = $client->post("{$this->serverUrl}/api/sync/push/customer", $payload);
 
@@ -3389,12 +3200,14 @@ class SyncService
 
             if ($response->successful() && filter_var($response->json('server_id'), FILTER_VALIDATE_INT) && (int) $response->json('server_id') > 0) {
                 $acknowledgment = $response->json();
-                $identity = app(CustomerIdentityResolver::class)->resolve([
+                $acknowledgedIdentity = [
                     'id' => $acknowledgment['server_id'],
                     'local_uuid' => $acknowledgment['local_uuid'] ?? null,
                     'unique_id' => $acknowledgment['unique_id'] ?? null,
                     'company_id' => $customer->company_id,
-                ], (int) $customer->id);
+                    'updated_at' => $acknowledgment['updated_at'] ?? null,
+                ];
+                $identity = app(CustomerIdentityResolver::class)->resolve($acknowledgedIdentity, (int) $customer->id);
 
                 if ($identity->isConflict()) {
                     $customer->update([
@@ -3405,33 +3218,68 @@ class SyncService
                     return SyncResult::fail('Customer identity conflict requires review.', 'customer_identity_conflict', 0, 1, 0, ['customer_identity_conflict']);
                 }
 
-                $snapshotCapabilityAvailable = $this->hasCompleteCustomerSnapshotCapability($acknowledgment['customer_snapshot'] ?? null);
-                if (! $snapshotCapabilityAvailable) {
+                $reconciler = app(CustomerAggregateReconciler::class);
+                $snapshotProvided = array_key_exists('customer_snapshot', $acknowledgment);
+                $snapshot = $acknowledgment['customer_snapshot'] ?? null;
+                $snapshotCapabilityAvailable = is_array($snapshot)
+                    && $reconciler->supportsCompleteSnapshot($snapshot);
+
+                if (! $snapshotProvided) {
                     Log::notice('sync:customer:acknowledged_without_snapshot_capability', [
                         'local_customer_id' => $customer->id,
                         'portal_customer_id' => (int) $acknowledgment['server_id'],
                     ]);
                 }
 
-                $this->markSynced($customer, [
-                    'server_id' => $acknowledgment['server_id'],
-                    'server_updated_at' => $acknowledgment['updated_at'] ?? null,
-                    'unique_id' => ($acknowledgment['unique_id'] ?? null) ?: $customer->unique_id,
+                if (! $snapshotProvided) {
+                    $outcome = $reconciler->acknowledgeWithoutSnapshot($acknowledgedIdentity, (int) $customer->id, $aggregateFingerprint);
+                } elseif (! $snapshotCapabilityAvailable
+                    || ! isset($snapshot['customers'][0]['id'])
+                    || (int) $snapshot['customers'][0]['id'] !== (int) $acknowledgment['server_id']
+                    || ($snapshot['customers'][0]['local_uuid'] ?? null) !== ($acknowledgment['local_uuid'] ?? null)) {
+                    $outcome = $reconciler->rejectAcknowledgmentSnapshot(
+                        $acknowledgedIdentity,
+                        (int) $customer->id,
+                        'Portal acknowledged this Customer with an invalid or incomplete aggregate snapshot. Local data was preserved for review.',
+                    );
+                } else {
+                    $outcome = $reconciler->reconcile(
+                        $snapshot,
+                        [],
+                        (int) $customer->id,
+                        $aggregateFingerprint,
+                        requireCompleteContract: true,
+                    );
+                }
+
+                if (! in_array($outcome['status'], ['applied', 'acknowledged_without_snapshot'], true)) {
+                    return SyncResult::fail(
+                        'Customer delivery was acknowledged, but local changes were preserved and require conflict review.',
+                        'customer_conflict',
+                        0,
+                        1,
+                        0,
+                        ['customer_conflict'],
+                    );
+                }
+
+                DB::table('customers')->where('id', $customer->id)->update([
                     'customer_code_reservation_token' => null,
-                    'synced_at' => now(),
-                ], ! $allowExhausted);
+                    'sync_attempts' => $allowExhausted ? $customer->sync_attempts : 0,
+                    'sync_error' => $allowExhausted ? $customer->sync_error : null,
+                ]);
                 DB::table('sync_states')->whereIn('key', [
                     'customer.manual_retry_ready.'.$customer->id,
                     'customer.last_failed_payload.'.$customer->id,
                 ])->delete();
 
                 $snapshotOutcome = $snapshotCapabilityAvailable
-                    ? 'customer_snapshot_not_reconciled'
+                    ? 'customer_snapshot_reconciled'
                     : 'customer_snapshot_unsupported';
 
                 return SyncResult::ok(
                     $snapshotCapabilityAvailable
-                        ? 'Customer delivery acknowledged; the authoritative aggregate snapshot has not been applied by this Tablet build.'
+                        ? 'Customer delivery acknowledged and authoritative aggregate reconciled.'
                         : 'Customer delivery acknowledged; Portal does not support the authoritative aggregate snapshot contract, so aggregate refresh is not claimed.',
                     1,
                     0,
@@ -3471,31 +3319,6 @@ class SyncService
 
             return SyncResult::fail($retryable ? 'Customer push failed and will retry on the next sync.' : 'Customer push failed and reached the automatic retry limit. Correct and save the Customer before using Retry Customer.', 'push_failed', 0, 1, $retryable, ['unexpected_sync_error']);
         }
-    }
-
-    /**
-     * @param  array<string, mixed>|null  $snapshot
-     */
-    private function hasCompleteCustomerSnapshotCapability(?array $snapshot): bool
-    {
-        $requiredCollections = [
-            'customers',
-            'customer_users',
-            'customer_brands',
-            'customer_categories',
-            'customer_trade_profiles',
-            'customer_category_histories',
-            'customer_category_events',
-        ];
-
-        $capabilities = $snapshot['capabilities'] ?? null;
-        $completeCollections = $snapshot['complete_collections'] ?? null;
-
-        return ($snapshot['contract_version'] ?? null) === 1
-            && is_array($capabilities)
-            && in_array('customer.aggregate.snapshot.v1', $capabilities, true)
-            && is_array($completeCollections)
-            && array_diff($requiredCollections, $completeCollections) === [];
     }
 
     private function customerPushPayload(Customer $customer): array

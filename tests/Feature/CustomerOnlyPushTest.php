@@ -105,6 +105,56 @@ test('Customer Push acknowledgment resolves the existing local row by UUID and p
         ->and(DB::table('customers')->where('id', $customerId)->value('local_uuid'))->toBe($localUuid);
 });
 
+test('versioned Customer Push acknowledgment applies the authoritative aggregate to the existing local row', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+    $customerId = insertPushCustomer('Offline name');
+    $localUuid = DB::table('customers')->where('id', $customerId)->value('local_uuid');
+    Http::fake(['portal.test/api/sync/push/customer' => Http::response([
+        'server_id' => 72021,
+        'local_uuid' => $localUuid,
+        'unique_id' => 'PORTAL-72021',
+        'updated_at' => now()->toISOString(),
+        'customer_snapshot' => [
+            'contract_version' => 1,
+            'capabilities' => ['customer.aggregate.snapshot.v1'],
+            'complete_collections' => [
+                'customers', 'customer_users', 'customer_brands', 'customer_categories',
+                'customer_trade_profiles', 'customer_category_histories', 'customer_category_events',
+            ],
+            'customers' => [[
+                'id' => 72021,
+                'local_uuid' => $localUuid,
+                'name' => 'Portal-authoritative name',
+                'unique_id' => 'PORTAL-72021',
+                'company_id' => null,
+                'is_active' => true,
+                'access_user_emails' => [],
+                'person_in_charge_email' => null,
+                'updated_at' => now()->toISOString(),
+            ]],
+            'customer_users' => [],
+            'customer_brands' => [],
+            'customer_categories' => [],
+            'customer_trade_profiles' => [],
+            'customer_category_histories' => [],
+            'customer_category_events' => [],
+        ],
+    ])]);
+
+    $result = app(SyncService::class)->pushCustomer($customerId);
+    $saved = DB::table('customers')->where('id', $customerId)->first();
+
+    expect($result->success)->toBeTrue()
+        ->and($result->syncedCount)->toBe(1)
+        ->and($saved->id)->toBe($customerId)
+        ->and($saved->server_id)->toBe(72021)
+        ->and($saved->local_uuid)->toBe($localUuid)
+        ->and($saved->name)->toBe('Portal-authoritative name')
+        ->and($saved->sync_status)->toBe('synced');
+});
+
 test('Customer Push acknowledgment with a conflicting UUID does not bind the Portal identity', function () {
     config(['sync.server_url' => 'http://portal.test']);
     $user = User::factory()->create(['api_token' => 'tablet-token']);
