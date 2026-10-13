@@ -20,11 +20,14 @@ function seedCustomerCreateFixtures(): User
 
     DB::table('companies')->insert(['id' => 1, 'name' => 'OMMC', 'code' => 'OMMC', 'created_at' => $now, 'updated_at' => $now]);
     DB::table('regions')->insert(['id' => 1, 'code' => 'MM', 'psgc_code' => '130000000', 'name' => 'Metro Manila', 'created_at' => $now, 'updated_at' => $now]);
-    DB::table('region_specifics')->insert(['id' => 1, 'region_id' => 1, 'name' => 'NCR', 'sort' => 1, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('region_specifics')->insert(['id' => 1, 'region_id' => 1, 'name' => 'Legacy NCR', 'sort' => 1, 'created_at' => $now, 'updated_at' => $now]);
     DB::table('provinces')->insert(['id' => 1, 'region_id' => 1, 'region_specific_id' => 1, 'name' => 'Metro Manila', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
     DB::table('municipalities')->insert(['id' => 1, 'region_id' => 1, 'province_id' => 1, 'name' => 'Quezon City', 'sort' => 1, 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
     DB::table('area_clusters')->insert(['id' => 1, 'region_specific_id' => 1, 'code' => 'cluster-1', 'name' => 'Cluster 1', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
-    DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 2])]);
+    DB::table('sync_states')->insert([
+        ['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 3])],
+        ['key' => 'landmass_options', 'value' => json_encode(['LUZON' => 'LUZON', 'MINDANAO' => 'MINDANAO', 'BASILAN' => 'BASILAN'])],
+    ]);
     DB::table('general_categories')->insert(['id' => 1, 'name' => 'Mixed Outlet', 'priority_visit' => null, 'duration_per_visit' => null, 'sort' => 1, 'created_at' => $now, 'updated_at' => $now]);
 
     foreach (['Metro Manila', 'North Luzon', 'South Luzon', 'Visayas', 'Mindanao'] as $index => $name) {
@@ -37,15 +40,19 @@ function seedCustomerCreateFixtures(): User
 function validCustomerCreateState(): array
 {
     $years = config('customer_trade_form.category_years');
+    DB::table('region_specifics')->updateOrInsert(['id' => 52], ['region_id' => 1, 'name' => 'GMA', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('area_clusters')->updateOrInsert(['id' => 52], ['region_specific_id' => 52, 'code' => 'cluster-52', 'name' => 'Cluster 52', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
 
     return [
         'name' => 'Diagnostic Customer',
         'unique_id' => 'DIAG-001',
         'company_id' => 1,
-        'region_specific_id' => 1,
+        'region_specific_id' => 52,
+        'customer_region_type_id' => 1,
         'physical_region_id' => 1,
         'province_id' => 1,
         'municipality_id' => 1,
+        'area_cluster_id' => 52,
         'general_category_id' => 1,
         'competitor_volume' => 2,
         'address' => '1 Diagnostic Street, Quezon City',
@@ -55,6 +62,9 @@ function validCustomerCreateState(): array
         'business_landline_number' => '02-8000000',
         'business_mobile_number' => '09170000000',
         'date_established' => '2018-01-01',
+        'landmass_code' => 'LUZON',
+        'person_in_charge_id' => 1,
+        'access_user_ids' => [1],
         'is_active' => true,
         'trade' => [
             'house_number' => '1',
@@ -75,7 +85,11 @@ function validCustomerCreateState(): array
         'active' => [
             'ulab' => 'GRC',
             'operating_hours' => ['start' => '08:00', 'end' => '17:00'],
-            'owner' => ['name' => 'Owner', 'birthday' => '1970-01-01', 'relationship' => 'Owner', 'generation' => '1st Gen'],
+            'conversion_program' => 'For Conversion',
+            'delivery_type' => 'no',
+            'ulab' => 'GRC',
+            'operating_hours' => ['start' => '08:00', 'end' => '17:00'],
+            'owner' => ['name' => 'Owner', 'birthday' => '1970-01-01', 'nickname' => 'Owner', 'successor_name' => 'Successor', 'successor_birthday' => '2000-01-01', 'relationship' => 'Owner', 'generation' => '1st Gen', 'hobbies' => 'Reading'],
         ],
         'categories' => ['ab' => collect($years)->mapWithKeys(fn (int $year) => [$year => 'AB Loyal'])->all()],
     ];
@@ -241,7 +255,7 @@ test('customer add page renders against the complete migrated sqlite schema', fu
     }
 });
 
-test('Fleet annual category bindings save, push, edit, and push updates without losing other years', function () {
+test('Fleet annual category bindings require every available year on Add and preserve saved history on Edit', function () {
     $user = seedCustomerCreateFixtures();
     $user->forceFill(['api_token' => 'fleet-test-token'])->save();
     DB::table('companies')->insert(['id' => 4, 'name' => 'Fleet', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
@@ -261,28 +275,31 @@ test('Fleet annual category bindings save, push, edit, and push updates without 
         ]);
     });
 
+    $completeState = array_replace_recursive(validCustomerCreateState(), [
+        'company_id' => 4,
+        'categories' => ['fleet' => collect(config('customer_trade_form.category_streams.fleet.years'))->mapWithKeys(fn (int $year): array => [$year => 'Motolite Only'])->all()],
+        'active' => ['account_type' => 'existing', 'classifications' => 'Bus', 'battery_class' => 'maintenance_free', 'status' => 'active'],
+    ]);
+    $completeState['categories']['fleet'][2026] = 'Mixed';
     $add = Livewire::test(CustomerCreatePage::class)
-        ->set('company_id', 4)
+        ->set($completeState)
         ->assertSee('FLEET Annual Categories')
         ->assertSee('x-model="$wire.categories[\'fleet\'][2018]"', false)
         ->assertSee('x-model="$wire.categories[\'fleet\'][2026]"', false)
         ->assertDontSee('x-model="$wire.categories.fleet.2018"', false)
         ->set('name', 'Fleet Annual Category Contract')
-        ->set('categories.fleet.2018', 'Motolite Only')
-        ->set('categories.fleet.2026', 'Mixed')
         ->call('saveCustomer')
         ->assertRedirect(CustomerPage::getUrl());
 
     $customer = DB::table('customers')->where('name', 'Fleet Annual Category Contract')->first();
     $histories = DB::table('customer_category_histories')->where('customer_id', $customer->id)->orderBy('category_year')->get();
 
-    expect($histories->map(fn ($row): array => [$row->profile_type, $row->stream, (int) $row->category_year, $row->category])->all())
-        ->toBe([['fleet', 'fleet', 2018, 'Motolite Only'], ['fleet', 'fleet', 2026, 'Mixed']])
+    expect($histories)->toHaveCount(count(config('customer_trade_form.category_streams.fleet.years')))
+        ->and($histories->first()->category)->toBe('Motolite Only')
         ->and($customer->server_id)->toBe(99001)
         ->and($customer->sync_status)->toBe('synced');
 
     Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
-        && collect($request['category_histories'])->pluck('category_year')->all() === [2018, 2026]
         && collect($request['category_histories'])->pluck('stream')->unique()->all() === ['fleet']);
 
     $edit = Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customer->id])
@@ -301,10 +318,11 @@ test('Fleet annual category bindings save, push, edit, and push updates without 
 
     Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
         && $request['sync_intent'] === 'update'
-        && collect($request['category_histories'])->map(fn (array $row): array => [(int) $row['category_year'], $row['category']])->all() === [[2018, 'Motolite Only'], [2026, 'Competitor']]);
+        && collect($request['category_histories'])->contains(fn (array $row): bool => (int) $row['category_year'] === 2018 && $row['category'] === 'Motolite Only')
+        && collect($request['category_histories'])->contains(fn (array $row): bool => (int) $row['category_year'] === 2026 && $row['category'] === 'Competitor'));
 });
 
-test('Fleet Customer with intentionally blank annual categories persists no fabricated history', function () {
+test('Fleet Customer cannot save while visible annual category options are blank', function () {
     $user = seedCustomerCreateFixtures();
     DB::table('companies')->insert(['id' => 4, 'name' => 'Fleet', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
     $this->actingAs($user);
@@ -315,10 +333,9 @@ test('Fleet Customer with intentionally blank annual categories persists no fabr
         ->assertSee('x-model="$wire.categories[\'fleet\'][2018]"', false)
         ->set('name', 'Fleet Empty Category Contract')
         ->call('saveCustomer')
-        ->assertRedirect(CustomerPage::getUrl());
+        ->assertHasErrors();
 
-    $customer = DB::table('customers')->where('name', 'Fleet Empty Category Contract')->first();
-    expect(DB::table('customer_category_histories')->where('customer_id', $customer->id)->count())->toBe(0);
+    expect(DB::table('customers')->where('name', 'Fleet Empty Category Contract')->exists())->toBeFalse();
 });
 
 test('customer add page saves the complete aggregate locally when its immediate push fails', function () {
@@ -341,7 +358,8 @@ test('customer add page saves the complete aggregate locally when its immediate 
         ->and($customer->sync_status)->toBe('failed')
         ->and($customer->sync_attempts)->toBe(1)
         ->and($customer->company_id)->toBe(1)
-        ->and($customer->region_specific_id)->toBe(1)
+        ->and($customer->landmass_code)->toBe('LUZON')
+        ->and($customer->region_specific_id)->toBe(52)
         ->and($customer->municipality_id)->toBe(1);
 
     $profile = DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->first();
@@ -358,9 +376,11 @@ test('customer add page saves the complete aggregate locally when its immediate 
         ->and($histories->pluck('category_year')->all())->toBe(range(2018, 2026))
         ->and($histories->pluck('category')->unique()->all())->toBe(['AB Loyal']);
 
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer') && $request['landmass_code'] === 'LUZON');
+
     Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
         && $request['general_category_id'] === 1
-        && $request['region_specific_id'] === 1
+        && $request['region_specific_id'] === 52
         && $request['province_id'] === 1
         && $request['municipality_id'] === 1
         && $request['category_histories'][0]['stream'] === 'ab'
@@ -371,11 +391,11 @@ test('customer add page saves the complete aggregate locally when its immediate 
         ->assertSee('wire:model.live="company_id"', false)
         ->assertSee('wire:model.live="physical_region_id"', false)
         ->assertSee('OMMC')
-        ->assertSee('Legacy / unresolved Specific Region ID 1')
+        ->assertDontSee('Legacy / unresolved Specific Region ID 1')
         ->assertSee('Quezon City');
 
     expect($edit->get('company_id'))->toBe(1)
-        ->and($edit->get('region_specific_id'))->toBe(1)
+        ->and($edit->get('region_specific_id'))->toBe(52)
         ->and($edit->get('physical_region_id'))->toBe(1)
         ->and($edit->get('province_id'))->toBe(1)
         ->and($edit->get('municipality_id'))->toBe(1);
@@ -1203,37 +1223,37 @@ test('customer add page still rejects an invalid access user id', function () {
     Http::assertNotSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer'));
 });
 
-test('customer add page accepts blank Warehouse Code when MOTIV User is enabled', function () {
+test('customer add requires Warehouse Code when MOTIV User is enabled and displays its field error', function () {
     $user = seedCustomerCreateFixtures();
     $this->actingAs($user);
     Http::fake();
 
-    Livewire::test(CustomerCreatePage::class)
+    $component = Livewire::test(CustomerCreatePage::class)
         ->set(array_replace_recursive(validCustomerCreateState(), ['trade' => ['motiv_user' => true]]))
         ->call('saveCustomer')
-        ->assertHasNoErrors();
+        ->assertHasErrors(['active.warehouse_code']);
 
-    $customer = DB::table('customers')->where('name', 'Diagnostic Customer')->first();
-    $profile = DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->first();
-    expect($customer)->not->toBeNull()
-        ->and(json_decode($profile->profile_data, true)['active']['warehouse_code'] ?? null)->toBeNull();
+    expect($component->html())->toContain('Warehouse Code <span class="text-danger-600" data-required-indicator="true"')
+        ->and($component->html())->toContain('field is required');
+    expect(DB::table('customers')->where('name', 'Diagnostic Customer')->exists())->toBeFalse();
 });
 
-test('customer add page accepts blank Delivery Detail when Delivery Type is Yes', function () {
+test('customer add requires Delivery Detail when Delivery Type is Yes and displays its field error', function () {
     $user = seedCustomerCreateFixtures();
     $this->actingAs($user);
     Http::fake();
 
-    Livewire::test(CustomerCreatePage::class)
+    $component = Livewire::test(CustomerCreatePage::class)
         ->set(array_replace_recursive(validCustomerCreateState(), ['active' => ['delivery_type' => 'yes']]))
         ->call('saveCustomer')
-        ->assertHasNoErrors();
+        ->assertHasErrors(['active.delivery_detail']);
 
-    $customer = DB::table('customers')->where('name', 'Diagnostic Customer')->first();
-    $profile = DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->first();
-    expect($customer)->not->toBeNull()
-        ->and(json_decode($profile->profile_data, true)['active']['delivery_type'])->toBe('yes')
-        ->and(json_decode($profile->profile_data, true)['active']['delivery_detail'] ?? null)->toBeNull();
+    expect($component->html())->toContain('Delivery Detail <span class="text-danger-600" data-required-indicator="true"')
+        ->and($component->html())->toContain('field is required');
+    expect(DB::table('customers')->where('name', 'Diagnostic Customer')->exists())->toBeFalse();
+    expect(DB::table('customer_trade_profiles')->count())->toBe(0)
+        ->and(DB::table('customer_category_histories')->count())->toBe(0)
+        ->and(DB::table('customer_user')->count())->toBe(0);
 });
 
 test('customer add validates supplied Warehouse Code and Delivery Detail values without conditional requiredness', function () {
@@ -1247,6 +1267,9 @@ test('customer add validates supplied Warehouse Code and Delivery Detail values 
             'trade' => ['motiv_user' => true],
             'active' => ['warehouse_code' => 'WH-123', 'delivery_type' => 'yes', 'delivery_detail' => 'own_delivery'],
         ]))
+        ->assertSee('Warehouse Code', false)
+        ->assertSee('Warehouse Code <span class="text-danger-600" data-required-indicator="true"', false)
+        ->assertSee('Delivery Detail <span class="text-danger-600" data-required-indicator="true"', false)
         ->call('saveCustomer')
         ->assertHasNoErrors();
 
@@ -1260,13 +1283,28 @@ test('customer add validates supplied Warehouse Code and Delivery Detail values 
         && data_get($request->data(), 'profile_data.active.delivery_detail') === 'own_delivery');
 });
 
+test('customer add does not show or require conditional fields when they are inapplicable', function () {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set(validCustomerCreateState())
+        ->assertDontSee('Warehouse Code')
+        ->assertDontSee('Delivery Detail')
+        ->call('saveCustomer')
+        ->assertHasNoErrors();
+
+    expect(DB::table('customers')->where('name', 'Diagnostic Customer')->exists())->toBeTrue();
+});
+
 test('customer add rejects malformed populated Warehouse Code and Delivery Detail values', function () {
     $user = seedCustomerCreateFixtures();
     $this->actingAs($user);
     Http::fake();
 
     Livewire::test(CustomerCreatePage::class)
-        ->set(array_replace_recursive(validCustomerCreateState(), ['active' => ['delivery_detail' => 'invalid']]))
+        ->set(array_replace_recursive(validCustomerCreateState(), ['active' => ['delivery_type' => 'yes', 'delivery_detail' => 'invalid']]))
         ->call('saveCustomer')
         ->assertHasErrors(['active.delivery_detail']);
 
@@ -1278,7 +1316,7 @@ test('customer add rejects malformed populated Warehouse Code and Delivery Detai
     expect(DB::table('customers')->where('name', 'Diagnostic Customer')->exists())->toBeFalse();
 });
 
-test('customer add minimum Name and Company creation supports every mapped company profile including CAR_CLUBS', function () {
+test('customer creation blocks incomplete Name and Company-only submissions for every mapped company profile', function () {
     $user = seedCustomerCreateFixtures();
     $companies = [
         [2, 'LAST MILE', 'LAST_MILE'], [3, 'FLEET', 'FLEET'], [4, 'OE', 'OE'], [5, 'IB', 'IB'], [6, 'CAR CLUBS', 'CAR_CLUBS'],
@@ -1294,11 +1332,10 @@ test('customer add minimum Name and Company creation supports every mapped compa
             ->set('name', "Minimal Customer {$companyId}")
             ->set('company_id', $companyId)
             ->call('saveCustomer')
-            ->assertHasNoErrors();
+            ->assertHasErrors(['general_category_id', 'address', 'latitude', 'longitude', 'contact_person', 'business_landline_number', 'business_mobile_number', 'date_established']);
     }
 
-    expect(DB::table('customers')->whereIn('name', collect(range(1, 6))->map(fn ($id) => "Minimal Customer {$id}")->all())->count())->toBe(6)
-        ->and(DB::table('customer_trade_profiles')->whereIn('customer_id', DB::table('customers')->whereIn('name', collect(range(1, 6))->map(fn ($id) => "Minimal Customer {$id}")->all())->select('id'))->count())->toBe(6);
+    expect(DB::table('customers')->whereIn('name', collect(range(1, 6))->map(fn ($id) => "Minimal Customer {$id}")->all())->count())->toBe(0);
 });
 
 test('switching company profile clears validation state and does not persist stale outlet values', function () {
@@ -1310,6 +1347,7 @@ test('switching company profile clears validation state and does not persist sta
     $component = Livewire::test(CustomerCreatePage::class)
         ->set('name', 'Fleet after switch')
         ->set('company_id', 1)
+        ->set('active.delivery_type', 'yes')
         ->set('active.delivery_detail', 'invalid')
         ->call('saveCustomer')
         ->assertHasErrors(['active.delivery_detail'])
@@ -1318,12 +1356,9 @@ test('switching company profile clears validation state and does not persist sta
         ->assertHasNoErrors()
         ->set('name', 'Fleet after switch')
         ->call('saveCustomer')
-        ->assertHasNoErrors();
+        ->assertHasErrors(['general_category_id', 'address', 'latitude', 'longitude']);
 
-    $customer = DB::table('customers')->where('name', 'Fleet after switch')->first();
-    $profile = DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->first();
-    expect($profile->profile_type)->toBe('fleet')
-        ->and(json_decode($profile->profile_data, true)['active'] ?? [])->toBe([]);
+    expect(DB::table('customers')->where('name', 'Fleet after switch')->exists())->toBeFalse();
 });
 
 test('customer add page renders the scoped customer-create-form styling hook', function () {
@@ -1336,4 +1371,1284 @@ test('customer add page renders the scoped customer-create-form styling hook', f
 
     expect(substr_count($component->html(), '<form '))->toBe(1)
         ->and(substr_count($component->html(), '</form>'))->toBe(1);
+});
+
+test('Customer Add required indicators follow available options and conditional profile state', function () {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    validCustomerCreateState();
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set('company_id', 1)
+        ->set('customer_region_type_id', 1)
+        ->set('physical_region_id', 1)
+        ->set('general_category_id', 1)
+        ->set('trade.entry_detail', 'AB')
+        ->assertSet('access_user_ids', [$user->id])
+        ->assertSet('person_in_charge_id', $user->id);
+    $html = $component->html();
+
+    expect($html)
+        ->toContain('Store Name <span class="text-danger-600" data-required-indicator="true"')
+        ->toContain('Active <span class="text-danger-600" data-required-indicator="true"')
+        ->toContain('Latitude <span class="text-danger-600" data-required-indicator="true"')
+        ->toContain('Longitude <span class="text-danger-600" data-required-indicator="true"')
+        ->toContain('General Category <span class="text-danger-600" data-required-indicator="true"')
+        ->toContain('Competitor Volume <span class="text-danger-600" data-required-indicator="true"')
+        ->toContain('Region <span class="text-danger-600" data-required-indicator="true"')
+        ->toContain('Specific Region <span class="text-danger-600" data-required-indicator="true"')
+        ->toContain('Area Cluster <span class="text-danger-600" data-required-indicator="true"')
+        ->toContain('Province <span class="text-danger-600" data-required-indicator="true"')
+        ->toContain('Name of Owner <span class="text-danger-600" data-required-indicator="true"')
+        ->toContain('Landmass (optional)</label>')
+        ->toContain('Customer Code</label>')
+        ->not->toContain('Landmass (optional) <span')
+        ->not->toContain('Customer Code <span');
+
+    $component->set('customer_region_type_id', 4);
+    $emptySpecificHtml = $component->html();
+    expect($emptySpecificHtml)
+        ->toContain('Specific Region </label>')
+        ->not->toContain('Specific Region <span class="text-danger-600" data-required-indicator="true"')
+        ->not->toContain('Area Cluster <span class="text-danger-600" data-required-indicator="true"');
+
+    $component->set('general_category_id', null);
+    expect($component->html())->not->toContain('Competitor Volume');
+
+    DB::table('sync_states')->where('key', 'location_reference_snapshot_complete')->update([
+        'value' => json_encode(['completed_at' => now()->toISOString(), 'reference_contract_version' => 2]),
+    ]);
+    $referenceFailureHtml = Livewire::test(CustomerCreatePage::class)->html();
+    expect($referenceFailureHtml)
+        ->toContain('Location reference options are unavailable or out of date.')
+        ->toContain('Specific Region <span class="text-danger-600" data-required-indicator="true"');
+});
+
+test('Customer Edit does not show Add-only required indicators on optional location fields', function () {
+    $user = seedCustomerCreateFixtures();
+    $customerId = DB::table('customers')->insertGetId([
+        'name' => 'Indicator Edit Customer',
+        'company_id' => 1,
+        'unique_id' => 'EDIT-INDICATOR-1',
+        'is_active' => true,
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+    DB::table('customer_trade_profiles')->insert([
+        'customer_id' => $customerId,
+        'profile_type' => 'outlet',
+        'profile_data' => json_encode(['active' => []]),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    $html = Livewire::test(CustomerEditPage::class, ['customerId' => $customerId])->html();
+
+    expect($html)
+        ->toContain('Address </label>')
+        ->not->toContain('Address <span class="text-danger-600" data-required-indicator="true"');
+});
+
+test('Customer Add hides empty profile section and preserves Owner Profile across company profile changes', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('companies')->insert([
+        ['id' => 2, 'name' => 'Unmapped Company', 'code' => 'UNMAPPED', 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 3, 'name' => 'Fleet Company', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    $this->actingAs($user);
+    Http::fake();
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->assertDontSee('Customer Profile')
+        ->assertSee('Owner Profile')
+        ->set('active.owner.name', 'Shared Owner');
+
+    $component->set('company_id', 2)
+        ->assertDontSee('Customer Profile')
+        ->assertDontSee('Outlet Profile')
+        ->assertSee('Owner Profile');
+
+    $component->set('company_id', 1)
+        ->assertSee('Outlet Profile')
+        ->assertSee('Owner Profile')
+        ->assertSet('active.owner.name', 'Shared Owner')
+        ->set('trade.motiv_user', true)
+        ->set('active.warehouse_code', 'STALE-OUTLET-VALUE')
+        ->set('active.delivery_type', 'yes')
+        ->set('active.delivery_detail', 'stale-invalid-value')
+        ->set('company_id', 3)
+        ->assertDontSee('Outlet Profile')
+        ->assertSee('Fleet Profile')
+        ->assertSet('active.warehouse_code', null)
+        ->assertSet('active.delivery_detail', null)
+        ->assertSet('active.owner.name', 'Shared Owner')
+        ->call('saveCustomer')
+        ->assertHasNoErrors(['active.warehouse_code', 'active.delivery_detail']);
+});
+
+test('Tablet Add validates complete and incomplete forms for every Company code in the authoritative profile map', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('barangays')->insert([
+        'id' => 1, 'municipality_id' => 1, 'psgc_code' => 'ASSURE-BRG-1', 'code' => 'ASSURE-1',
+        'name' => 'Assurance Barangay', 'enabled' => true, 'created_at' => now(), 'updated_at' => now(),
+    ]);
+    $companyMap = config('customer_trade_form.company_profile_map');
+    $nextCompanyId = (int) DB::table('companies')->max('id') + 1;
+    $companyIds = [];
+    foreach ($companyMap as $code => $profile) {
+        $existingId = DB::table('companies')->where('code', $code)->value('id');
+        if ($existingId === null) {
+            $existingId = $nextCompanyId++;
+            DB::table('companies')->insert(['id' => $existingId, 'name' => str_replace('_', ' ', $code), 'code' => $code, 'created_at' => now(), 'updated_at' => now()]);
+        }
+        $companyIds[$code] = (int) $existingId;
+    }
+    $this->actingAs($user);
+    Http::fake();
+
+    $profileState = function (string $profile, string $code) use ($companyIds): array {
+        $state = validCustomerCreateState();
+        $state['name'] = 'Assurance '.$code;
+        $state['unique_id'] = 'ASSURE-'.$code;
+        $state['company_id'] = $companyIds[$code] ?? null;
+        $state['barangay_id'] = 1;
+
+        if ($profile === 'outlet') {
+            return $state;
+        }
+
+        $years = config("customer_trade_form.category_streams.{$profile}.years", []);
+        $options = config("customer_trade_form.profile_category_options.{$profile}", []);
+        $category = array_values(is_array(reset($options)) ? reset($options) : $options)[0] ?? null;
+        $state['categories'] = [$profile => array_fill_keys($years, $category)];
+        $state['trade'] = $profile === 'oe' ? ['entry_detail' => 'AB'] : [];
+        $state['active'] = ['owner' => $state['active']['owner']];
+
+        $state['active'] = array_replace($state['active'], match ($profile) {
+            'fleet' => ['account_type' => 'existing', 'classifications' => array_values(config('customer_trade_form.profile_classifications.fleet'))[0], 'battery_class' => 'maintenance_free', 'status' => 'active'],
+            'oe' => ['classifications' => array_values(config('customer_trade_form.profile_classifications.oe'))[0], 'battery_class' => 'maintenance_free'],
+            'ib' => ['classifications' => array_values(config('customer_trade_form.profile_classifications.ib'))[0]],
+        });
+
+        return $state;
+    };
+
+    foreach ($companyMap as $code => $profile) {
+        $state = $profileState($profile, $code);
+        $component = Livewire::test(CustomerCreatePage::class)
+            ->set($state)
+            ->assertSee(ucfirst($profile).' Profile')
+            ->assertSee('Owner Profile')
+            ->assertSee(match ($profile) {
+                'outlet', 'oe' => 'Entry Detail <span class="text-danger-600" data-required-indicator="true"',
+                'fleet' => 'Type <span class="text-danger-600" data-required-indicator="true"',
+                'ib' => 'Classification <span class="text-danger-600" data-required-indicator="true"',
+            }, false)
+            ->call('saveCustomer')
+            ->assertHasNoErrors()
+            ->assertRedirect(CustomerPage::getUrl());
+
+        $saved = DB::table('customers')->where('name', 'Assurance '.$code)->first();
+        expect($saved)->not->toBeNull()
+            ->and(DB::table('customer_trade_profiles')->where('customer_id', $saved->id)->value('profile_type'))->toBe($profile);
+    }
+
+    foreach ($companyMap as $code => $profile) {
+        $state = $profileState($profile, $code);
+        $missingField = match ($profile) {
+            'outlet', 'oe' => 'trade.entry_detail',
+            'fleet' => 'active.account_type',
+            'ib' => 'active.classifications',
+        };
+        data_forget($state, $missingField);
+        $state['name'] = 'Missing profile field '.$code;
+        Livewire::test(CustomerCreatePage::class)
+            ->set($state)
+            ->call('saveCustomer')
+            ->assertHasErrors([$missingField]);
+        expect(DB::table('customers')->where('name', 'Missing profile field '.$code)->exists())->toBeFalse();
+    }
+
+    $sharedRequiredFields = [
+        'name', 'company_id', 'access_user_ids', 'person_in_charge_id',
+        'general_category_id', 'competitor_volume', 'customer_region_type_id', 'physical_region_id',
+        'area_cluster_id', 'province_id', 'municipality_id', 'barangay_id', 'address', 'latitude', 'longitude',
+        'contact_person', 'business_landline_number', 'business_mobile_number', 'date_established',
+        'active.owner.name', 'active.owner.birthday', 'active.owner.nickname',
+        'active.owner.successor_name', 'active.owner.successor_birthday', 'active.owner.relationship',
+        'active.owner.generation', 'active.owner.hobbies',
+    ];
+    $profileRequiredFields = [
+        'outlet' => [
+            'trade.entry_detail', 'trade.classifications', 'trade.working_days', 'trade.motiv_user',
+            'active.conversion_program', 'active.operating_hours.start', 'active.operating_hours.end',
+            'active.delivery_type', 'active.ulab',
+            ...array_map(fn (int $year): string => "categories.ab.{$year}", config('customer_trade_form.category_streams.outlet.years')),
+        ],
+        'fleet' => [
+            'active.account_type', 'active.classifications', 'active.battery_class', 'active.status',
+            ...array_map(fn (int $year): string => "categories.fleet.{$year}", config('customer_trade_form.category_streams.fleet.years')),
+        ],
+        'oe' => [
+            'trade.entry_detail', 'active.classifications', 'active.battery_class', 'active.sulfuric_acid',
+            ...array_map(fn (int $year): string => "categories.oe.{$year}", config('customer_trade_form.category_streams.oe.years')),
+        ],
+        'ib' => [
+            'active.classifications',
+            ...array_map(fn (int $year): string => "categories.ib.{$year}", config('customer_trade_form.category_streams.ib.years')),
+        ],
+    ];
+
+    $outletMcbRequiredFields = array_map(
+        fn (int $year): string => "categories.mcb.{$year}",
+        config('customer_trade_form.category_streams.outlet.years'),
+    );
+
+    foreach ($companyMap as $code => $profile) {
+        $fields = [...$sharedRequiredFields, ...$profileRequiredFields[$profile]];
+
+        if ($profile === 'outlet') {
+            $fields = [...$fields, ...$outletMcbRequiredFields];
+        }
+
+        if ($profile === 'outlet') {
+            $fields[] = 'active.warehouse_code';
+            $fields[] = 'active.delivery_detail';
+        }
+
+        if ($profile === 'oe') {
+            $fields[] = 'active.sulfuric_acid';
+        }
+
+        foreach ($fields as $field) {
+            $state = $profileState($profile, $code);
+            $state['barangay_id'] = 1;
+
+            if ($profile === 'outlet') {
+                data_set($state, 'trade.motiv_user', true);
+                data_set($state, 'active.warehouse_code', 'ASSURANCE-WAREHOUSE');
+                data_set($state, 'active.delivery_type', 'yes');
+                data_set($state, 'active.delivery_detail', 'own_delivery');
+
+                if (str_starts_with($field, 'categories.mcb.')) {
+                    data_set($state, 'trade.entry_detail', 'MCB');
+                    unset($state['categories']['ab']);
+                    $state['categories']['mcb'] = array_fill_keys(
+                        config('customer_trade_form.category_streams.outlet.years'),
+                        config('customer_trade_form.profile_category_options.outlet.mcb')[0],
+                    );
+                }
+            }
+
+            if ($profile === 'oe') {
+                data_set($state, 'trade.entry_detail', 'Acid');
+                data_set($state, 'active.sulfuric_acid', false);
+            }
+
+            $omissionName = "Omission {$code} {$field}";
+            $state['name'] = $field === 'name' ? null : $omissionName;
+            $component = Livewire::test(CustomerCreatePage::class)
+                ->set($state)
+                ->set($field, in_array($field, ['access_user_ids', 'trade.classifications', 'trade.working_days'], true) ? [] : null);
+            $component->assertSet($field, in_array($field, ['access_user_ids', 'trade.classifications', 'trade.working_days'], true) ? [] : null)
+                ->call('saveCustomer');
+            $errorKeys = $component->errors()->keys();
+            if (! in_array($field, $errorKeys, true)) {
+                throw new RuntimeException("Missing required-field error for {$code}.{$field}; received: ".implode(', ', $errorKeys));
+            }
+
+            if ($field !== 'name') {
+                expect(DB::table('customers')->where('name', $omissionName)->exists())->toBeFalse();
+            }
+        }
+    }
+});
+
+test('Tablet Add accepts a complete MCB baseline for every Outlet Company code', function () {
+    $user = seedCustomerCreateFixtures();
+    $companyMap = config('customer_trade_form.company_profile_map');
+    $outletCompanies = array_filter($companyMap, fn (string $profile): bool => $profile === 'outlet');
+    $companyIds = ['OMMC' => 1];
+    $nextId = (int) DB::table('companies')->max('id') + 1;
+    foreach (array_keys($outletCompanies) as $code) {
+        if (isset($companyIds[$code])) {
+            continue;
+        }
+        DB::table('companies')->insert([
+            'id' => $nextId, 'name' => str_replace('_', ' ', $code), 'code' => $code,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $companyIds[$code] = $nextId++;
+    }
+    $this->actingAs($user);
+    Http::fake();
+
+    foreach (array_keys($outletCompanies) as $code) {
+        $state = validCustomerCreateState();
+        $state['name'] = "Complete MCB {$code}";
+        $state['company_id'] = $companyIds[$code];
+        $state['trade']['entry_detail'] = 'MCB';
+        unset($state['categories']['ab']);
+        $mcbOptions = config('customer_trade_form.profile_category_options.outlet.mcb');
+        $state['categories']['mcb'] = array_fill_keys(
+            config('customer_trade_form.category_streams.outlet.years'),
+            $mcbOptions[0],
+        );
+
+        $component = Livewire::test(CustomerCreatePage::class)
+            ->set($state)
+            ->assertSee('Outlet Profile')
+            ->assertSee('MCB')
+            ->call('saveCustomer')
+            ->assertHasNoErrors()
+            ->assertRedirect(CustomerPage::getUrl());
+
+        $customer = DB::table('customers')->where('name', "Complete MCB {$code}")->first();
+        expect($customer)->not->toBeNull()
+            ->and(DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->value('profile_type'))->toBe('outlet')
+            ->and(DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->value('profile_data'))->not->toContain('AB Loyal')
+            ->and(DB::table('customer_category_histories')->where('customer_id', $customer->id)->where('stream', 'mcb')->count())->toBe(count(config('customer_trade_form.category_streams.outlet.years')))
+            ->and($component->errors()->keys())->toBe([]);
+    }
+});
+
+test('Tablet Add profile sections, required indicators, Owner values, and stale profile state follow every mapped Company code', function () {
+    $user = seedCustomerCreateFixtures();
+    $companyMap = config('customer_trade_form.company_profile_map');
+    $companyIds = ['OMMC' => 1];
+    $nextId = 2;
+    foreach ($companyMap as $code => $profile) {
+        if (isset($companyIds[$code])) {
+            continue;
+        }
+        DB::table('companies')->insert([
+            'id' => $nextId, 'name' => str_replace('_', ' ', $code), 'code' => $code,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $companyIds[$code] = $nextId++;
+    }
+    $this->actingAs($user);
+    Http::fake();
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set('active.owner.name', 'Shared Switch Owner');
+    $previousProfile = null;
+
+    foreach ($companyMap as $code => $profile) {
+        if ($previousProfile === 'outlet' && $profile !== 'outlet') {
+            $component->set('trade.motiv_user', true)
+                ->set('active.warehouse_code', 'STALE-OUTLET-WAREHOUSE');
+        }
+
+        $component->set('company_id', $companyIds[$code])
+            ->assertSee(ucfirst($profile).' Profile')
+            ->assertSee('Owner Profile')
+            ->assertSet('active.owner.name', 'Shared Switch Owner')
+            ->assertHasNoErrors();
+        $requiredLabel = match ($profile) {
+            'outlet', 'oe' => 'Entry Detail',
+            'fleet' => 'Type',
+            'ib' => 'Classification',
+        };
+        expect($component->html())->toContain($requiredLabel.' <span class="text-danger-600" data-required-indicator="true"');
+
+        if ($previousProfile === 'outlet' && $profile !== 'outlet') {
+            $component->assertSet('active.warehouse_code', null)
+                ->assertHasNoErrors(['active.warehouse_code', 'active.delivery_detail']);
+        }
+
+        $previousProfile = $profile;
+    }
+});
+
+test('Tablet Add validates missing and invalid Company selections before profile and reference guards', function () {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    $missingCompany = validCustomerCreateState();
+    Livewire::test(CustomerCreatePage::class)
+        ->set($missingCompany)
+        ->set('company_id', null)
+        ->call('saveCustomer')
+        ->assertHasErrors(['company_id']);
+
+    $invalidCompany = validCustomerCreateState();
+    Livewire::test(CustomerCreatePage::class)
+        ->set($invalidCompany)
+        ->set('company_id', 999)
+        ->call('saveCustomer')
+        ->assertHasErrors(['company_id']);
+
+    $validCompany = validCustomerCreateState();
+    Livewire::test(CustomerCreatePage::class)
+        ->set($validCompany)
+        ->set('name', '')
+        ->call('saveCustomer')
+        ->assertHasErrors(['name'])
+        ->assertHasNoErrors(['company_id']);
+
+    expect(DB::table('customers')->count())->toBe(0);
+});
+
+test('Tablet Add accepts false as a valid Active Boolean value', function () {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['name'] = 'Inactive assurance customer';
+    $state['is_active'] = false;
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->call('saveCustomer')
+        ->assertHasNoErrors()
+        ->assertRedirect(CustomerPage::getUrl());
+
+    expect(DB::table('customers')->where('name', 'Inactive assurance customer')->value('is_active'))->toBe(0);
+});
+
+test('Tablet Add allows null for a confirmed empty General Category set and rejects a supplied ID', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('general_categories')->delete();
+    expect(DB::table('general_categories')->count())->toBe(0);
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['name'] = 'No General Category Options';
+    $state['general_category_id'] = null;
+    $state['competitor_volume'] = null;
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->call('saveCustomer')
+        ->assertHasNoErrors()
+        ->assertRedirect(CustomerPage::getUrl());
+
+    expect(DB::table('customers')->where('name', 'No General Category Options')->value('general_category_id'))->toBeNull();
+
+    $invalid = validCustomerCreateState();
+    $invalid['name'] = 'Invalid General Category With Empty Options';
+    $invalid['general_category_id'] = 999999;
+    Livewire::test(CustomerCreatePage::class)
+        ->set($invalid)
+        ->call('saveCustomer')
+        ->assertHasErrors(['general_category_id']);
+    expect(DB::table('customers')->where('name', 'Invalid General Category With Empty Options')->exists())->toBeFalse();
+});
+
+test('Tablet Add accepts null locality IDs for a successfully loaded synthetic empty locality set', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('barangays')->delete();
+    DB::table('municipalities')->delete();
+    DB::table('provinces')->delete();
+    expect(DB::table('provinces')->count())->toBe(0)
+        ->and(DB::table('municipalities')->count())->toBe(0)
+        ->and(DB::table('barangays')->count())->toBe(0);
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['name'] = 'Synthetic Empty Locality Options';
+    $state['province_id'] = null;
+    $state['municipality_id'] = null;
+    $state['barangay_id'] = null;
+    Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->call('saveCustomer')
+        ->assertHasNoErrors()
+        ->assertRedirect(CustomerPage::getUrl());
+
+    expect(DB::table('customers')->where('name', 'Synthetic Empty Locality Options')->exists())->toBeTrue()
+        ->and(DB::table('customers')->where('name', 'Synthetic Empty Locality Options')->value('province_id'))->toBeNull()
+        ->and(DB::table('customers')->where('name', 'Synthetic Empty Locality Options')->value('municipality_id'))->toBeNull()
+        ->and(DB::table('customers')->where('name', 'Synthetic Empty Locality Options')->value('barangay_id'))->toBeNull();
+
+    $invalid = validCustomerCreateState();
+    $invalid['name'] = 'Invalid Province With Empty Locality Options';
+    $invalid['province_id'] = 999999;
+    $invalid['municipality_id'] = null;
+    $invalid['barangay_id'] = null;
+    Livewire::test(CustomerCreatePage::class)
+        ->set($invalid)
+        ->call('saveCustomer')
+        ->assertHasErrors(['province_id']);
+    expect(DB::table('customers')->where('name', 'Invalid Province With Empty Locality Options')->exists())->toBeFalse();
+});
+
+test('Tablet Add rejects physical Region and Area Cluster selections made stale by a parent change', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('regions')->insert(['id' => 6, 'code' => 'III', 'psgc_code' => '060000000', 'name' => 'Central Luzon', 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('region_specifics')->insert(['id' => 54, 'region_id' => 6, 'name' => 'Region III (Central Luzon)', 'sort' => 1, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('area_clusters')->insert(['id' => 2, 'region_specific_id' => 54, 'code' => 'NL-CLUSTER', 'name' => 'North Luzon Cluster', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+    Http::fake();
+
+    $staleRegion = validCustomerCreateState();
+    Livewire::test(CustomerCreatePage::class)
+        ->set($staleRegion)
+        ->set('customer_region_type_id', 2)
+        ->set('physical_region_id', 1)
+        ->set('region_specific_id', 52)
+        ->call('saveCustomer')
+        ->assertHasErrors(['physical_region_id']);
+
+    $staleCluster = validCustomerCreateState();
+    $staleCluster['customer_region_type_id'] = 2;
+    $staleCluster['physical_region_id'] = 6;
+    $staleCluster['region_specific_id'] = 54;
+    $staleCluster['area_cluster_id'] = 52;
+    $staleCluster['province_id'] = null;
+    $staleCluster['municipality_id'] = null;
+    $staleCluster['barangay_id'] = null;
+    Livewire::test(CustomerCreatePage::class)
+        ->set($staleCluster)
+        ->call('saveCustomer')
+        ->assertHasErrors(['area_cluster_id']);
+
+    expect(DB::table('customers')->count())->toBe(0);
+});
+
+test('Tablet Add reports controlled errors when database-backed reference sources disappear after load', function (string $table, array $fields): void {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    $component = Livewire::test(CustomerCreatePage::class)->set(validCustomerCreateState());
+    Schema::drop($table);
+
+    $component->call('saveCustomer')
+        ->assertHasErrors($fields)
+        ->assertSee('Reference options could not be loaded. Restore or sync the reference data before saving.');
+
+    expect(DB::table('customers')->count())->toBe(0);
+})->with([
+    'Company' => ['companies', ['company_id']],
+    'Access and PIC Users' => ['users', ['access_user_ids', 'person_in_charge_id']],
+    'General Category' => ['general_categories', ['general_category_id']],
+    'Region grouping' => ['region_types', ['customer_region_type_id']],
+    'physical Region' => ['regions', ['physical_region_id']],
+    'Specific Region relationship' => ['region_specifics', ['physical_region_id']],
+    'Area Cluster' => ['area_clusters', ['area_cluster_id']],
+    'Province' => ['provinces', ['province_id']],
+    'Municipality' => ['municipalities', ['municipality_id']],
+    'Barangay' => ['barangays', ['barangay_id']],
+]);
+
+function prepareEmptyTabletAddReferenceOptions(string $family, array &$state): array
+{
+    return match ($family) {
+        'users' => (function () use (&$state): array {
+            DB::table('users')->delete();
+            $state['access_user_ids'] = [];
+            $state['person_in_charge_id'] = null;
+
+            return ['fields' => ['access_user_ids', 'person_in_charge_id'], 'labels' => ['Access', 'Person in Charge']];
+        })(),
+        'region_types' => (function () use (&$state): array {
+            DB::table('region_types')->delete();
+            $state['customer_region_type_id'] = null;
+            $state['physical_region_id'] = null;
+            $state['region_specific_id'] = null;
+            $state['area_cluster_id'] = null;
+            $state['province_id'] = null;
+            $state['municipality_id'] = null;
+            $state['barangay_id'] = null;
+
+            return ['fields' => ['customer_region_type_id'], 'labels' => ['Region']];
+        })(),
+        'specific_regions' => (function () use (&$state): array {
+            DB::table('region_specifics')->where('id', 52)->delete();
+            $state['physical_region_id'] = null;
+            $state['region_specific_id'] = null;
+            $state['area_cluster_id'] = null;
+            $state['province_id'] = null;
+            $state['municipality_id'] = null;
+            $state['barangay_id'] = null;
+
+            return ['fields' => ['physical_region_id'], 'labels' => ['Specific Region']];
+        })(),
+        'area_clusters' => (function () use (&$state): array {
+            DB::table('area_clusters')->delete();
+            $state['area_cluster_id'] = null;
+
+            return ['fields' => ['area_cluster_id'], 'labels' => ['Area Cluster']];
+        })(),
+        default => throw new InvalidArgumentException("Unknown reference family [{$family}]."),
+    };
+}
+
+test('Tablet Add allows null selections and removes required marks for the remaining successfully empty option families', function (string $family): void {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['name'] = "Empty {$family} options";
+    $expectations = prepareEmptyTabletAddReferenceOptions($family, $state);
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->call('saveCustomer')
+        ->assertHasNoErrors()
+        ->assertRedirect(CustomerPage::getUrl());
+
+    foreach ($expectations['labels'] as $label) {
+        expect($component->html())->not->toContain("{$label} <span class=\"text-danger-600\" data-required-indicator=\"true\"");
+    }
+    expect(DB::table('customers')->where('name', "Empty {$family} options")->exists())->toBeTrue();
+})->with(['users', 'region_types', 'specific_regions', 'area_clusters']);
+
+test('Tablet Add rejects a Province made stale by changing the physical Region', function (): void {
+    $user = seedCustomerCreateFixtures();
+    DB::table('regions')->insert(['id' => 2, 'code' => 'R2', 'psgc_code' => '020000000', 'name' => 'Region 2', 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('region_specifics')->insert(['id' => 54, 'region_id' => 2, 'name' => 'Specific Region 54', 'sort' => 1, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('area_clusters')->insert(['id' => 2, 'region_specific_id' => 54, 'code' => 'cluster-2', 'name' => 'Cluster 2', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('provinces')->insert(['id' => 2, 'region_id' => 2, 'region_specific_id' => 54, 'name' => 'Province 2', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    config()->set('customer_region_grouping.specific_regions.GMA', [52, 54]);
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->set('physical_region_id', 2)
+        ->assertSet('province_id', null)
+        ->set('province_id', 1)
+        ->set('municipality_id', null)
+        ->set('barangay_id', null);
+
+    $component->call('saveCustomer')->assertHasErrors(['province_id']);
+
+    expect(DB::table('customers')->count())->toBe(0);
+});
+
+test('Tablet Add rejects Municipality and Barangay values made stale by changing their parents', function (): void {
+    $user = seedCustomerCreateFixtures();
+    DB::table('provinces')->insert(['id' => 2, 'region_id' => 1, 'region_specific_id' => 52, 'name' => 'Province 2', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('municipalities')->insert([
+        ['id' => 2, 'region_id' => 1, 'province_id' => 2, 'name' => 'Municipality 2', 'sort' => 2, 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 3, 'region_id' => 1, 'province_id' => 1, 'name' => 'Municipality 3', 'sort' => 3, 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    DB::table('barangays')->insert([
+        ['id' => 1, 'municipality_id' => 1, 'psgc_code' => 'STALE-BRG-1', 'code' => 'STALE-1', 'name' => 'Barangay 1', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 3, 'municipality_id' => 3, 'psgc_code' => 'STALE-BRG-3', 'code' => 'STALE-3', 'name' => 'Barangay 3', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    $this->actingAs($user);
+    Http::fake();
+
+    $municipalityState = validCustomerCreateState();
+    $municipality = Livewire::test(CustomerCreatePage::class)
+        ->set($municipalityState)
+        ->set('province_id', 2)
+        ->assertSet('municipality_id', null)
+        ->set('municipality_id', 1)
+        ->set('barangay_id', null);
+    $municipality->call('saveCustomer')->assertHasErrors(['municipality_id']);
+
+    $barangayState = validCustomerCreateState();
+    $barangayState['barangay_id'] = 1;
+    $barangay = Livewire::test(CustomerCreatePage::class)
+        ->set($barangayState)
+        ->set('municipality_id', 3)
+        ->assertSet('barangay_id', null)
+        ->set('barangay_id', 1);
+    $barangay->call('saveCustomer')->assertHasErrors(['barangay_id']);
+
+    expect(DB::table('customers')->count())->toBe(0);
+});
+
+test('Tablet Add clears and does not persist Competitor Volume after General Category changes', function (): void {
+    $user = seedCustomerCreateFixtures();
+    DB::table('general_categories')->insert(['id' => 2, 'name' => 'Other Category', 'priority_visit' => null, 'duration_per_visit' => null, 'sort' => 2, 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['name'] = 'Changed General Category';
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->set('general_category_id', 2)
+        ->assertSet('competitor_volume', null)
+        ->call('saveCustomer')
+        ->assertHasNoErrors()
+        ->assertRedirect(CustomerPage::getUrl());
+
+    expect(DB::table('customers')->where('name', 'Changed General Category')->value('competitor_volume'))->toBeNull();
+});
+
+test('Tablet Add clears hidden Outlet Entry Detail when Company switches to a different profile', function (): void {
+    $user = seedCustomerCreateFixtures();
+    DB::table('companies')->insert(['id' => 2, 'name' => 'FLEET', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['name'] = 'Fleet after Outlet Entry Detail';
+    $fleetYears = config('customer_trade_form.category_streams.fleet.years');
+    $fleetCategories = config('customer_trade_form.profile_category_options.fleet');
+    $fleetCategory = array_values(is_array(reset($fleetCategories)) ? reset($fleetCategories) : $fleetCategories)[0];
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->set('company_id', 2)
+        ->assertSet('trade', [])
+        ->set('categories', ['fleet' => array_fill_keys($fleetYears, $fleetCategory)])
+        ->set('active.account_type', 'existing')
+        ->set('active.classifications', array_values(config('customer_trade_form.profile_classifications.fleet'))[0])
+        ->set('active.battery_class', 'maintenance_free')
+        ->set('active.status', 'active')
+        ->call('saveCustomer')
+        ->assertHasNoErrors()
+        ->assertRedirect(CustomerPage::getUrl());
+
+    $customer = DB::table('customers')->where('name', $state['name'])->first();
+    expect($customer)->not->toBeNull()
+        ->and(DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->value('entry_detail'))->toBeNull()
+        ->and(DB::table('customer_category_histories')->where('customer_id', $customer->id)->where('profile_type', 'outlet')->count())->toBe(0);
+});
+
+test('Tablet Add persists annual categories for only the final Outlet Entry Detail', function (array $entryDetailSequence, array $expectedStreams): void {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['name'] = 'Final entry detail '.implode(' then ', $entryDetailSequence);
+    $years = config('customer_trade_form.category_streams.outlet.years');
+    $abCategory = array_values(config('customer_trade_form.profile_category_options.outlet.ab'))[0];
+    $mcbCategory = array_values(config('customer_trade_form.profile_category_options.outlet.mcb'))[0];
+    $state['categories']['ab'] = array_fill_keys($years, $abCategory);
+    $state['categories']['mcb'] = array_fill_keys($years, $mcbCategory);
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set($state);
+
+    foreach ($entryDetailSequence as $entryDetail) {
+        $component->set('trade.entry_detail', $entryDetail);
+    }
+
+    $component->call('saveCustomer')
+        ->assertHasNoErrors()
+        ->assertRedirect(CustomerPage::getUrl());
+
+    $customer = DB::table('customers')->where('name', $state['name'])->first();
+    expect($customer)->not->toBeNull();
+
+    $rows = DB::table('customer_category_histories')
+        ->where('customer_id', $customer->id)
+        ->where('profile_type', 'outlet')
+        ->orderBy('stream')
+        ->orderBy('category_year')
+        ->get();
+    $actualStreams = $rows->pluck('stream')->unique()->values()->all();
+    expect($actualStreams)->toBe($expectedStreams);
+
+    foreach ($expectedStreams as $stream) {
+        $streamRows = $rows->where('stream', $stream);
+        expect($streamRows)->toHaveCount(count($years))
+            ->and($streamRows->pluck('category_year')->unique())->toHaveCount(count($years));
+    }
+})->with([
+    'AB to MCB' => [['AB', 'MCB'], ['mcb']],
+    'MCB to AB' => [['MCB', 'AB'], ['ab']],
+    'AB to MCB to AB' => [['AB', 'MCB', 'AB'], ['ab']],
+]);
+
+test('Tablet Add does not persist stale Delivery Detail after Delivery Type changes to No', function (): void {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['name'] = 'No delivery after own delivery';
+    $state['active']['delivery_type'] = 'yes';
+    $state['active']['delivery_detail'] = 'own_delivery';
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->set('active.delivery_type', 'no')
+        ->assertDontSee('Delivery Detail')
+        ->assertSet('active.delivery_detail', 'own_delivery')
+        ->call('saveCustomer')
+        ->assertHasNoErrors()
+        ->assertRedirect(CustomerPage::getUrl());
+
+    $customer = DB::table('customers')->where('name', $state['name'])->first();
+    $profileData = json_decode(DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->value('profile_data'), true);
+
+    expect(data_get($profileData, 'active.delivery_detail'))->toBeNull();
+});
+
+test('Tablet Add restores and persists Delivery Detail after Yes to No to Yes', function (): void {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['name'] = 'Delivery detail restored after toggle';
+    $state['active']['delivery_type'] = 'yes';
+    $state['active']['delivery_detail'] = 'own_delivery';
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->assertSee('Delivery Detail <span class="text-danger-600" data-required-indicator="true"', false)
+        ->set('active.delivery_type', 'no')
+        ->assertDontSee('Delivery Detail')
+        ->set('active.delivery_type', 'yes')
+        ->assertSee('Delivery Detail <span class="text-danger-600" data-required-indicator="true"', false)
+        ->set('active.delivery_detail', 'own_delivery')
+        ->call('saveCustomer')
+        ->assertHasNoErrors()
+        ->assertRedirect(CustomerPage::getUrl());
+
+    $customer = DB::table('customers')->where('name', $state['name'])->first();
+    $profileData = json_decode(DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->value('profile_data'), true);
+
+    expect(data_get($profileData, 'active.delivery_type'))->toBe('yes')
+        ->and(data_get($profileData, 'active.delivery_detail'))->toBe('own_delivery');
+});
+
+test('Tablet Add ignores and omits invalid stale Delivery Detail when Delivery Type is No', function (): void {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['name'] = 'No delivery with stale invalid detail';
+    $state['active']['delivery_type'] = 'no';
+    $state['active']['delivery_detail'] = 'invalid-stale-value';
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->assertDontSee('Delivery Detail')
+        ->call('saveCustomer')
+        ->assertHasNoErrors(['active.delivery_detail'])
+        ->assertRedirect(CustomerPage::getUrl());
+
+    $customer = DB::table('customers')->where('name', $state['name'])->first();
+    $profileData = json_decode(DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->value('profile_data'), true);
+
+    expect(array_key_exists('delivery_detail', data_get($profileData, 'active', [])))->toBeFalse();
+});
+
+test('Tablet Add rejects non-null selections outside successfully empty option families', function (string $family): void {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['name'] = "Invalid selection for empty {$family}";
+    $expectations = prepareEmptyTabletAddReferenceOptions($family, $state);
+    $invalidFields = match ($family) {
+        'users' => (function () use (&$state): array {
+            $state['access_user_ids'] = [999];
+            $state['person_in_charge_id'] = 999;
+
+            return ['access_user_ids.0', 'person_in_charge_id'];
+        })(),
+        'region_types' => (function () use (&$state): array {
+            $state['customer_region_type_id'] = 999;
+
+            return ['customer_region_type_id'];
+        })(),
+        'specific_regions' => (function () use (&$state): array {
+            $state['physical_region_id'] = 1;
+            $state['region_specific_id'] = null;
+
+            return ['physical_region_id'];
+        })(),
+        'area_clusters' => (function () use (&$state): array {
+            DB::table('area_clusters')->insert(['id' => 53, 'region_specific_id' => 54, 'code' => 'other-parent', 'name' => 'Other Parent Cluster', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+            $state['area_cluster_id'] = 53;
+
+            return ['area_cluster_id'];
+        })(),
+    };
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->call('saveCustomer')
+        ->assertHasErrors($invalidFields);
+
+    expect(DB::table('customers')->where('name', "Invalid selection for empty {$family}")->exists())->toBeFalse();
+})->with(['users', 'region_types', 'specific_regions', 'area_clusters']);
+
+test('Tablet Add rejects invalid values for every available dropdown family under all mapped Company codes', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('barangays')->insert([
+        'id' => 1, 'municipality_id' => 1, 'psgc_code' => 'INVALID-BRG-1', 'code' => 'INVALID-1',
+        'name' => 'Assurance Barangay', 'enabled' => true, 'created_at' => now(), 'updated_at' => now(),
+    ]);
+    $companyMap = config('customer_trade_form.company_profile_map');
+    $companyIds = ['OMMC' => 1];
+    $nextId = 2;
+    foreach ($companyMap as $code => $profile) {
+        if (isset($companyIds[$code])) {
+            continue;
+        }
+        DB::table('companies')->insert([
+            'id' => $nextId, 'name' => str_replace('_', ' ', $code), 'code' => $code,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $companyIds[$code] = $nextId++;
+    }
+    $this->actingAs($user);
+    Http::fake();
+
+    $profileState = function (string $profile, string $code) use ($companyIds): array {
+        $state = validCustomerCreateState();
+        $state['name'] = "Invalid options {$code}";
+        $state['company_id'] = $companyIds[$code];
+        $state['barangay_id'] = 1;
+
+        if ($profile === 'outlet') {
+            return $state;
+        }
+
+        $years = config("customer_trade_form.category_streams.{$profile}.years", []);
+        $options = config("customer_trade_form.profile_category_options.{$profile}", []);
+        $category = array_values(is_array(reset($options)) ? reset($options) : $options)[0] ?? null;
+        $state['categories'] = [$profile => array_fill_keys($years, $category)];
+        $state['trade'] = $profile === 'oe' ? ['entry_detail' => 'AB'] : [];
+        $state['active'] = ['owner' => $state['active']['owner']];
+        $state['active'] = array_replace($state['active'], match ($profile) {
+            'fleet' => ['account_type' => 'existing', 'classifications' => array_values(config('customer_trade_form.profile_classifications.fleet'))[0], 'battery_class' => 'maintenance_free', 'status' => 'active'],
+            'oe' => ['classifications' => array_values(config('customer_trade_form.profile_classifications.oe'))[0], 'battery_class' => 'maintenance_free'],
+            'ib' => ['classifications' => array_values(config('customer_trade_form.profile_classifications.ib'))[0]],
+        });
+
+        return $state;
+    };
+    $commonInvalid = [
+        'access_user_ids' => [999], 'person_in_charge_id' => 999, 'general_category_id' => 999,
+        'competitor_volume' => 999, 'customer_region_type_id' => 999, 'physical_region_id' => 999,
+        'region_specific_id' => 999, 'area_cluster_id' => 999, 'province_id' => 999,
+        'municipality_id' => 999, 'barangay_id' => 999, 'landmass_code' => 'INVALID',
+    ];
+    $profileInvalid = [
+        'outlet' => [
+            'trade.entry_detail' => 'INVALID', 'trade.classifications' => ['INVALID'],
+            'trade.working_days' => ['INVALID'], 'active.conversion_program' => 'INVALID',
+            'active.delivery_type' => 'INVALID', 'active.delivery_detail' => 'INVALID', 'active.ulab' => 'INVALID',
+            ...array_fill_keys(array_map(fn (int $year): string => "categories.ab.{$year}", config('customer_trade_form.category_streams.outlet.years')), 'INVALID'),
+        ],
+        'fleet' => [
+            'active.account_type' => 'INVALID', 'active.classifications' => 'INVALID',
+            'active.battery_class' => 'INVALID', 'active.status' => 'INVALID',
+            ...array_fill_keys(array_map(fn (int $year): string => "categories.fleet.{$year}", config('customer_trade_form.category_streams.fleet.years')), 'INVALID'),
+        ],
+        'oe' => [
+            'trade.entry_detail' => 'INVALID', 'active.classifications' => 'INVALID', 'active.battery_class' => 'INVALID',
+            ...array_fill_keys(array_map(fn (int $year): string => "categories.oe.{$year}", config('customer_trade_form.category_streams.oe.years')), 'INVALID'),
+        ],
+        'ib' => [
+            'active.classifications' => 'INVALID',
+            ...array_fill_keys(array_map(fn (int $year): string => "categories.ib.{$year}", config('customer_trade_form.category_streams.ib.years')), 'INVALID'),
+        ],
+    ];
+
+    foreach ($companyMap as $code => $profile) {
+        foreach ($commonInvalid as $field => $invalid) {
+            $state = $profileState($profile, $code);
+            $component = Livewire::test(CustomerCreatePage::class)->set($state)->set($field, $invalid)->call('saveCustomer');
+            $errorKeys = $component->errors()->keys();
+            if (! collect($errorKeys)->contains(fn (string $errorKey): bool => $errorKey === $field || str_starts_with($errorKey, $field.'.'))) {
+                throw new RuntimeException("Invalid dropdown {$code}.{$field} was not rejected; errors: ".implode(', ', $errorKeys));
+            }
+            expect(DB::table('customers')->count())->toBe(0);
+        }
+
+        $state = $profileState($profile, $code);
+        if ($profile === 'outlet') {
+            $state['trade']['motiv_user'] = true;
+            $state['active']['warehouse_code'] = 'ASSURANCE-WAREHOUSE';
+            $state['active']['delivery_type'] = 'yes';
+            $state['active']['delivery_detail'] = 'own_delivery';
+        }
+        foreach ($profileInvalid[$profile] as $field => $invalid) {
+            $component = Livewire::test(CustomerCreatePage::class)
+                ->set($state)
+                ->set($field, $invalid)
+                ->call('saveCustomer');
+            $errorKeys = $component->errors()->keys();
+            if (! collect($errorKeys)->contains(fn (string $errorKey): bool => $errorKey === $field || str_starts_with($errorKey, $field.'.'))) {
+                throw new RuntimeException("Invalid profile dropdown {$code}.{$field} was not rejected; errors: ".implode(', ', $errorKeys));
+            }
+            expect(DB::table('customers')->count())->toBe(0);
+        }
+
+        if ($profile === 'outlet') {
+            $mcbState = $profileState($profile, $code);
+            $mcbState['trade']['entry_detail'] = 'MCB';
+            $mcbState['categories'] = [
+                'mcb' => array_fill_keys(
+                    config('customer_trade_form.category_streams.outlet.years'),
+                    config('customer_trade_form.profile_category_options.outlet.mcb')[0],
+                ),
+            ];
+            $mcbState['trade']['motiv_user'] = true;
+            $mcbState['active']['warehouse_code'] = 'ASSURANCE-WAREHOUSE';
+            $mcbState['active']['delivery_type'] = 'yes';
+            $mcbState['active']['delivery_detail'] = 'own_delivery';
+
+            foreach (config('customer_trade_form.category_streams.outlet.years') as $year) {
+                $field = "categories.mcb.{$year}";
+                $component = Livewire::test(CustomerCreatePage::class)
+                    ->set($mcbState)
+                    ->set($field, 'INVALID')
+                    ->call('saveCustomer');
+                $errorKeys = $component->errors()->keys();
+                if (! in_array($field, $errorKeys, true)) {
+                    throw new RuntimeException("Invalid Outlet MCB dropdown {$code}.{$field} was not rejected; errors: ".implode(', ', $errorKeys));
+                }
+                expect(DB::table('customers')->count())->toBe(0);
+            }
+        }
+    }
+});
+
+test('Tablet Add permits null Outlet classifications when the successfully loaded option set is empty', function (): void {
+    $user = seedCustomerCreateFixtures();
+    config()->set('customer_trade_form.profile_classifications.outlet', []);
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['trade']['classifications'] = [];
+
+    $component = Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->assertSee('Classifications </label>', false)
+        ->assertDontSee('Classifications <span class="text-danger-600" data-required-indicator="true"', false)
+        ->call('saveCustomer')
+        ->assertHasNoErrors()
+        ->assertRedirect(CustomerPage::getUrl());
+
+    $customer = DB::table('customers')->where('name', $state['name'])->first();
+    $profile = $customer ? DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->first() : null;
+
+    expect(DB::table('customers')->count())->toBe(1)
+        ->and($profile)->not->toBeNull()
+        ->and(json_decode($profile->classifications, true))->toBe([]);
+});
+
+test('Tablet Add still requires a selection when Outlet classification options exist', function (): void {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['trade']['classifications'] = [];
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->call('saveCustomer')
+        ->assertHasErrors(['trade.classifications']);
+
+    expect(DB::table('customers')->count())->toBe(0);
+});
+
+test('Tablet Add rejects an Outlet classification that became stale when options became empty', function (): void {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $component = Livewire::test(CustomerCreatePage::class)->set($state);
+    config()->set('customer_trade_form.profile_classifications.outlet', []);
+
+    $component->call('saveCustomer');
+
+    expect(collect($component->errors()->keys())->contains(fn (string $key): bool => str_starts_with($key, 'trade.classifications.')))->toBeTrue()
+        ->and(DB::table('customers')->count())->toBe(0);
+});
+
+test('Tablet Add permits null Outlet Entry Detail when the successfully loaded option set is empty', function (): void {
+    $user = seedCustomerCreateFixtures();
+    config()->set('customer_trade_form.profile_entry_details.outlet', []);
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['trade']['entry_detail'] = null;
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->assertSee('Entry Detail </label>', false)
+        ->assertDontSee('Entry Detail <span class="text-danger-600" data-required-indicator="true"', false)
+        ->call('saveCustomer')
+        ->assertHasNoErrors();
+
+    expect(DB::table('customers')->count())->toBe(1);
+});
+
+test('Tablet Add rejects a supplied Outlet Entry Detail when the successfully loaded option set is empty', function (): void {
+    $user = seedCustomerCreateFixtures();
+    config()->set('customer_trade_form.profile_entry_details.outlet', []);
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['trade']['entry_detail'] = 'AB';
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->call('saveCustomer')
+        ->assertHasErrors(['trade.entry_detail']);
+
+    expect(DB::table('customers')->count())->toBe(0);
+});
+
+test('Tablet Add allows null profile dropdowns and annual categories when their configured option sets are empty', function (): void {
+    $user = seedCustomerCreateFixtures();
+    $companyIds = ['OMMC' => 1];
+    foreach (['FLEET', 'OE', 'IB'] as $index => $code) {
+        $companyIds[$code] = $index + 2;
+        DB::table('companies')->insert(['id' => $index + 2, 'name' => $code, 'code' => $code, 'created_at' => now(), 'updated_at' => now()]);
+    }
+    $this->actingAs($user);
+    Http::fake();
+
+    $outlet = validCustomerCreateState();
+    $outlet['name'] = 'Empty Outlet Options';
+    $outlet['trade'] = array_replace($outlet['trade'], ['entry_detail' => null, 'classifications' => [], 'working_days' => []]);
+    $outlet['active']['conversion_program'] = null;
+    config()->set('customer_trade_form.profile_entry_details.outlet', []);
+    config()->set('customer_trade_form.profile_classifications.outlet', []);
+    config()->set('customer_trade_form.working_days', []);
+    config()->set('customer_trade_form.conversion_programs', []);
+    config()->set('customer_trade_form.profile_category_options.outlet.ab', []);
+    $outlet['categories']['ab'] = array_fill_keys(config('customer_trade_form.category_streams.outlet.years'), null);
+
+    $outletComponent = Livewire::test(CustomerCreatePage::class)
+        ->set($outlet)
+        ->assertDontSee('Entry Detail <span class="text-danger-600" data-required-indicator="true"', false)
+        ->assertDontSee('Classifications <span class="text-danger-600" data-required-indicator="true"', false)
+        ->assertDontSee('Conversion Program <span class="text-danger-600" data-required-indicator="true"', false)
+        ->assertDontSee('Working Days <span class="text-danger-600" data-required-indicator="true"', false);
+    foreach (config('customer_trade_form.category_streams.outlet.years') as $year) {
+        $outletComponent->assertDontSee("{$year} <span class=\"text-danger-600\" data-required-indicator=\"true\"", false);
+    }
+    $outletComponent->call('saveCustomer')->assertHasNoErrors();
+
+    $mcb = validCustomerCreateState();
+    $mcb['name'] = 'Empty MCB Category Options';
+    $mcb['trade']['entry_detail'] = 'MCB';
+    $mcb['categories'] = ['mcb' => array_fill_keys(config('customer_trade_form.category_streams.outlet.years'), null)];
+    config()->set('customer_trade_form.profile_entry_details.outlet', ['AB', 'MCB', 'AB and MCB']);
+    config()->set('customer_trade_form.profile_classifications.outlet', ['Battery Specialist']);
+    config()->set('customer_trade_form.working_days', ['Monday']);
+    config()->set('customer_trade_form.conversion_programs', ['For Conversion' => 'For Conversion']);
+    config()->set('customer_trade_form.profile_category_options.outlet.mcb', []);
+    $mcbComponent = Livewire::test(CustomerCreatePage::class)
+        ->set($mcb);
+    foreach (config('customer_trade_form.category_streams.outlet.years') as $year) {
+        $mcbComponent->assertDontSee("{$year} <span class=\"text-danger-600\" data-required-indicator=\"true\"", false);
+    }
+    $mcbComponent->call('saveCustomer')->assertHasNoErrors();
+
+    $profileCases = [
+        'FLEET' => ['active.classifications', 'customer_trade_form.profile_classifications.fleet'],
+        'OE' => ['active.classifications', 'customer_trade_form.profile_classifications.oe'],
+        'IB' => ['active.classifications', 'customer_trade_form.profile_classifications.ib'],
+    ];
+    foreach ($profileCases as $code => [$field, $optionConfig]) {
+        $state = validCustomerCreateState();
+        $state['name'] = "Empty {$code} Options";
+        $state['company_id'] = $companyIds[$code];
+        $years = config('customer_trade_form.category_streams.'.strtolower($code).'.years', []);
+        $state['categories'] = [strtolower($code) => array_fill_keys($years, null)];
+        $state['trade'] = $code === 'OE' ? ['entry_detail' => null] : [];
+        $state['active'] = ['owner' => $state['active']['owner']];
+        if ($code === 'FLEET') {
+            $state['active'] += ['account_type' => 'existing', 'classifications' => null, 'battery_class' => 'maintenance_free', 'status' => 'active'];
+        } elseif ($code === 'OE') {
+            $state['active'] += ['classifications' => null, 'battery_class' => 'maintenance_free'];
+        } else {
+            $state['active'] += ['classifications' => null];
+        }
+        config()->set($optionConfig, []);
+        config()->set('customer_trade_form.profile_category_options.'.strtolower($code), []);
+        if ($code === 'OE') {
+            config()->set('customer_trade_form.profile_entry_details.oe', []);
+        }
+
+        $profileComponent = Livewire::test(CustomerCreatePage::class)
+            ->set($state)
+            ->assertDontSee('Classification <span class="text-danger-600" data-required-indicator="true"', false);
+        foreach ($years as $year) {
+            $profileComponent->assertDontSee("{$year} <span class=\"text-danger-600\" data-required-indicator=\"true\"", false);
+        }
+        $profileComponent->call('saveCustomer')->assertHasNoErrors();
+    }
+
+    expect(DB::table('customers')->count())->toBe(5);
+});
+
+test('Tablet Add rejects supplied values that are stale against successfully empty profile option sets', function (): void {
+    $user = seedCustomerCreateFixtures();
+    $this->actingAs($user);
+    Http::fake();
+
+    config()->set('customer_trade_form.profile_entry_details.outlet', []);
+    config()->set('customer_trade_form.profile_classifications.outlet', []);
+    config()->set('customer_trade_form.working_days', []);
+    config()->set('customer_trade_form.conversion_programs', []);
+    config()->set('customer_trade_form.profile_category_options.outlet.ab', []);
+
+    $outletValues = [
+        'trade.entry_detail' => 'AB',
+        'trade.classifications' => ['Battery Specialist'],
+        'trade.working_days' => ['Monday'],
+        'active.conversion_program' => 'For Conversion',
+        'categories.ab.'.config('customer_trade_form.category_streams.outlet.years.0') => 'AB Loyal',
+    ];
+    foreach ($outletValues as $field => $value) {
+        $state = validCustomerCreateState();
+        $state['active']['conversion_program'] = null;
+        $component = Livewire::test(CustomerCreatePage::class)
+            ->set($state)
+            ->set($field, $value)
+            ->call('saveCustomer');
+
+        if (! $component->errors()->has($field)) {
+            throw new RuntimeException("Expected {$field}; got: ".implode(', ', $component->errors()->keys()));
+        }
+        expect(DB::table('customers')->count())->toBe(0);
+    }
+
+    foreach ([
+        ['FLEET', 'fleet', 'active.classifications', 'customer_trade_form.profile_classifications.fleet'],
+        ['OE', 'oe', 'active.classifications', 'customer_trade_form.profile_classifications.oe'],
+        ['IB', 'ib', 'active.classifications', 'customer_trade_form.profile_classifications.ib'],
+    ] as [$code, $profile, $field, $optionConfig]) {
+        $companyId = DB::table('companies')->max('id') + 1;
+        DB::table('companies')->insert(['id' => $companyId, 'name' => $code, 'code' => $code, 'created_at' => now(), 'updated_at' => now()]);
+        config()->set($optionConfig, []);
+        config()->set("customer_trade_form.profile_category_options.{$profile}", []);
+        if ($profile === 'oe') {
+            config()->set('customer_trade_form.profile_entry_details.oe', []);
+        }
+
+        $state = validCustomerCreateState();
+        $state['name'] = "Stale {$code} Selection";
+        $state['company_id'] = $companyId;
+        $state['categories'] = [$profile => array_fill_keys(config("customer_trade_form.category_streams.{$profile}.years"), null)];
+        $state['trade'] = $profile === 'oe' ? ['entry_detail' => null] : [];
+        $state['active'] = ['owner' => $state['active']['owner']];
+        $state['active'] += match ($profile) {
+            'fleet' => ['account_type' => 'existing', 'classifications' => 'Bus', 'battery_class' => 'maintenance_free', 'status' => 'active'],
+            'oe' => ['classifications' => 'Car Manufacturer', 'battery_class' => 'maintenance_free'],
+            'ib' => ['classifications' => 'Bus'],
+        };
+
+        Livewire::test(CustomerCreatePage::class)
+            ->set($state)
+            ->call('saveCustomer')
+            ->assertHasErrors([$field]);
+        expect(DB::table('customers')->count())->toBe(0);
+    }
 });

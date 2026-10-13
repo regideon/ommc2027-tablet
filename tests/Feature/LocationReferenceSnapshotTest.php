@@ -1,7 +1,6 @@
 <?php
 
 use App\Filament\Pages\CustomerCreatePage;
-use App\Filament\Pages\CustomerPage;
 use App\Models\Customer;
 use App\Models\User;
 use App\Services\CustomerAccessMappingResolver;
@@ -22,7 +21,8 @@ beforeEach(function (): void {
         $sections = array_replace(array_fill_keys(['regions', 'region_specifics', 'area_clusters', 'provinces', 'municipalities', 'barangays'], []), $overrides);
 
         return [
-            'reference_contract_version' => 2,
+            'reference_contract_version' => 3,
+            'landmass_options' => ['LUZON' => 'LUZON', 'MINDANAO' => 'MINDANAO'],
             ...$sections,
             'customer_access_mappings' => [],
             'reference_counts' => array_map('count', $sections),
@@ -33,6 +33,31 @@ beforeEach(function (): void {
 function syncLocationSnapshot(): SyncService
 {
     return app(SyncService::class);
+}
+
+function completeBaseCustomerAddState(int $companyId = 1): array
+{
+    DB::table('general_categories')->insertOrIgnore([
+        'id' => 1, 'name' => 'Snapshot Test Category', 'sort' => 1,
+        'created_at' => now(), 'updated_at' => now(),
+    ]);
+
+    return [
+        'name' => 'Snapshot Guard Customer',
+        'company_id' => $companyId,
+        'is_active' => true,
+        'access_user_ids' => [auth()->id()],
+        'person_in_charge_id' => auth()->id(),
+        'general_category_id' => 1,
+        'competitor_volume' => 2,
+        'address' => '1 Snapshot Test Road',
+        'latitude' => '14.6500',
+        'longitude' => '121.0500',
+        'contact_person' => 'Snapshot Contact',
+        'business_landline_number' => '02-8000000',
+        'business_mobile_number' => '09170000000',
+        'date_established' => '2018-01-01',
+    ];
 }
 
 test('a complete location response applies validated references without changing membership rows or historical references', function (): void {
@@ -64,7 +89,8 @@ test('a complete location response applies validated references without changing
         ->and(DB::table('regions')->where('id', 2)->value('name'))->toBe('Current Region')
         ->and(DB::table('regions')->where('id', 1)->value('name'))->toBe('Historical Region')
         ->and(DB::table('customers')->where('id', -60)->value('region_specific_id'))->toBe(20)
-        ->and(DB::table('sync_states')->where('key', 'location_reference_snapshot_complete')->exists())->toBeTrue();
+        ->and(json_decode((string) DB::table('sync_states')->where('key', 'location_reference_snapshot_complete')->value('value'), true)['reference_contract_version'])->toBe(3)
+        ->and(json_decode((string) DB::table('sync_states')->where('key', 'landmass_options')->value('value'), true))->toBe(['LUZON' => 'LUZON', 'MINDANAO' => 'MINDANAO']);
 });
 
 test('location mapping references are strictly validated and cached with the snapshot', function (): void {
@@ -334,7 +360,7 @@ test('a failed refresh leaves the last complete membership unchanged', function 
         ->assertDontSee('Previously Confirmed Region');
 });
 
-test('a new Customer can be saved with blank optional geography before its first complete snapshot', function (): void {
+test('a new Customer is blocked when no complete location and Landmass snapshot is available', function (): void {
     DB::table('companies')->insert(['id' => 1, 'name' => 'FLEET', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
     Http::fake(function ($request) {
         if (str_ends_with($request->url(), '/api/sync/reserve-customer-code')) {
@@ -345,18 +371,17 @@ test('a new Customer can be saved with blank optional geography before its first
     });
 
     Livewire::test(CustomerCreatePage::class)
-        ->set('company_id', 1)
+        ->set(completeBaseCustomerAddState())
         ->set('name', 'Offline FLEET')
         ->assertDontSee('Portal location references')
         ->assertDontSee('membership')
         ->call('saveCustomer')
-        ->assertHasNoErrors();
+        ->assertHasErrors('landmass_code');
 
-    expect(DB::table('customers')->where('name', 'Offline FLEET')->value('region_specific_id'))->toBeNull()
-        ->and(DB::table('customers')->where('name', 'Offline FLEET')->value('sync_status'))->toBe('failed');
+    expect(DB::table('customers')->where('name', 'Offline FLEET')->exists())->toBeFalse();
 });
 
-test('Add Customer saves blank optional geography when the membership table is not present', function (): void {
+test('Add Customer blocks when required reference options are unavailable', function (): void {
     Schema::dropIfExists('location_reference_memberships');
     DB::table('companies')->insert(['id' => 1, 'name' => 'FLEET', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
     Http::fake(function ($request) {
@@ -368,20 +393,14 @@ test('Add Customer saves blank optional geography when the membership table is n
     });
 
     Livewire::test(CustomerCreatePage::class)
-        ->set('company_id', 1)
+        ->set(completeBaseCustomerAddState())
         ->set('name', 'No Reference Dataset Customer')
         ->assertOk()
         ->assertDontSee('Portal location references')
         ->call('saveCustomer')
-        ->assertHasNoErrors();
+        ->assertHasErrors('landmass_code');
 
-    $customer = DB::table('customers')->where('name', 'No Reference Dataset Customer')->first();
-    expect($customer)->not->toBeNull()
-        ->and($customer?->region_specific_id)->toBeNull()
-        ->and($customer?->province_id)->toBeNull()
-        ->and($customer?->municipality_id)->toBeNull()
-        ->and($customer?->barangay_id)->toBeNull()
-        ->and($customer?->area_cluster_id)->toBeNull();
+    expect(DB::table('customers')->where('name', 'No Reference Dataset Customer')->exists())->toBeFalse();
 });
 
 test('new Customer dropdowns load every locally retained reference regardless of snapshot membership', function (): void {
@@ -400,7 +419,7 @@ test('new Customer dropdowns load every locally retained reference regardless of
         ->assertDontSee('Portal location references');
 });
 
-test('Portal rejection of a locally selectable stale reference leaves a recoverable failed Customer', function (): void {
+test('a locally selectable stale reference is blocked until reference options are verified', function (): void {
     config(['sync.server_url' => 'http://portal.test']);
     DB::table('companies')->insert(['id' => 1, 'name' => 'FLEET', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
     DB::table('regions')->insert(['id' => 1, 'code' => 'R1', 'psgc_code' => '010000000', 'name' => 'Physical Region']);
@@ -409,44 +428,20 @@ test('Portal rejection of a locally selectable stale reference leaves a recovera
         ['id' => 54, 'region_id' => 1, 'name' => 'Other Specific Region'],
     ]);
     DB::table('sync_states')->insert(['key' => 'location_reference_snapshot_complete', 'value' => json_encode(['completed_at' => now()->toISOString()])]);
-    Http::fake(function ($request) {
-        if (str_ends_with($request->url(), '/api/sync/reserve-customer-code')) {
-            return Http::response(['token' => '11111111-1111-4111-8111-111111111111', 'code' => 'FLEET1001']);
-        }
-
-        return Http::response([
-            'message' => 'The selected reference is invalid.',
-            'errors' => ['region_specific_id' => ['Specific Region does not exist in Portal.']],
-        ], 422);
-    });
+    Http::fake();
 
     Livewire::test(CustomerCreatePage::class)
-        ->set('company_id', 1)
-        ->set('name', 'Stale Specific Region Customer')
+        ->set([...completeBaseCustomerAddState(), 'name' => 'Stale Specific Region Customer'])
         ->set('physical_region_id', 1)
         ->set('region_specific_id', 53)
         ->assertSet('region_specific_id', 53)
         ->call('saveCustomer')
-        ->assertHasNoErrors()
-        ->assertRedirect(CustomerPage::getUrl())
-        ->assertSessionHas('filament.notifications.0.body', 'Portal returned HTTP 422: The selected reference is invalid. region_specific_id: Specific Region does not exist in Portal.');
+        ->assertHasErrors('landmass_code');
 
-    $customer = Customer::query()->where('name', 'Stale Specific Region Customer')->firstOrFail();
-    expect($customer->sync_status)->toBe('failed')
-        ->and($customer->sync_attempts)->toBe(1)
-        ->and($customer->server_id)->toBeNull()
-        ->and($customer->region_specific_id)->toBe(53)
-        ->and($customer->unique_id)->toBe('FLEET1001')
-        ->and($customer->customer_code_reservation_token)->toBe('11111111-1111-4111-8111-111111111111')
-        ->and(Customer::query()->where('name', 'Stale Specific Region Customer')->count())->toBe(1);
-
-    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
-        && $request['region_specific_id'] === 53
-        && $request['unique_id'] === 'FLEET1001'
-        && $request['customer_code_reservation_token'] === '11111111-1111-4111-8111-111111111111');
+    expect(Customer::query()->where('name', 'Stale Specific Region Customer')->exists())->toBeFalse();
 });
 
-test('all six location selectors load clean local names and push valid references without snapshot membership', function (): void {
+test('all six location selectors load local names but Add blocks before a complete reference snapshot', function (): void {
     DB::table('companies')->insert(['id' => 1, 'name' => 'FLEET', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
     DB::table('regions')->insert(['id' => 11, 'code' => 'R11', 'psgc_code' => '110000000', 'name' => 'Physical Region', 'created_at' => now(), 'updated_at' => now()]);
     DB::table('region_specifics')->insert(['id' => 21, 'region_id' => 11, 'name' => 'Commercial Region', 'created_at' => now(), 'updated_at' => now()]);
@@ -463,7 +458,7 @@ test('all six location selectors load clean local names and push valid reference
     });
 
     Livewire::test(CustomerCreatePage::class)
-        ->set('company_id', 1)
+        ->set(completeBaseCustomerAddState())
         ->set('region_specific_id', 21)
         ->set('physical_region_id', 11)
         ->set('province_id', 41)
@@ -481,22 +476,8 @@ test('all six location selectors load clean local names and push valid reference
         ->assertDontSee('Portal location references')
         ->assertDontSee('membership')
         ->call('saveCustomer')
-        ->assertHasNoErrors()
-        ->assertRedirect(CustomerPage::getUrl());
+        ->assertHasErrors('landmass_code');
 
-    $customer = Customer::query()->where('name', 'Local Reference Customer')->firstOrFail();
-    expect($customer->sync_status)->toBe('synced')
-        ->and($customer->server_id)->toBe(991)
-        ->and($customer->region_specific_id)->toBe(21)
-        ->and($customer->area_cluster_id)->toBe(31)
-        ->and($customer->province_id)->toBe(41)
-        ->and($customer->municipality_id)->toBe(51)
-        ->and($customer->barangay_id)->toBe(61);
+    expect(Customer::query()->where('name', 'Local Reference Customer')->exists())->toBeFalse();
 
-    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
-        && $request['region_specific_id'] === 21
-        && $request['area_cluster_id'] === 31
-        && $request['province_id'] === 41
-        && $request['municipality_id'] === 51
-        && $request['barangay_id'] === 61);
 });

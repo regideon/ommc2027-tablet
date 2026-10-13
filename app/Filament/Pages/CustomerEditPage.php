@@ -22,6 +22,7 @@ class CustomerEditPage extends CustomerCreatePage
         abort_unless($customerId !== null, 404);
         $customer = Customer::with(['company', 'municipality.region', 'municipality.province', 'province.region', 'regionSpecific', 'users', 'tradeProfile', 'categoryHistories'])->findOrFail($customerId);
         $state = CustomerProfileFormService::hydrate($customer);
+        $this->landmass_code = $customer->landmass_code;
 
         foreach ($state as $key => $value) {
             if (property_exists($this, $key)) {
@@ -119,6 +120,7 @@ class CustomerEditPage extends CustomerCreatePage
                 'business_landline_number' => $this->business_landline_number,
                 'business_mobile_number' => $this->business_mobile_number,
                 'date_established' => $this->date_established,
+                'landmass_code' => $this->landmass_code,
                 'is_active' => $this->is_active,
                 'person_in_charge_id' => $this->person_in_charge_id,
                 'trade' => $this->trade,

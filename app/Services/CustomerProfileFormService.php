@@ -136,7 +136,7 @@ class CustomerProfileFormService
             'province_id', 'barangay_id', 'area_cluster_id',
             'general_category_id', 'competitor_volume', 'address', 'latitude', 'longitude',
             'contact_person', 'contact_number', 'business_landline_number',
-            'business_mobile_number', 'date_established', 'is_active', 'person_in_charge_id',
+            'business_mobile_number', 'date_established', 'landmass_code', 'is_active', 'person_in_charge_id',
         ]));
         $customer->save();
 

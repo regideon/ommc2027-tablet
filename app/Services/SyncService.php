@@ -243,7 +243,7 @@ class SyncService
         }
 
         $locationSnapshot = $this->syncState('location_reference_snapshot_complete');
-        if (($locationSnapshot['reference_contract_version'] ?? 0) < 2) {
+        if (($locationSnapshot['reference_contract_version'] ?? 0) < 3) {
             $locations = $this->pullLocations();
             if (! $locations->success) {
                 return $locations;
@@ -294,8 +294,11 @@ class SyncService
 
                 $this->putSyncState('location_reference_snapshot_complete', [
                     'completed_at' => now()->toISOString(),
-                    'reference_contract_version' => 2,
+                    'reference_contract_version' => (int) $data['reference_contract_version'],
                 ]);
+                if (($data['reference_contract_version'] ?? 0) >= 3) {
+                    $this->putSyncState('landmass_options', $data['landmass_options']);
+                }
             });
         } catch (\Exception $e) {
             return SyncResult::fail('Pull error: '.$e->getMessage(), 'exception');
@@ -329,8 +332,16 @@ class SyncService
             'municipalities' => ['region_id', 'province_id'],
         ];
 
-        if (($data['reference_contract_version'] ?? null) !== 2 || ! is_array($data['reference_counts'] ?? null)) {
+        if (! in_array(($data['reference_contract_version'] ?? null), [2, 3], true) || ! is_array($data['reference_counts'] ?? null)) {
             throw new \RuntimeException('Portal location response is missing supported snapshot metadata.');
+        }
+        if (($data['reference_contract_version'] ?? 0) >= 3 && ! is_array($data['landmass_options'] ?? null)) {
+            throw new \RuntimeException('Portal location response is missing Landmass options.');
+        }
+        foreach ($data['landmass_options'] ?? [] as $code => $label) {
+            if (! is_string($code) || trim($code) === '' || ! is_string($label) || trim($label) === '') {
+                throw new \RuntimeException('Portal location response contains an invalid Landmass option.');
+            }
         }
 
         if (! array_key_exists('customer_access_mappings', $data)) {
@@ -3360,6 +3371,7 @@ class SyncService
             'unique_id' => $customer->unique_id,
             'customer_code_reservation_token' => $customer->customer_code_reservation_token,
             'company_id' => $customer->company_id,
+            'landmass_code' => $customer->landmass_code,
             'general_category_id' => $customer->general_category_id,
             'competitor_volume' => $customer->competitor_volume,
             'region_specific_id' => $customer->region_specific_id,

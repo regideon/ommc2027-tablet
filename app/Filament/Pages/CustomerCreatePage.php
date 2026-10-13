@@ -22,9 +22,11 @@ use BackedEnum;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class CustomerCreatePage extends Page
 {
@@ -84,6 +86,8 @@ class CustomerCreatePage extends Page
 
     public ?string $date_established = null;
 
+    public ?string $landmass_code = null;
+
     public ?int $person_in_charge_id = null;
 
     public array $access_user_ids = [];
@@ -97,6 +101,8 @@ class CustomerCreatePage extends Page
     public array $active = [];
 
     public array $categories = [];
+
+    public array $referenceReadFailures = [];
 
     protected ?string $companyChangeOldProfile = null;
 
@@ -137,11 +143,38 @@ class CustomerCreatePage extends Page
 
     protected function getViewData(): array
     {
+        if (! ($this instanceof CustomerEditPage) && ! $this->ensureCustomerAddReferencesAvailable()) {
+            return [
+                'companies' => collect(),
+                'companyReferenceUnavailable' => true,
+                'regions' => collect(),
+                'customerRegionTypes' => collect(),
+                'legacySpecificRegionUnresolved' => false,
+                'selectedTypeName' => null,
+                'applicableSpecificIds' => collect(),
+                'applicableAreaClusters' => false,
+                'customerProfileType' => null,
+                'regionSpecificReferenceUnavailable' => true,
+                'areaClusters' => collect(),
+                'provinces' => collect(),
+                'municipalities' => collect(),
+                'barangays' => collect(),
+                'generalCategories' => collect(),
+                'landmassOptions' => [],
+                'users' => collect(),
+            ];
+        }
+
         $legacySpecificRegionUnresolved = $this instanceof CustomerEditPage && $this->initialRegionSpecificId === 1;
         $typeName = RegionType::whereKey($this->customer_region_type_id)->value('name');
         $groupCode = $typeName ? config('customer_region_grouping.region_types.'.$typeName) : null;
         $specificIds = $groupCode ? (array) config('customer_region_grouping.specific_regions.'.$groupCode, []) : [];
         $allowedRegionIds = RegionSpecific::query()->whereIn('id', $specificIds)->pluck('region_id')->unique()->all();
+        $applicableSpecificIds = $this->physical_region_id
+            ? RegionSpecific::query()->whereIn('id', $specificIds)->where('region_id', $this->physical_region_id)->pluck('id')
+            : collect();
+        $applicableAreaClusters = AreaCluster::query()->whereIn('region_specific_id', $applicableSpecificIds)->where('enabled', true)->exists();
+        $customerProfileType = CustomerProfileFormService::profileForCompany($this->company_id);
         $preserveExistingSelection = $this instanceof CustomerEditPage ? $this->physical_region_id : null;
         $regions = Region::query()->where(function ($query) use ($allowedRegionIds, $preserveExistingSelection): void {
             if ($allowedRegionIds !== []) {
@@ -166,6 +199,10 @@ class CustomerCreatePage extends Page
             'customerRegionTypes' => RegionType::query()
                 ->whereIn('name', array_keys((array) config('customer_region_grouping.region_types', [])))
                 ->orderBy('sort')->get(),
+            'selectedTypeName' => $typeName,
+            'applicableSpecificIds' => $applicableSpecificIds,
+            'applicableAreaClusters' => $applicableAreaClusters,
+            'customerProfileType' => $customerProfileType,
             'legacySpecificRegionUnresolved' => $legacySpecificRegionUnresolved,
             'regionSpecificReferenceUnavailable' => $this->region_specific_id !== null && ! RegionSpecific::whereKey($this->region_specific_id)->exists(),
             'areaClusters' => $this->region_specific_id
@@ -179,6 +216,7 @@ class CustomerCreatePage extends Page
                 ? Barangay::where(fn ($query) => $query->where('municipality_id', $this->municipality_id)->where('enabled', true)->orWhere('id', $this->barangay_id))->orderBy('name')->get()
                 : collect(),
             'generalCategories' => GeneralCategory::orderBy('sort')->get(),
+            'landmassOptions' => (array) (json_decode((string) DB::table('sync_states')->where('key', 'landmass_options')->value('value'), true) ?: []),
             'users' => User::query()->orderBy('name')->get()->sortBy(fn (User $user): string => $user->fullName())->values(),
         ];
     }
@@ -186,6 +224,11 @@ class CustomerCreatePage extends Page
     public function profileType(): ?string
     {
         return CustomerProfileFormService::profileForCompany($this->company_id);
+    }
+
+    public function locationReferenceSnapshotReady(): bool
+    {
+        return (int) ($this->syncStateArray('location_reference_snapshot_complete')['reference_contract_version'] ?? 0) >= 3;
     }
 
     public function updatingCompanyId(): void
@@ -222,8 +265,12 @@ class CustomerCreatePage extends Page
         $profile = $this->profileType();
         $profileChanged = $this->companyChangeOldProfile !== $profile;
         if ($profileChanged) {
+            $owner = data_get($this->active, 'owner');
             $this->trade = [];
-            $this->active = [];
+            $this->active = $profile === 'oe' ? ['sulfuric_acid' => false] : [];
+            if (is_array($owner)) {
+                $this->active['owner'] = $owner;
+            }
             $this->categories = $profile ? CustomerProfileFormService::defaultCategories($profile) : [];
         }
 
@@ -443,14 +490,18 @@ class CustomerCreatePage extends Page
 
     public function saveCustomer(): void
     {
-        $profileType = $this->profileType();
-        abort_unless($profileType, 422, 'The selected Company has no profile mapping.');
+        if (! $this->ensureCustomerAddReferencesAvailable()) {
+            return;
+        }
 
+        $profileType = $this->profileType();
+        $deliveryDetailApplies = $profileType === 'outlet' && data_get($this->active, 'delivery_type') === 'yes';
         $this->validate([
             'name' => 'required|string|max:255',
+            'is_active' => ['required', 'boolean'],
             'unique_id' => 'nullable|string|max:50',
             'company_id' => 'required|exists:companies,id',
-            'access_user_ids' => 'nullable|array',
+            'access_user_ids' => [User::query()->exists() ? 'required' : 'nullable', 'array', User::query()->exists() ? 'min:1' : 'min:0'],
             'access_user_ids.*' => 'integer|distinct|exists:users,id',
             'region_specific_id' => 'nullable|exists:region_specifics,id',
             'physical_region_id' => 'nullable|exists:regions,id',
@@ -458,28 +509,44 @@ class CustomerCreatePage extends Page
             'municipality_id' => 'nullable|exists:municipalities,id',
             'barangay_id' => 'nullable|exists:barangays,id',
             'area_cluster_id' => 'nullable|exists:area_clusters,id',
-            'person_in_charge_id' => 'nullable|integer|exists:users,id',
-            'general_category_id' => 'nullable|exists:general_categories,id',
-            'competitor_volume' => 'nullable|integer|in:1,2,3',
-            'address' => 'nullable|string|max:500',
-            'latitude' => 'nullable|numeric',
-            'longitude' => 'nullable|numeric',
-            'contact_person' => 'nullable|string|max:255',
+            'person_in_charge_id' => [User::query()->exists() ? 'required' : 'nullable', 'integer', 'exists:users,id'],
+            'general_category_id' => [GeneralCategory::query()->exists() ? 'required' : 'nullable', 'exists:general_categories,id'],
+            'competitor_volume' => [(int) $this->general_category_id === 1 ? 'required' : 'nullable', 'integer', 'in:1,2,3'],
+            'address' => 'required|string|max:500',
+            'latitude' => 'required|numeric|between:-90,90',
+            'longitude' => 'required|numeric|between:-180,180',
+            'contact_person' => 'required|string|max:255',
             'contact_number' => 'nullable|string|max:50',
-            'business_landline_number' => 'nullable|string|max:50',
-            'business_mobile_number' => 'nullable|string|max:50',
-            'date_established' => 'nullable|date',
+            'business_landline_number' => 'required|string|max:50',
+            'business_mobile_number' => 'required|string|max:50',
+            'date_established' => 'required|date',
+            'landmass_code' => ['nullable', 'string', 'max:30', Rule::in(array_keys($this->syncStateArray('landmass_options')))],
             'active.conversion_program' => ['nullable', Rule::in([...array_keys(config('customer_trade_form.conversion_programs', [])), ''])],
-            'active.warehouse_code' => ['nullable', 'string', 'max:255'],
+            'active.warehouse_code' => [Rule::requiredIf(fn (): bool => $this->profileType() === 'outlet' && (bool) data_get($this->trade, 'motiv_user')), 'string', 'max:255'],
             'active.delivery_type' => ['nullable', Rule::in(['yes', 'no'])],
-            'active.delivery_detail' => ['nullable', Rule::in(['own_delivery', 'meh'])],
+            'active.delivery_detail' => $deliveryDetailApplies
+                ? ['required', Rule::in(['own_delivery', 'meh'])]
+                : ['nullable'],
         ]);
+
+        abort_unless($profileType, 422, 'The selected Company has no profile mapping.');
+
+        if (! $this->locationReferenceSnapshotReady()) {
+            throw ValidationException::withMessages([
+                'landmass_code' => 'Landmass reference options have not been synchronized. Sync reference data before saving this Customer.',
+            ]);
+        }
+
+        $this->validateCreateOptionState();
+
+        $this->validateProfileCompleteness($profileType);
 
         if (! $this->physicalGeographyIsValid()) {
             return;
         }
 
-        foreach (CustomerProfileFormService::categoryStreams($profileType) as $stream) {
+        $applicableCategoryStreams = $this->applicableCategoryStreams($profileType);
+        foreach ($applicableCategoryStreams as $stream) {
             foreach ($this->categories[$stream] ?? [] as $year => $category) {
                 if ($category !== null && $category !== '' && ! array_key_exists($category, $this->categoryOptions($stream))) {
                     $this->addError('categories', "Every {$stream} annual category must be selected from the allowed options.");
@@ -488,7 +555,13 @@ class CustomerCreatePage extends Page
                 }
             }
         }
-        $customerId = DB::transaction(function () use ($profileType): int {
+        $categoriesForPersistence = array_intersect_key($this->categories, array_flip($applicableCategoryStreams));
+        $activeForPersistence = $this->active;
+        if ($profileType === 'outlet' && data_get($this->active, 'delivery_type') !== 'yes') {
+            unset($activeForPersistence['delivery_detail']);
+        }
+
+        $customerId = DB::transaction(function () use ($profileType, $categoriesForPersistence, $activeForPersistence): int {
             do {
                 $localId = -random_int(1, PHP_INT_MAX);
             } while (Customer::withTrashed()->whereKey($localId)->exists());
@@ -516,6 +589,7 @@ class CustomerCreatePage extends Page
                 'business_landline_number' => $this->business_landline_number,
                 'business_mobile_number' => $this->business_mobile_number,
                 'date_established' => $this->date_established,
+                'landmass_code' => $this->landmass_code,
                 'person_in_charge_id' => $this->person_in_charge_id,
                 'is_active' => $this->is_active,
                 'sync_status' => 'pending',
@@ -524,8 +598,8 @@ class CustomerCreatePage extends Page
             $customer->save();
             CustomerProfileFormService::saveAggregate($customer, [
                 'trade' => $this->trade,
-                'active' => $this->active,
-                'categories' => $this->categories,
+                'active' => $activeForPersistence,
+                'categories' => $categoriesForPersistence,
                 'access_user_ids' => $this->access_user_ids,
             ], $profileType);
 
@@ -545,6 +619,187 @@ class CustomerCreatePage extends Page
         }
 
         $this->redirect(CustomerPage::getUrl());
+    }
+
+    private function ensureCustomerAddReferencesAvailable(): bool
+    {
+        $this->referenceReadFailures = [];
+        $sources = [
+            'companies' => ['company_id'],
+            'users' => ['access_user_ids', 'person_in_charge_id'],
+            'general_categories' => ['general_category_id'],
+            'region_types' => ['customer_region_type_id'],
+            'regions' => ['physical_region_id'],
+            'region_specifics' => ['physical_region_id'],
+            'area_clusters' => ['area_cluster_id'],
+            'provinces' => ['province_id'],
+            'municipalities' => ['municipality_id'],
+            'barangays' => ['barangay_id'],
+        ];
+
+        foreach ($sources as $table => $fields) {
+            try {
+                DB::table($table)->limit(1)->get();
+            } catch (QueryException) {
+                $message = 'Reference options could not be loaded. Restore or sync the reference data before saving.';
+                foreach ($fields as $field) {
+                    $this->referenceReadFailures[$field] = $message;
+                    $this->addError($field, $message);
+                }
+            }
+        }
+
+        return $this->referenceReadFailures === [];
+    }
+
+    private function validateCreateOptionState(): void
+    {
+        $customerRegionTypeIds = RegionType::query()
+            ->whereIn('name', array_keys((array) config('customer_region_grouping.region_types', [])))
+            ->pluck('id')
+            ->all();
+        $this->validate([
+            'customer_region_type_id' => [$customerRegionTypeIds !== [] ? 'required' : 'nullable', 'integer', Rule::in($customerRegionTypeIds)],
+        ]);
+
+        $groupName = RegionType::whereKey($this->customer_region_type_id)->value('name');
+        $groupCode = $groupName ? config('customer_region_grouping.region_types.'.$groupName) : null;
+        $specificIds = $groupCode ? (array) config('customer_region_grouping.specific_regions.'.$groupCode, []) : [];
+        $specifics = RegionSpecific::query()->whereIn('id', $specificIds)->get();
+        $this->validate([
+            'physical_region_id' => [$specifics->isNotEmpty() ? 'required' : 'nullable', 'integer', Rule::in(Region::query()->whereIn('id', $specifics->pluck('region_id'))->pluck('id')->all())],
+        ]);
+        $specific = $specifics->first(fn (RegionSpecific $row): bool => (int) $row->region_id === (int) $this->physical_region_id);
+        if ($specifics->isNotEmpty() && ! $specific) {
+            throw ValidationException::withMessages(['physical_region_id' => 'Select a Specific Region from the approved options for this Region grouping.']);
+        }
+        $this->region_specific_id = $specific?->id;
+        $clusterIds = $specific ? AreaCluster::where('region_specific_id', $specific->id)->where('enabled', true)->pluck('id')->all() : [];
+        $this->validate([
+            'area_cluster_id' => [$clusterIds !== [] ? 'required' : 'nullable', 'nullable', Rule::in($clusterIds)],
+        ]);
+        $provinceIds = Province::where('region_id', $this->physical_region_id)->where('enabled', true)->pluck('id')->all();
+        $this->validate([
+            'province_id' => [$provinceIds !== [] ? 'required' : 'nullable', 'nullable', Rule::in($provinceIds)],
+        ]);
+        $municipalities = Municipality::where('region_id', $this->physical_region_id)->where('province_id', $this->province_id)->where('enabled', true)->pluck('id')->all();
+        $this->validate([
+            'municipality_id' => [$municipalities !== [] ? 'required' : 'nullable', 'nullable', Rule::in($municipalities)],
+        ]);
+        $barangays = $this->municipality_id ? Barangay::where('municipality_id', $this->municipality_id)->where('enabled', true)->pluck('id')->all() : [];
+        $this->validate([
+            'barangay_id' => [$barangays !== [] ? 'required' : 'nullable', 'nullable', Rule::in($barangays)],
+        ]);
+        if (User::query()->exists() && ! User::whereKey($this->person_in_charge_id)->exists()) {
+            throw ValidationException::withMessages(['person_in_charge_id' => 'Select a valid Person in Charge.']);
+        }
+    }
+
+    private function syncStateArray(string $key): array
+    {
+        return (array) (json_decode((string) DB::table('sync_states')->where('key', $key)->value('value'), true) ?: []);
+    }
+
+    private function validateProfileCompleteness(string $profileType): void
+    {
+        $outletEntryDetailOptions = config('customer_trade_form.profile_entry_details.outlet', []);
+        $outletClassificationOptions = config('customer_trade_form.profile_classifications.outlet', []);
+        $outletWorkingDayOptions = config('customer_trade_form.working_days', []);
+        $outletConversionProgramOptions = array_keys(config('customer_trade_form.conversion_programs', []));
+        $fleetClassificationOptions = config('customer_trade_form.profile_classifications.fleet', []);
+        $oeEntryDetailOptions = config('customer_trade_form.profile_entry_details.oe', []);
+        $oeClassificationOptions = config('customer_trade_form.profile_classifications.oe', []);
+        $ibClassificationOptions = config('customer_trade_form.profile_classifications.ib', []);
+        $rules = [
+            'active.owner.name' => 'required|string|max:255',
+            'active.owner.birthday' => 'required|date',
+            'active.owner.nickname' => 'required|string|max:255',
+            'active.owner.successor_name' => 'required|string|max:255',
+            'active.owner.successor_birthday' => 'required|date',
+            'active.owner.relationship' => 'required|string|max:255',
+            'active.owner.generation' => 'required|string|max:255',
+            'active.owner.hobbies' => 'required|string|max:1000',
+        ];
+
+        $rules += match ($profileType) {
+            'outlet' => [
+                'trade.entry_detail' => $outletEntryDetailOptions === []
+                    ? ['prohibited']
+                    : ['required', Rule::in($outletEntryDetailOptions)],
+                'trade.classifications' => $outletClassificationOptions === []
+                    ? ['nullable', 'array', 'size:0']
+                    : ['required', 'array', 'min:1'],
+                'trade.classifications.*' => ['required', Rule::in($outletClassificationOptions)],
+                'trade.working_days' => $outletWorkingDayOptions === []
+                    ? ['nullable', 'array', 'size:0']
+                    : ['required', 'array', 'min:1'],
+                'trade.working_days.*' => ['required', Rule::in($outletWorkingDayOptions)],
+                'trade.motiv_user' => ['required', 'boolean'],
+                'active.conversion_program' => $outletConversionProgramOptions === []
+                    ? ['prohibited']
+                    : ['required', Rule::in($outletConversionProgramOptions)],
+                'active.operating_hours.start' => ['required', 'date_format:H:i'],
+                'active.operating_hours.end' => ['required', 'date_format:H:i'],
+                'active.delivery_type' => ['required', Rule::in(['yes', 'no'])],
+                'active.ulab' => ['required', Rule::in(['GRC', 'Consolidator', 'None'])],
+            ],
+            'fleet' => [
+                'active.account_type' => ['required', Rule::in(['newly_mapped', 'existing'])],
+                'active.classifications' => $fleetClassificationOptions === []
+                    ? ['prohibited']
+                    : ['required', Rule::in($fleetClassificationOptions)],
+                'active.battery_class' => ['required', Rule::in(['maintenance_free', 'low_maintenance'])],
+                'active.status' => ['required', Rule::in(['active', 'dormant', 'irregular'])],
+            ],
+            'oe' => [
+                'trade.entry_detail' => $oeEntryDetailOptions === []
+                    ? ['prohibited']
+                    : ['required', Rule::in($oeEntryDetailOptions)],
+                'active.classifications' => $oeClassificationOptions === []
+                    ? ['prohibited']
+                    : ['required', Rule::in($oeClassificationOptions)],
+                'active.battery_class' => ['required', Rule::in(['maintenance_free', 'low_maintenance'])],
+                'active.sulfuric_acid' => [data_get($this->trade, 'entry_detail') === 'Acid' ? 'required' : 'nullable', 'boolean'],
+            ],
+            'ib' => [
+                'active.classifications' => $ibClassificationOptions === []
+                    ? ['prohibited']
+                    : ['required', Rule::in($ibClassificationOptions)],
+            ],
+            default => [],
+        };
+
+        foreach ($this->applicableCategoryStreams($profileType) as $stream) {
+            foreach (CustomerProfileFormService::categoryYears($profileType) as $year) {
+                $categoryOptions = array_keys($this->categoryOptions($stream));
+                $rules["categories.{$stream}.{$year}"] = $categoryOptions === []
+                    ? ['prohibited']
+                    : ['required', Rule::in($categoryOptions)];
+            }
+        }
+
+        $this->validate($rules);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function applicableCategoryStreams(string $profileType): array
+    {
+        $streams = CustomerProfileFormService::categoryStreams($profileType);
+
+        if ($profileType !== 'outlet') {
+            return $streams;
+        }
+
+        $activeStreams = match ($this->trade['entry_detail'] ?? null) {
+            'AB' => ['ab'],
+            'MCB' => ['mcb'],
+            'AB and MCB' => ['ab', 'mcb'],
+            default => [],
+        };
+
+        return array_values(array_intersect($streams, $activeStreams));
     }
 
     protected static function customerRegionTypeIdForSpecificRegion(mixed $specificRegionId): ?int
