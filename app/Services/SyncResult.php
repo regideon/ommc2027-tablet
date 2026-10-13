@@ -13,6 +13,10 @@ class SyncResult
         public readonly int $retryableCount = 0,
         /** @var list<string> */
         public readonly array $failureReasons = [],
+        public readonly ?int $httpStatus = null,
+        public readonly ?string $exceptionClass = null,
+        public readonly ?int $durationMs = null,
+        public readonly ?int $responseBytes = null,
     ) {}
 
     /**
@@ -38,7 +42,11 @@ class SyncResult
         int $failedCount = 0,
         int $retryableCount = 0,
         array $failureReasons = [],
+        ?int $httpStatus = null,
+        ?string $exceptionClass = null,
+        ?int $durationMs = null,
+        ?int $responseBytes = null,
     ): self {
-        return new self(false, $message, $errorCode, $syncedCount, $failedCount, $retryableCount, $failureReasons);
+        return new self(false, $message, $errorCode, $syncedCount, $failedCount, $retryableCount, $failureReasons, $httpStatus, $exceptionClass, $durationMs, $responseBytes);
     }
 }

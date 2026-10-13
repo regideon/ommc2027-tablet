@@ -3,6 +3,8 @@
 namespace App\Filament\Concerns;
 
 use App\Services\SyncService;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -20,9 +22,24 @@ trait PullsCustomers
         try {
             return app(SyncService::class)->pullCustomersStep();
         } catch (Throwable $e) {
-            report($e);
+            $reference = (string) Str::uuid();
+            Log::error('sync:pull:customers:failed', [
+                'reference' => $reference,
+                'stage' => 'livewire_action',
+                'exception_class' => $e::class,
+                'exception' => $e,
+                'page_transaction_committed' => false,
+            ]);
 
-            return ['success' => false, 'done' => false, 'pulled' => 0, 'total' => null, 'message' => 'Customer pull could not be completed. Try again.'];
+            return [
+                'success' => false,
+                'done' => false,
+                'pulled' => 0,
+                'total' => null,
+                'message' => "Customer Pull failed before a page step could complete. Reference: {$reference}.",
+                'failure_stage' => 'livewire_action',
+                'diagnostic_reference' => $reference,
+            ];
         }
     }
 

@@ -686,6 +686,8 @@ class SyncService
         // retry repeats the whole step rather than resuming half-applied state.
         $runBeforeStep = $run;
         $currentPageReturned = 0;
+        $pageTransactionCommitted = false;
+        $failureStage = 'customer_page_request';
 
         try {
             if ($run['phase'] === 'locations') {
@@ -727,17 +729,32 @@ class SyncService
 
             if ($data instanceof SyncResult) {
                 $this->putSyncState($runKey, $run);
-                $message = 'Customer Pull failed: '.$data->message;
+                $reference = (string) Str::uuid();
+                Log::error('sync:pull:customers:failed', [
+                    'reference' => $reference,
+                    'stage' => $failureStage,
+                    'phase' => $run['phase'] ?? null,
+                    'after_id' => $run['after_id'] ?? null,
+                    'error_code' => $data->errorCode,
+                    'http_status' => $data->httpStatus,
+                    'exception_class' => $data->exceptionClass,
+                    'duration_ms' => $data->durationMs,
+                    'response_bytes' => $data->responseBytes,
+                    'page_transaction_committed' => false,
+                ]);
+                $message = $this->customerPullFailureMessage($data, $reference);
                 if ($run['location_refresh_failed'] ?? false) {
                     $message .= ' Location refresh also failed; existing local reference data was preserved.';
                 }
 
-                return $this->customerPullProgress($run, false, false, $message);
+                return $this->failedCustomerPullProgress($run, $failureStage, $reference, $message);
             }
 
             $currentPageReturned = is_array($data['customers'] ?? null) ? count($data['customers']) : 0;
+            $failureStage = 'customer_page_validation';
+            $this->validateCustomerPullRequiredReferences($data);
+            $failureStage = 'customer_page_transaction';
             $pageResult = DB::transaction(function () use ($data, $user, $runKey, &$run): array {
-                $this->validateCustomerPullRequiredReferences($data);
                 $customerStateBefore = $this->customerPullState($data);
                 $this->applyPullPayload($data, $user);
                 $currentPageCounts = $this->classifyCustomerPullChanges($data, $customerStateBefore);
@@ -775,6 +792,7 @@ class SyncService
 
                 return ['done' => $done];
             });
+            $pageTransactionCommitted = true;
 
             if ($pageResult['done']) {
                 $counts = $run['counts'];
@@ -788,9 +806,26 @@ class SyncService
 
             return $this->customerPullProgress($run, true, false, "Pulled {$run['pulled']} customers…");
         } catch (Throwable $e) {
-            report($e);
             $this->putSyncState($runKey, $runBeforeStep);
-            $message = 'Customer Pull failed. '.$e->getMessage();
+            $reference = (string) Str::uuid();
+            Log::error('sync:pull:customers:failed', [
+                'reference' => $reference,
+                'stage' => $failureStage,
+                'phase' => $runBeforeStep['phase'] ?? null,
+                'after_id' => $runBeforeStep['after_id'] ?? null,
+                'returned_customers' => $currentPageReturned,
+                'customer_server_ids' => isset($data) && is_array($data['customers'] ?? null)
+                    ? array_values(array_filter(array_map(
+                        static fn (mixed $id): ?int => (is_int($id) || (is_string($id) && ctype_digit($id))) ? (int) $id : null,
+                        array_column($data['customers'], 'id'),
+                    ), static fn (?int $id): bool => $id !== null))
+                    : [],
+                'exception_class' => $e::class,
+                'exception' => $e,
+                'exception_code' => is_numeric($e->getCode()) ? (int) $e->getCode() : null,
+                'page_transaction_committed' => $pageTransactionCommitted,
+            ]);
+            $message = $this->customerPullExceptionMessage($e, $failureStage, $reference);
             $failedRun = $runBeforeStep;
             if ($currentPageReturned > 0) {
                 $failedRun['counts']['returned'] += $currentPageReturned;
@@ -800,8 +835,49 @@ class SyncService
                 $message .= ' Location refresh also failed; existing local reference data was preserved.';
             }
 
-            return $this->customerPullProgress($failedRun, false, false, $message);
+            return $this->failedCustomerPullProgress($failedRun, $failureStage, $reference, $message);
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $run
+     * @return array<string, mixed>
+     */
+    private function failedCustomerPullProgress(array $run, string $stage, string $reference, string $message): array
+    {
+        return [
+            ...$this->customerPullProgress($run, false, false, $message),
+            'failure_stage' => $stage,
+            'diagnostic_reference' => $reference,
+        ];
+    }
+
+    private function customerPullFailureMessage(SyncResult $result, string $reference): string
+    {
+        $reason = match ($result->errorCode) {
+            'token_expired' => 'The Portal session has expired. Log in again before retrying.',
+            'server_error' => $result->httpStatus === null
+                ? 'The Portal did not accept the Customer page request.'
+                : "The Portal returned HTTP {$result->httpStatus} for the Customer page request.",
+            'exception', 'connection_error' => 'The Portal request or response could not be completed.',
+            default => 'The Customer page request could not be completed.',
+        };
+
+        return "Customer Pull failed while requesting a page. {$reason} Reference: {$reference}.";
+    }
+
+    private function customerPullExceptionMessage(Throwable $exception, string $stage, string $reference): string
+    {
+        $reason = match ($exception->getMessage()) {
+            'Portal Customer response omitted the Company ID field.' => 'Portal Customer response omitted the Company ID field.',
+            'A Portal Customer has no valid required Company ID.' => 'A Portal Customer has no valid required Company ID.',
+            'A required Company is unavailable on this device. Refresh Portal lookups before retrying.' => 'A required Company is unavailable on this device. Refresh Portal lookups before retrying.',
+            default => $stage === 'customer_page_transaction'
+                ? 'The returned Customer page could not be safely applied; its local transaction was rolled back.'
+                : 'The Customer page could not be validated against local reference data.',
+        };
+
+        return "Customer Pull failed during {$stage}. {$reason} Reference: {$reference}.";
     }
 
     /**
@@ -1047,24 +1123,49 @@ class SyncService
     private function fetchPullPayload(User $user, string $path, array $query = []): array|SyncResult
     {
         $sinkPath = $this->pullSinkPath();
+        $startedAt = hrtime(true);
+        $httpStatus = null;
+        $responseBytes = null;
 
         try {
             $response = $this->client($user->api_token)
                 ->timeout($this->pullTimeout)
                 ->sink($sinkPath)
                 ->get("{$this->serverUrl}{$path}", $query);
+            $httpStatus = $response->status();
+            $responseBytes = is_file($sinkPath) ? (int) filesize($sinkPath) : null;
+            $durationMs = (int) round((hrtime(true) - $startedAt) / 1_000_000);
 
-            if ($response->status() === 401) {
-                return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
+            if ($httpStatus === 401) {
+                return SyncResult::fail(
+                    'Session expired. Please log out and log back in.',
+                    'token_expired',
+                    httpStatus: $httpStatus,
+                    durationMs: $durationMs,
+                    responseBytes: $responseBytes,
+                );
             }
 
             if ($response->failed()) {
-                return SyncResult::fail("Pull failed ({$response->status()}).", 'server_error');
+                return SyncResult::fail(
+                    "Pull failed ({$httpStatus}).",
+                    'server_error',
+                    httpStatus: $httpStatus,
+                    durationMs: $durationMs,
+                    responseBytes: $responseBytes,
+                );
             }
 
             return $this->decodePullResponse($sinkPath);
         } catch (\Exception $e) {
-            return SyncResult::fail('Pull error: '.$e->getMessage(), 'exception');
+            return SyncResult::fail(
+                'Pull request or response decoding failed.',
+                'exception',
+                httpStatus: $httpStatus,
+                exceptionClass: $e::class,
+                durationMs: (int) round((hrtime(true) - $startedAt) / 1_000_000),
+                responseBytes: $responseBytes,
+            );
         } finally {
             @unlink($sinkPath);
         }

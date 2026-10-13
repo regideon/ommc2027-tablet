@@ -393,12 +393,30 @@ test('an interrupted customer pull resumes from the page that failed', function 
 
     $locations = app(SyncService::class)->pullCustomersStep();
     $first = app(SyncService::class)->pullCustomersStep();
+    Log::spy();
     $failed = app(SyncService::class)->pullCustomersStep();
 
     expect($locations)->toMatchArray(['success' => true, 'done' => false, 'pulled' => 0])
         ->and($first)->toMatchArray(['success' => true, 'done' => false, 'pulled' => 1])
-        ->and($failed)->toMatchArray(['success' => false, 'done' => false, 'pulled' => 1, 'message' => 'Customer Pull failed: Pull failed (500).'])
+        ->and($failed)->toMatchArray([
+            'success' => false,
+            'done' => false,
+            'pulled' => 1,
+            'failure_stage' => 'customer_page_request',
+        ])
+        ->and($failed['message'])->toContain('HTTP 500', 'Reference: '.$failed['diagnostic_reference'])
+        ->and($failed['message'])->not->toContain('Pull failed (500)')
+        ->and(Str::isUuid($failed['diagnostic_reference']))->toBeTrue()
         ->and(app(SyncService::class)->customerPullPending())->toBeTrue();
+
+    Log::shouldHaveReceived('error')->once()->with('sync:pull:customers:failed', Mockery::on(
+        fn (array $context): bool => $context['reference'] === $failed['diagnostic_reference']
+            && $context['stage'] === 'customer_page_request'
+            && $context['phase'] === 'pages'
+            && $context['after_id'] === 1
+            && $context['http_status'] === 500
+            && $context['page_transaction_committed'] === false
+    ));
 
     $this->requests = [];
     $this->customerPages[1] = Http::response([
@@ -425,20 +443,16 @@ test('the salescall pull uses the schedule endpoint and fetches locations only w
             return Http::response($locationPayload);
         }
 
-        if (str_ends_with($request->url(), '/api/sync/pull/notifications')) {
-            return Http::response(['notifications' => [], 'has_more' => false]);
-        }
-
         return Http::response(['itineraries' => [], 'customers' => []]);
     });
 
     expect(app(SyncService::class)->pull()->success)->toBeTrue();
     expect(app(SyncService::class)->pull()->success)->toBeTrue();
 
-    Http::assertSentCount(5);
+    Http::assertSentCount(3);
     expect(Http::recorded(fn (Request $request) => str_ends_with($request->url(), '/api/sync/pull/locations'))->count())->toBe(1)
         ->and(Http::recorded(fn (Request $request) => str_contains($request->url(), '/api/sync/pull/schedule'))->count())->toBe(2)
-        ->and(Http::recorded(fn (Request $request) => str_contains($request->url(), '/api/sync/pull/notifications'))->count())->toBe(2);
+        ->and(Http::recorded(fn (Request $request) => str_contains($request->url(), '/api/sync/pull/notifications'))->count())->toBe(0);
 
     Http::assertNotSent(fn (Request $request) => str_ends_with($request->url(), '/api/sync/pull'));
 });
@@ -562,13 +576,24 @@ test('a step that fails after reading its page is retried from the same page', f
     ]);
 
     $locations = app(SyncService::class)->pullCustomersStep();
+    Log::spy();
     $failed = app(SyncService::class)->pullCustomersStep();
 
     expect($locations)->toMatchArray(['success' => true, 'done' => false, 'pulled' => 0]);
 
     expect($failed['success'])->toBeFalse()
+        ->and($failed['failure_stage'])->toBe('customer_page_transaction')
+        ->and($failed['message'])->toContain('local transaction was rolled back', 'Reference: '.$failed['diagnostic_reference'])
+        ->and($failed['message'])->not->toContain('not-an-id')
         ->and(json_decode(DB::table('sync_states')->where('key', 'customers.pull_run.'.$this->user->id)->value('value'), true))
         ->toMatchArray(['phase' => 'pages', 'after_id' => 0, 'pulled' => 0]);
+
+    Log::shouldHaveReceived('error')->once()->with('sync:pull:customers:failed', Mockery::on(
+        fn (array $context): bool => $context['stage'] === 'customer_page_transaction'
+            && $context['returned_customers'] === 1
+            && $context['customer_server_ids'] === [1]
+            && $context['page_transaction_committed'] === false
+    ));
 
     $this->customerPages[0] = Http::response([
         'customers' => [($this->customer)(1)],
@@ -579,6 +604,29 @@ test('a step that fails after reading its page is retried from the same page', f
     ]);
 
     expect(app(SyncService::class)->pullCustomersStep())->toMatchArray(['success' => true, 'done' => true, 'pulled' => 1]);
+});
+
+test('an escaped Customer Pull exception returns a safe diagnostic reference', function () {
+    $syncService = Mockery::mock(SyncService::class);
+    $syncService->shouldReceive('pullCustomersStep')->once()->andThrow(new RuntimeException('secret SQL or token detail'));
+    $syncService->shouldReceive('hasPendingCustomerPushWork')->twice()->andReturn(false);
+    $syncService->shouldReceive('customerPullPending')->zeroOrMoreTimes()->andReturn(false);
+    $this->app->instance(SyncService::class, $syncService);
+    Log::spy();
+
+    Livewire::test(CustomerPage::class)
+        ->call('pullCustomersStep')
+        ->assertReturned(fn (array $result): bool => $result['success'] === false
+            && $result['failure_stage'] === 'livewire_action'
+            && Str::isUuid($result['diagnostic_reference'])
+            && str_contains($result['message'], $result['diagnostic_reference'])
+            && ! str_contains($result['message'], 'secret SQL or token detail'));
+
+    Log::shouldHaveReceived('error')->once()->with('sync:pull:customers:failed', Mockery::on(
+        fn (array $context): bool => $context['stage'] === 'livewire_action'
+            && $context['exception_class'] === RuntimeException::class
+            && isset($context['reference'])
+    ));
 });
 
 test('pull refreshes a synced Customer by server ID without replacing its negative local key', function () {

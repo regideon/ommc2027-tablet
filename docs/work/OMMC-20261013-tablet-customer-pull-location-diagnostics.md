@@ -766,3 +766,78 @@ The prior Package C focused totals remain as recorded above. The full Tablet sui
 - Known unrelated Portal baseline failure remains: the location snapshot test expects contract v2 while the unchanged base emits v3; reproduced on a clean copy of the accepted base. No full-suite green claim is made.
 - The original dirty Portal and Tablet worktrees were preserved without edits. Only scoped Package C implementation/tests and paired Work-note changes were delivered from the isolated checkouts.
 - No retained Customer Pull/Push, retained database modifications, migrations, checkpoint/watermark changes, or deployment were performed. Packages D–G remain future work.
+
+## Customer Pull failure follow-up — 2026-10-13
+
+**Scope:** Read-only diagnosis after the prior approved identity repair. No application code, retained data, checkpoint, or watermark was changed in this follow-up; no retained Customer Pull/Push was run.
+
+### Root cause and current status
+
+The historical Tablet `local.ERROR` entries from 2026-10-13 05:42–06:08 record `A Portal Customer ID is already mapped to multiple Tablet Customers.` The stack places the exception in Tablet identity resolution while applying a Customer page inside `SyncService::pullCustomersStep()`. The earlier read-only snapshot identified the conflicting server identity as Portal Customer 23591. The log does not contain an HTTP status, response body, request duration, response byte count, or exact Customer/page identity; the first-page run snapshot was `after_id=0`, `pulled=0`. Therefore 23591 is the confirmed local collision associated with the failure, but the exact returned page/customer was not captured in the log. This is a Tablet-side identity/data conflict after response decoding, not evidence of a Portal timeout or query failure.
+
+That conflict was already repaired under the earlier explicit Human authorization: Tablet row `id=23591` now has `server_id=NULL`, while canonical local row `id=-687143025929916172` retains `server_id=23591`. This follow-up made no database writes. A read-only check now finds zero duplicate non-null `server_id` groups, both expected rows still present with their prior synced status, and SQLite `integrity_check=ok`. There is no active `customers.pull_run` marker. The current `customers.pulled_through.2` value is `2026-10-13T09:26:35.855770Z`; application code advances this watermark only when page scanning, scope reconciliation, and missing-ID recovery complete. This is consistent with a later completed Pull, but this follow-up did not run or independently attribute that operation.
+
+The UI deliberately maps all failed steps and Livewire exceptions to `Customer Pull failed. Please try again.`, discarding the returned step message. This explains the generic text but is not the underlying historical failure. The available operational entries do not provide timings or payload metrics. Later `testing.*` log entries are test diagnostics and were not treated as operational Pull evidence. No Portal operational log or request correlation for the failed page was available.
+
+### Pagination, persistence, and performance
+
+Tablet requests 500 Customers per paginated step (up to 200 IDs for missing-scope recovery) with a 60-second pull HTTP timeout. The browser invokes one `pullCustomersStep()` per request. Portal accepts up to 1,000 rows, queries a keyset page in ascending ID order, and returns `next_after_id`; its page serializer eager-loads PIC/Access Users and bulk-loads the associated child collections. No per-Customer child-query loop was found in this path. The terminal page also returns the visible scope ID list. No query-duration, PHP memory, web-server timeout, or response-size telemetry is recorded, so a performance cause is not established.
+
+Each Tablet Customer page is applied inside a SQLite transaction. A failure during identity resolution rolls back writes for that page and restores the prior run checkpoint; previous successful pages are separate committed transactions. The watermark is written only after the entire scan and scope recovery finish. Disposable tests confirm keyset paging, same-page retry after failure, duplicate-ID rejection, and the guarded-repair/idempotent-resolution case. Portal tests confirm scoped paging, incremental reads, ID recovery, and malformed-ID rejection.
+
+### Workers and validation
+
+Laravel queue workers are not indicated. The observed exception is a deterministic local uniqueness/identity conflict; moving it to a background job would not fix that conflict. Pull is already divided into bounded per-page HTTP requests, and there is no measured server-timeout or memory failure to justify a new worker architecture.
+
+- Tablet `CustomerPagedPullTest.php` focused pagination, retry, duplicate protection, repair regression: **7 passed, 133 assertions**.
+- Portal `TabletSplitPullTest.php` focused page ordering, null Company, incremental changes, scoped ID recovery, malformed IDs: **5 passed, 27 assertions**.
+- These use disposable databases and mocked HTTP. No live endpoint was called.
+- No new application fix was necessary in this follow-up: the known identity collision had already been corrected and current local identity/read-integrity checks pass. The failure display remains generic for future unrelated errors; changing that UI/logging contract is separate from fixing this confirmed incident.
+
+**Conclusion:** The confirmed failure was Tablet-side duplicate `server_id` identity during local reconciliation. The authorized row repair already addressed the cause, and current read-only state shows the conflict removed. The evidence does not support background workers or a Portal performance correction. Historical failed-request metrics and exact page customer ID remain unavailable.
+
+## Customer Pull reliability and diagnostics correction — 2026-10-13
+
+**State: `READY_FOR_HUMAN_REVIEW`.** This bounded follow-up preserves the historical investigation above and records the code correction now authorized. Tablet and Portal were fetched before editing; their local `main` branches matched `origin/main` at Tablet `d437ba234105ccf44384c3a866d3d8d9bb3d2576` and Portal `5bcd1b22e51d56b354efa333a87ec8a2feff7ec8`. No incoming changes were present. The prior paired Work-note edits were preserved. No commit or push was made.
+
+### Findings and current failure status
+
+The historical operational failure was a Tablet-side identity-resolution exception caused by two local Customers claiming Portal `server_id=23591`; it occurred after the Portal page had been decoded. The approved repair removed the incorrect association from the separate local Customer. Current read-only Tablet evidence from this follow-up found SQLite integrity `ok`, no duplicate non-null `server_id` groups, and no active Customer Pull run. The most recent watermark is consistent with a completed later run, but cannot prove which installed build performed it. No later operational Tablet or Portal log entry identifying a new Customer Pull failure was found. The failure is therefore historical in available evidence and is not currently reproducible from the repository/disposable tests. The exact old response page and Customer were not recorded at the time.
+
+The Tablet source checkout is current at `d437ba234105ccf44384c3a866d3d8d9bb3d2576` and contains the delivered Package C sync implementation. This environment cannot verify which application build is installed on the physical Tablet. Device verification requires confirming/rebuilding the installed app from the current source; no install, deployment, or retained sync was performed.
+
+No Portal-side failure evidence was found. The Portal page API remains paginated; its focused endpoint contract tests previously passed. The available logs do not establish a Portal timeout, slow query, memory limit, or web-server timeout. Queue workers are not indicated: the historical exception was a deterministic Tablet identity conflict, and paging already bounds each request.
+
+### Bounded diagnostics change
+
+The actual generic message was produced in the Tablet UI, which discarded returned step messages. Customer Pull failures now return a safe `failure_stage` and UUID `diagnostic_reference`; the UI displays that controlled message. Server logs use `sync:pull:customers:failed` with the stage, phase, `after_id`, safe error code, HTTP status when available, exception class/code and trace for server-side diagnosis, request duration and response byte count for failed HTTP requests, returned row count and numeric Portal Customer IDs for a decoded failed page, and whether the local page transaction committed. Exception details and Customer IDs are not copied into the user-facing message.
+
+Customer page reference validation now runs before the write transaction so it can be identified as its own failure stage. The page transaction still atomically applies records and checkpoint state; failed transaction handling restores the prior run checkpoint. The watermark remains updated only on successful completion. HTTP failures leave the cursor unchanged. Notification and Sales Call application behavior was not changed.
+
+### Validation
+
+All tests used disposable databases and mocked Portal HTTP; no retained Customer Pull/Push or checkpoint operation occurred.
+
+- Focused Customer Pull failure/retry/rollback/validation and escaped-Livewire diagnostic tests: **5 passed, 70 assertions**.
+- Full Tablet `CustomerPagedPullTest.php`: **31 passed, 1 failed, 402 assertions**. The sole failure is the existing Sales Call test `the salescall pull uses the schedule endpoint and fetches locations only when missing`: both Pull calls succeed, but it expects five HTTP requests and records three. Its expected two notification requests conflict with `SyncNotificationsTest`'s explicit contract that schedule Pull does not fetch notifications. No Sales Call or notification behavior was altered here; this stale assertion remains outside this Customer Pull correction.
+- `SyncNotificationsTest.php` plus `SyncServicePullFreshInstallTest.php`: **8 passed, 37 assertions**.
+- PHP lint passed for all changed PHP files.
+- Targeted Pint (`vendor/bin/pint --dirty --format agent`) and `git diff --check` passed.
+- No retained DB write, migration, Customer synchronization, checkpoint/watermark change, commit, push, or deployment was performed.
+
+**Device-testing recommendation:** the repaired identity state and disposable Customer Pull tests support a controlled device test once the installed Tablet build is confirmed to include the current Tablet sync source. That operational build/version check is still outstanding. The unrelated Sales Call test assertion is also recorded rather than silently changed.
+
+## Customer Pull finalization — 2026-10-13
+
+The Sales Call test discrepancy was a stale test expectation, not an application defect. `SyncService::pull()` performs one location request for an old/missing snapshot and one schedule request per Pull; notification Pull is separate, and the accepted `SyncNotificationsTest` contract explicitly asserts that schedule Pull does not request notifications. The fixture/assertion now expects three requests (one locations, two schedule, zero notifications). No notification or Sales Call application behavior changed.
+
+After fetching, Tablet `main` and `origin/main` both remained `d437ba234105ccf44384c3a866d3d8d9bb3d2576`; Portal `main` and `origin/main` both remained `5bcd1b22e51d56b354efa333a87ec8a2feff7ec8`. No incoming commits or functional conflicts required reconciliation.
+
+- Tablet `CustomerPagedPullTest.php`: **32 passed, 406 assertions**.
+- Tablet `SyncNotificationsTest.php`, `SyncServicePullFreshInstallTest.php`, and `SyncPullResponseSinkTest.php`: **10 passed, 42 assertions**.
+- PHP lint, targeted Pint, and `git diff --check`: passed.
+- All database tests used disposable databases and mocked HTTP. No retained synchronization, database modification, migration, checkpoint change, or deployment occurred.
+
+The Customer Pull implementation and corrected assertion are ready for device verification after the scoped changes are delivered and a Tablet build containing them is installed. The installed device version still must be confirmed on the Tablet; no app installation or deployment was performed.
+
+Delivery is authorized for these scoped changes. `TERMINAL_DELIVERED` will be recorded only after commit, push, and origin alignment are verified.

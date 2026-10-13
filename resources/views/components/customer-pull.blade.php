@@ -47,7 +47,7 @@
 
                     if (!step.success) {
                         this.failed = true;
-                        this.message = 'Customer Pull failed. Please try again.';
+                        this.message = step.message || 'Customer Pull failed. Please try again.';
                         break;
                     }
 
