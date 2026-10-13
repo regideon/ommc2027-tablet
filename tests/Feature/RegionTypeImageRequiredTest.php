@@ -120,6 +120,8 @@ test('completing a visit requires an image when the region type requires one', f
 
     $salescall = makeRegionTypeSalescall($user);
 
+    attachRequiredSalescallForms($user, $salescall);
+
     Livewire::test(SalescallPage::class)
         ->call('initiateFinish', $salescall->id, 'completed')
         ->assertNotDispatched('finish-done');
@@ -150,6 +152,8 @@ test('completing a visit without an image still works when the region type does 
 
     $salescall = makeRegionTypeSalescall($user);
 
+    attachRequiredSalescallForms($user, $salescall);
+
     Livewire::test(SalescallPage::class)
         ->call('initiateFinish', $salescall->id, 'completed')
         ->assertDispatched('finish-done', salescallId: $salescall->id, outcome: 'completed');
@@ -164,6 +168,8 @@ test('completing a visit requires an image when the rep has no region type', fun
     $this->actingAs($user);
 
     $salescall = makeRegionTypeSalescall($user);
+
+    attachRequiredSalescallForms($user, $salescall);
 
     Livewire::test(SalescallPage::class)
         ->call('initiateFinish', $salescall->id, 'completed')

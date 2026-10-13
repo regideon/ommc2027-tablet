@@ -80,6 +80,11 @@ test('finish flow persists exit gps for completed, partially completed, and canc
         attachFinishFlowBrand($salescall);
     }
 
+    // Completing requires the per-visit forms too; the other outcomes do not.
+    if ($outcome === 'completed') {
+        attachRequiredSalescallForms($user, $salescall);
+    }
+
     Livewire::test(SalescallPage::class)
         ->call('initiateFinish', $salescall->id, $outcome, $reason)
         ->assertDispatched('finish-done', salescallId: $salescall->id, outcome: $outcome)

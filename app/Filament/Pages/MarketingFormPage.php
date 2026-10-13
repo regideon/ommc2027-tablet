@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Enums\FormKey;
+use App\Filament\Concerns\LocksRequestedSalescall;
 use App\Models\Forms\Marketing\Marketing;
 use App\Models\Forms\Marketing\MarketingMechanic;
 use App\Models\Forms\Marketing\MarketingProgram;
@@ -18,6 +19,8 @@ use Illuminate\Validation\ValidationException;
 
 class MarketingFormPage extends Page
 {
+    use LocksRequestedSalescall;
+
     protected string $view = 'filament.pages.marketing-form-page';
 
     protected static bool $shouldRegisterNavigation = false;
@@ -160,6 +163,8 @@ class MarketingFormPage extends Page
                 return;
             }
         }
+
+        $this->applyRequestedSalescallLock();
 
         $this->duration_start_at = now()->toDateString();
         $this->duration_end_at = now()->addMonth()->toDateString();

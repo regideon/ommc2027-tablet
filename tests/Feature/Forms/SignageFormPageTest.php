@@ -5,10 +5,13 @@ use App\Enums\CRRSignage\SignageCategory;
 use App\Enums\TDHStatus;
 use App\Filament\Pages\FormsPage;
 use App\Filament\Pages\SignageFormPage;
+use App\Models\Customer;
 use App\Models\Forms\CRRSignage\Signage;
 use App\Models\Forms\CRRSignage\SignageAttachment;
 use App\Models\Forms\CRRSignage\SignageProduct;
 use App\Models\Forms\CRRSignage\SignageType;
+use App\Models\Itinerary;
+use App\Models\Salescall;
 use App\Models\StagedAttachment;
 use App\Models\User;
 use App\Services\Forms\SignageService;
@@ -67,6 +70,21 @@ function signageFormPageSubmission(User $user): Signage
         'staged_attachments' => [
             ['type' => SignageAttachmentType::REQUEST->value, 'staged_id' => $staged->id],
         ],
+    ]);
+}
+
+function signageFormPageSalescall(User $user): Salescall
+{
+    $customer = Customer::create(['name' => 'Signage Salescall Customer', 'is_active' => true]);
+    $itinerary = Itinerary::create(['created_by' => $user->id, 'itinerary_status_id' => 2]);
+
+    return Salescall::create([
+        'itinerary_id' => $itinerary->id,
+        'customer_id' => $customer->id,
+        'created_by' => $user->id,
+        'local_uuid' => (string) Str::uuid(),
+        'sync_status' => 'pending',
+        'actual_in' => now(),
     ]);
 }
 
@@ -215,4 +233,47 @@ test('the edit route aborts 403 for a non-pending submission', function () {
 
     $this->get(SignageFormPage::getUrl(['submission' => $signage->id]))
         ->assertForbidden();
+});
+
+test('opening the Signage form from a sales call preselects and locks that sales call', function () {
+    Storage::fake('local');
+    $user = signageFormPageUser();
+    $this->actingAs($user);
+
+    $salescall = signageFormPageSalescall($user);
+
+    Livewire::withQueryParams(['salescall' => $salescall->local_uuid])
+        ->test(SignageFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', $salescall->local_uuid, true)
+        ->assertSet('salescallLocked', true, true)
+        ->assertSee('Started from this Sales Call')
+        ->assertSeeHtml('wire:model="salescall_uuid" class="field-input bg-white" disabled');
+});
+
+test('opening the Signage form with an unknown sales call uuid does not preselect or lock', function () {
+    Storage::fake('local');
+    $user = signageFormPageUser();
+    $this->actingAs($user);
+
+    Livewire::withQueryParams(['salescall' => (string) Str::uuid()])
+        ->test(SignageFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', null, true)
+        ->assertSet('salescallLocked', false, true);
+});
+
+test('a sales call owned by another rep is ignored when opening the Signage form', function () {
+    Storage::fake('local');
+    $user = signageFormPageUser();
+    $otherUser = User::factory()->create();
+    $this->actingAs($user);
+
+    $foreignSalescall = signageFormPageSalescall($otherUser);
+
+    Livewire::withQueryParams(['salescall' => $foreignSalescall->local_uuid])
+        ->test(SignageFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', null, true)
+        ->assertSet('salescallLocked', false, true);
 });
