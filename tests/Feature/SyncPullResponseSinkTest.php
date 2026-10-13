@@ -51,6 +51,10 @@ test('pull decodes a response larger than the php://temp memory threshold', func
             return Http::response(emptyLocationReferenceSnapshot(), 200);
         }
 
+        if (str_contains($request->url(), '/api/sync/pull/notifications')) {
+            return Http::response(['notifications' => [], 'has_more' => false], 200, ['Content-Type' => 'application/json']);
+        }
+
         return Http::response($body, 200, ['Content-Type' => 'application/json']);
     });
 

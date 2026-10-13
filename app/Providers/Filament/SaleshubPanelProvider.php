@@ -85,6 +85,10 @@ document.addEventListener("DOMContentLoaded", function () {
             ->brandLogo(asset('images/motolite-logo.png'))
             ->renderHook(
                 'panels::user-menu.before',
+                fn () => view('filament.partials.notifications-bell'),
+            )
+            ->renderHook(
+                'panels::user-menu.before',
                 fn () => new HtmlString(
                     '<button onclick="window.location.reload()" title="Refresh page"
                         style="display:inline-flex; align-items:center; justify-content:center;

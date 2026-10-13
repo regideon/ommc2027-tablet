@@ -36,6 +36,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -64,6 +65,12 @@ class SyncService
     private const CUSTOMER_PULL_RUN = 'customers.pull_run.';
 
     private const CUSTOMER_PULL_WATERMARK = 'customers.pulled_through.';
+
+    /** Per-user watermark key for the notification pull. */
+    private const NOTIFICATIONS_PULL_WATERMARK = 'notifications.pulled_through.';
+
+    /** Hard ceiling on notification pull pages per run. */
+    private const NOTIFICATIONS_PULL_PAGE_LIMIT = 100;
 
     public function __construct(
         private readonly TabletS3UploadService $tabletS3UploadService,
@@ -262,6 +269,12 @@ class SyncService
             return SyncResult::fail('Pull error: '.$e->getMessage(), 'exception');
         }
 
+        try {
+            $this->pullNotifications();
+        } catch (Throwable $exception) {
+            Log::warning('Notification pull skipped: '.$exception->getMessage());
+        }
+
         $itineraryCount = count($data['itineraries'] ?? []);
         $salescallCount = array_sum(
             array_map(fn ($i) => count($i['salescalls'] ?? []), $data['itineraries'] ?? [])
@@ -305,6 +318,89 @@ class SyncService
         }
 
         return SyncResult::ok('Pulled location references.');
+    }
+
+    /**
+     * Notification pull: the logged-in user's in-app notifications, stored
+     * locally with device-local read state.
+     */
+    public function pullNotifications(): SyncResult
+    {
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (! $user || blank($user->api_token)) {
+            return SyncResult::fail('No API token found. Please log in first.', 'no_token');
+        }
+
+        $watermarkKey = self::NOTIFICATIONS_PULL_WATERMARK.($user->server_id ?? $user->id);
+        $state = $this->syncState($watermarkKey);
+        $since = is_array($state) ? ($state['last_created_at'] ?? null) : null;
+
+        $rows = [];
+        $page = 1;
+
+        do {
+            $query = ['page' => $page];
+
+            if (is_string($since) && $since !== '') {
+                $query['since'] = $since;
+            }
+
+            $data = $this->fetchPullPayload($user, '/api/sync/pull/notifications', $query);
+
+            if ($data instanceof SyncResult) {
+                return $data;
+            }
+
+            foreach ($data['notifications'] ?? [] as $row) {
+                if (is_array($row) && is_string($row['id'] ?? null) && $row['id'] !== '') {
+                    $rows[$row['id']] = $row;
+                }
+            }
+
+            $page++;
+        } while (($data['has_more'] ?? false) === true && $page <= self::NOTIFICATIONS_PULL_PAGE_LIMIT);
+
+        $pulledAt = now();
+
+        if ($rows !== []) {
+            $insertRows = array_map(function (array $row) use ($user, $pulledAt): array {
+                $createdAt = is_string($row['created_at'] ?? null)
+                    ? Carbon::parse($row['created_at'])->setTimezone(config('app.timezone'))->toDateTimeString()
+                    : $pulledAt->toDateTimeString();
+
+                return [
+                    'id' => $row['id'],
+                    'type' => 'templated-notification',
+                    'notifiable_type' => User::class,
+                    'notifiable_id' => $user->id,
+                    'data' => json_encode([
+                        'title' => $row['title'] ?? null,
+                        'body' => $row['body'] ?? null,
+                        'tag' => $row['module'] ?? null,
+                    ], JSON_THROW_ON_ERROR),
+                    'read_at' => null,
+                    'created_at' => $createdAt,
+                    'updated_at' => $createdAt,
+                ];
+            }, array_values($rows));
+
+            foreach (array_chunk($insertRows, 100) as $chunk) {
+                DB::table('notifications')->insertOrIgnore($chunk);
+            }
+        }
+
+        $createdAts = array_filter(
+            array_map(fn (array $row): mixed => $row['created_at'] ?? null, array_values($rows)),
+            'is_string',
+        );
+
+        $this->putSyncState($watermarkKey, [
+            'last_created_at' => $createdAts === [] ? $since : max($createdAts),
+            'pulled_at' => $pulledAt->toISOString(),
+        ]);
+
+        return SyncResult::ok('Pulled '.count($rows).' notifications.', count($rows));
     }
 
     private function validateLocationSnapshot(array $data): void
