@@ -404,27 +404,52 @@ class CustomerCreatePage extends Page
             ? 'The provider display address was unavailable or exceeded the 500-character field limit; only available details were filled.'
             : null;
 
+        $resolvedMunicipality = $result['municipality_id'] !== null
+            ? Municipality::find($result['municipality_id'])
+            : null;
+        $resolvedProvince = $result['province_id'] !== null
+            ? Province::find($result['province_id'])
+            : null;
         $resolvedRegionId = $result['region_id']
-            ?? ($result['province_id'] !== null ? Province::whereKey($result['province_id'])->value('region_id') : null);
+            ?? $resolvedProvince?->region_id
+            ?? $resolvedMunicipality?->region_id
+            ?? ($resolvedMunicipality?->province_id ? Province::whereKey($resolvedMunicipality->province_id)->value('region_id') : null);
         $preserveLegacySpecificRegion = $this->initialRegionSpecificId === 1 || (int) ($this->region_specific_id ?? 0) === 1;
-        $this->physical_region_id = $resolvedRegionId ?? $this->physical_region_id;
+        $oldRegionId = $this->physical_region_id;
+        $finalRegionId = $resolvedRegionId ?? $oldRegionId;
+        $this->physical_region_id = $finalRegionId;
 
         $provinceId = $result['province_id'] ?? $this->province_id;
-        if ($resolvedRegionId !== null && $provinceId !== null
-            && ! Province::whereKey($provinceId)->where('region_id', $resolvedRegionId)->exists()) {
+        if ($provinceId !== null && ($finalRegionId === null
+            || ! Province::whereKey($provinceId)->where('region_id', $finalRegionId)->exists())) {
             $provinceId = null;
         }
+
         $municipalityId = $result['municipality_id'] ?? $this->municipality_id;
-        if ($provinceId !== null && $municipalityId !== null
-            && ! Municipality::whereKey($municipalityId)->where('province_id', $provinceId)->exists()) {
-            $municipalityId = null;
+        if ($municipalityId !== null) {
+            $municipality = $resolvedMunicipality && (int) $resolvedMunicipality->id === (int) $municipalityId
+                ? $resolvedMunicipality
+                : Municipality::find($municipalityId);
+            $provinceRelationIsValid = $municipality && $provinceId !== null
+                && (int) $municipality->province_id === (int) $provinceId
+                && Province::whereKey($provinceId)->where('region_id', $finalRegionId)->exists();
+            $regionRelationIsValid = $municipality && $finalRegionId !== null
+                && $municipality->region_id !== null
+                && (int) $municipality->region_id === (int) $finalRegionId;
+            $nullableRegionRelationIsValid = $municipality && $municipality->region_id === null && $provinceRelationIsValid;
+
+            if (! $regionRelationIsValid && ! $nullableRegionRelationIsValid) {
+                $municipalityId = null;
+            }
+            if ($municipalityId !== null && $provinceId !== null
+                && (int) $municipality->province_id !== (int) $provinceId) {
+                $municipalityId = null;
+            }
         }
+
         $barangayId = $result['barangay_id'] ?? $this->barangay_id;
-        if ($municipalityId !== null && $barangayId !== null
-            && ! Barangay::whereKey($barangayId)->where('municipality_id', $municipalityId)->exists()) {
-            $barangayId = null;
-        }
-        if ($municipalityId === null) {
+        if ($municipalityId === null || ($barangayId !== null
+            && ! Barangay::whereKey($barangayId)->where('municipality_id', $municipalityId)->exists())) {
             $barangayId = null;
         }
         $this->province_id = $provinceId;
@@ -434,7 +459,12 @@ class CustomerCreatePage extends Page
             $this->address = $result['address'];
         }
 
-        if ($result['area_cluster_id'] !== null && $result['region_specific_id'] !== null) {
+        $resolvedCommercialMappingIsValid = $result['area_cluster_id'] !== null && $result['region_specific_id'] !== null
+            && self::customerRegionTypeIdForSpecificRegion($result['region_specific_id']) !== null
+            && RegionSpecific::whereKey($result['region_specific_id'])->where('region_id', $finalRegionId)->exists()
+            && AreaCluster::whereKey($result['area_cluster_id'])->where('region_specific_id', $result['region_specific_id'])->exists();
+
+        if ($resolvedCommercialMappingIsValid) {
             if (! $preserveLegacySpecificRegion) {
                 $this->applyResolvedLocationAreaClusterMapping([
                     'decision' => 'mapped',
@@ -443,11 +473,51 @@ class CustomerCreatePage extends Page
                     'source_level' => null,
                 ]);
             }
-        } elseif (! $preserveLegacySpecificRegion && $resolvedRegionId !== null
-            && $this->region_specific_id !== null
-            && ! RegionSpecific::whereKey($this->region_specific_id)->where('region_id', $resolvedRegionId)->exists()) {
-            $this->region_specific_id = null;
-            $this->area_cluster_id = null;
+        } elseif (! $preserveLegacySpecificRegion) {
+            $specificIsValid = $this->region_specific_id !== null && $finalRegionId !== null
+                && self::customerRegionTypeIdForSpecificRegion($this->region_specific_id) !== null
+                && RegionSpecific::whereKey($this->region_specific_id)->where('region_id', $finalRegionId)->exists();
+            if (! $specificIsValid) {
+                $this->region_specific_id = null;
+                $this->area_cluster_id = null;
+                $matchingSpecifics = $finalRegionId === null
+                    ? collect()
+                    : RegionSpecific::query()
+                        ->whereIn('id', collect((array) config('customer_region_grouping.specific_regions', []))->flatten()->unique())
+                        ->where('region_id', $finalRegionId)
+                        ->get();
+                $groupCodes = collect((array) config('customer_region_grouping.specific_regions', []))
+                    ->filter(fn (array $ids): bool => $matchingSpecifics->contains(fn (RegionSpecific $specific): bool => in_array((int) $specific->id, $ids, true)))
+                    ->keys();
+
+                if ($groupCodes->count() === 1) {
+                    $typeName = array_search($groupCodes->first(), (array) config('customer_region_grouping.region_types', []), true);
+                    $this->customer_region_type_id = $typeName ? RegionType::where('name', $typeName)->value('id') : null;
+                    if ($matchingSpecifics->count() === 1) {
+                        $specificId = (int) $matchingSpecifics->first()->id;
+                        $this->region_specific_id = $specificId;
+                        $clusters = AreaCluster::where('region_specific_id', $specificId)->where('enabled', true)->pluck('id');
+                        $this->area_cluster_id = $clusters->count() === 1 ? (int) $clusters->first() : null;
+                    }
+                } else {
+                    $this->customer_region_type_id = null;
+                }
+            } elseif ($this->area_cluster_id !== null
+                && ! AreaCluster::whereKey($this->area_cluster_id)->where('region_specific_id', $this->region_specific_id)->exists()) {
+                $this->area_cluster_id = null;
+            } elseif ($this->region_specific_id !== null) {
+                $this->customer_region_type_id = self::customerRegionTypeIdForSpecificRegion($this->region_specific_id);
+            }
+        }
+
+        // A map result with no physical parent keeps the current parent only when
+        // retained children prove that they still belong to it. A changed Region
+        // invalidates every unproven locality value above.
+        if ($resolvedRegionId !== null && $oldRegionId !== null && (int) $resolvedRegionId !== (int) $oldRegionId
+            && $result['province_id'] === null && $result['municipality_id'] === null) {
+            $this->province_id = null;
+            $this->municipality_id = null;
+            $this->barangay_id = null;
         }
     }
 
@@ -682,7 +752,19 @@ class CustomerCreatePage extends Page
         $this->validate([
             'province_id' => [$provinceIds !== [] ? 'required' : 'nullable', 'nullable', Rule::in($provinceIds)],
         ]);
-        $municipalities = Municipality::where('region_id', $this->physical_region_id)->where('province_id', $this->province_id)->where('enabled', true)->pluck('id')->all();
+        $municipalityQuery = Municipality::query()->where('enabled', true);
+        if ($this->province_id !== null) {
+            $municipalityQuery->where('province_id', $this->province_id);
+        } else {
+            $municipalityQuery->whereNull('province_id');
+        }
+        $municipalityQuery->where(function ($query): void {
+            $query->where('region_id', $this->physical_region_id);
+            if ($this->province_id !== null && Province::whereKey($this->province_id)->where('region_id', $this->physical_region_id)->exists()) {
+                $query->orWhereNull('region_id');
+            }
+        });
+        $municipalities = $municipalityQuery->pluck('id')->all();
         $this->validate([
             'municipality_id' => [$municipalities !== [] ? 'required' : 'nullable', 'nullable', Rule::in($municipalities)],
         ]);
@@ -844,10 +926,19 @@ class CustomerCreatePage extends Page
             return $this->commercialGeographyIsValid();
         }
 
-        if ($this->physical_region_id && (int) $municipality->region_id !== (int) $this->physical_region_id) {
-            $this->addError('municipality_id', 'The City / Municipality does not belong to the selected physical Region.');
+        if ($this->physical_region_id) {
+            $municipalityHasValidRegion = $municipality->region_id !== null
+                && (int) $municipality->region_id === (int) $this->physical_region_id;
+            $municipalityHasValidNullableRegion = $municipality->region_id === null
+                && $this->province_id !== null
+                && (int) $municipality->province_id === (int) $this->province_id
+                && Province::whereKey($this->province_id)->where('region_id', $this->physical_region_id)->exists();
 
-            return false;
+            if (! $municipalityHasValidRegion && ! $municipalityHasValidNullableRegion) {
+                $this->addError('municipality_id', 'The City / Municipality does not belong to the selected physical Region.');
+
+                return false;
+            }
         }
 
         if ($this->province_id && (int) $municipality->province_id !== (int) $this->province_id) {

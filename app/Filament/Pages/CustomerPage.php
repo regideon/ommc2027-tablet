@@ -16,6 +16,8 @@ use BackedEnum;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -51,6 +53,8 @@ class CustomerPage extends Page
 
     public array $customerDetail = [];
 
+    public bool $loadingCustomerDetails = false;
+
     public bool $showPhotos = false;
 
     public array $customerPhotos = [];
@@ -63,26 +67,7 @@ class CustomerPage extends Page
 
     protected function getViewData(): array
     {
-        $user = Auth::user();
-        $roles = $user->getRoleNames()->toArray();
-
-        // Customers the portal reported in this user's scope on their last
-        // customer pull (see SyncService::recordCustomerScope()).
-        $pulledIds = DB::table('customer_scopes')->where('user_id', $user->id)->pluck('customer_id');
-
-        $customers = Customer::query()->where('is_active', true);
-
-        if (! in_array('rsm_approver', $roles)) {
-            if (array_intersect(['rsm', 'drm_approver'], $roles)) {
-                $drmIds = User::where('rsm_id', $user->id)->pluck('id');
-                $customerIds = DB::table('customer_user')->whereIn('user_id', $drmIds)->pluck('customer_id')->merge($pulledIds)->unique();
-            } else {
-                // DRM
-                $customerIds = DB::table('customer_user')->where('user_id', $user->id)->pluck('customer_id')->merge($pulledIds)->unique();
-            }
-
-            $customers->whereIn('id', $customerIds);
-        }
+        $customers = $this->visibleCustomersQuery();
 
         $term = trim($this->search);
 
@@ -171,14 +156,24 @@ class CustomerPage extends Page
      */
     public function viewCustomer(string $customerId): void
     {
+        if ($this->loadingCustomerDetails) {
+            return;
+        }
+
         $customerId = $this->validatedCustomerId($customerId);
-        $this->selectedCustomerId = (string) $customerId;
+        $this->loadingCustomerDetails = true;
+        $this->selectedCustomerId = null;
         $this->showPhotos = false;
         $this->customerPhotos = [];
         $this->customerDetail = [];
 
         try {
             $this->loadCustomerDetail($customerId);
+            $this->selectedCustomerId = (string) $customerId;
+        } catch (ModelNotFoundException) {
+            // Match the visible Customer list scope for direct Livewire calls.
+            // An out-of-scope ID is indistinguishable from a missing Customer.
+            $this->selectedCustomerId = null;
         } catch (Throwable $exception) {
             $reference = (string) Str::uuid();
             $applicationFrame = collect($exception->getTrace())->first(function (array $frame): bool {
@@ -217,12 +212,22 @@ class CustomerPage extends Page
                 ->danger()
                 ->send();
 
-            return;
+        } finally {
+            $this->loadingCustomerDetails = false;
         }
     }
 
     private function loadCustomerDetail(int $customerId): void
     {
+        $userColumns = Schema::hasColumn('users', 'last_name')
+            ? ['users.id', 'users.name', 'users.last_name']
+            : ['users.id', 'users.name'];
+        $customer = $this->visibleCustomersQuery()->with([
+            'company', 'tradeProfile', 'categoryHistories', 'province', 'barangay',
+            'areaCluster', 'regionSpecific', 'personInCharge' => fn ($query) => $query->select($userColumns),
+            'users' => fn ($query) => $query->select([...$userColumns, 'users.rsm_id']),
+            'municipality.region', 'municipality.province',
+        ])->findOrFail($customerId);
 
         $profile = CustomerProfile::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))
             ->latest('created_at')
@@ -259,13 +264,6 @@ class CustomerPage extends Page
 
         $photoCount = SalescallImage::whereHas('salescall', fn ($q) => $q->where('customer_id', $customerId))->count();
 
-        $userColumns = Schema::hasColumn('users', 'last_name') ? ['id', 'name', 'last_name'] : ['id', 'name'];
-        $customer = Customer::with([
-            'company', 'tradeProfile', 'categoryHistories', 'province', 'barangay',
-            'areaCluster', 'regionSpecific', 'personInCharge' => fn ($query) => $query->select($userColumns),
-            'users' => fn ($query) => $query->select([...$userColumns, 'rsm_id']),
-            'municipality.region', 'municipality.province',
-        ])->findOrFail($customerId);
         $accessUsers = $customer->users->sortBy(fn (User $user): string => $user->fullName())->values();
         $drmUsers = $accessUsers->filter(fn (User $user): bool => $user->hasRole('drm'))->values();
         $rsmIds = $drmUsers->pluck('rsm_id')->filter()->unique()->values();
@@ -376,6 +374,29 @@ class CustomerPage extends Page
 
             'photo_count' => $photoCount,
         ];
+    }
+
+    /** Build the same active Customer scope used by the list for detail reads. */
+    private function visibleCustomersQuery(): Builder
+    {
+        $user = Auth::user();
+        $roles = $user->getRoleNames()->toArray();
+        $customers = Customer::query()->where('is_active', true);
+
+        if (in_array('rsm_approver', $roles, true)) {
+            return $customers;
+        }
+
+        // Customers reported in this user's last successful pull remain in scope.
+        $pulledIds = DB::table('customer_scopes')->where('user_id', $user->id)->pluck('customer_id');
+        if (array_intersect(['rsm', 'drm_approver'], $roles) !== []) {
+            $drmIds = User::where('rsm_id', $user->id)->pluck('id');
+            $customerIds = DB::table('customer_user')->whereIn('user_id', $drmIds)->pluck('customer_id')->merge($pulledIds)->unique();
+        } else {
+            $customerIds = DB::table('customer_user')->where('user_id', $user->id)->pluck('customer_id')->merge($pulledIds)->unique();
+        }
+
+        return $customers->whereIn('customers.id', $customerIds);
     }
 
     public function closeCustomer(): void

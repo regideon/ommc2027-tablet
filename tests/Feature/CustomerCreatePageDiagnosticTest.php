@@ -1919,6 +1919,28 @@ test('Tablet Add rejects physical Region and Area Cluster selections made stale 
     expect(DB::table('customers')->count())->toBe(0);
 });
 
+test('Tablet Add rejects stale Municipality and Barangay values before inserting a Customer', function () {
+    $user = seedCustomerCreateFixtures();
+    DB::table('regions')->insert(['id' => 6, 'code' => 'OTHER', 'psgc_code' => 'OTHER-REGION', 'name' => 'Other Physical Region', 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('provinces')->insert(['id' => 6, 'region_id' => 6, 'region_specific_id' => 52, 'psgc_code' => 'OTHER-PROVINCE', 'name' => 'Other Province', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('municipalities')->insert(['id' => 6, 'psgc_code' => 'OTHER-MUNICIPALITY', 'region_id' => 6, 'province_id' => 6, 'name' => 'Other Municipality', 'enabled' => true, 'sort' => 6, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('barangays')->insert(['id' => 6, 'municipality_id' => 6, 'code' => 'other', 'name' => 'Other Barangay', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+    Http::fake();
+
+    $state = validCustomerCreateState();
+    $state['name'] = 'Stale Locality Must Not Save';
+    $state['municipality_id'] = 6;
+    $state['barangay_id'] = 6;
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set($state)
+        ->call('saveCustomer')
+        ->assertHasErrors(['municipality_id']);
+
+    expect(DB::table('customers')->where('name', 'Stale Locality Must Not Save')->exists())->toBeFalse();
+});
+
 test('Tablet Add reports controlled errors when database-backed reference sources disappear after load', function (string $table, array $fields): void {
     $user = seedCustomerCreateFixtures();
     $this->actingAs($user);

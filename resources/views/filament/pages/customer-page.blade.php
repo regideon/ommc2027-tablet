@@ -45,6 +45,8 @@
             <button
                 type="button"
                 wire:click="viewCustomer('{{ $customer->id }}')"
+                wire:loading.attr="disabled"
+                wire:target="viewCustomer"
                 class="w-full flex items-center gap-3 px-4 py-3 bg-white rounded-2xl shadow-sm text-left hover:bg-gray-50 transition-colors">
                 <div class="flex-1 min-w-0">
                     <p class="font-semibold text-[#191c1e] text-sm truncate">{{ $customerCode !== '' ? $customerCode.' - '.$customer->name : $customer->name }}</p>

@@ -7,7 +7,12 @@
                 ? '<span class="text-danger-600" data-required-indicator="true" aria-hidden="true">*</span>'
                 : '';
             $provinceOptions = $provinces->where('region_id', $physical_region_id)->where('enabled', true);
-            $municipalityOptions = $municipalities->where('region_id', $physical_region_id)->where('province_id', $province_id)->where('enabled', true);
+            $selectedProvinceBelongsToPhysicalRegion = $province_id !== null
+                && $provinceOptions->contains(fn ($province): bool => (int) $province->id === (int) $province_id);
+            $municipalityOptions = $municipalities->filter(fn ($municipality): bool => (bool) $municipality->enabled
+                && (int) $municipality->province_id === (int) $province_id
+                && ((int) $municipality->region_id === (int) $physical_region_id
+                    || ($municipality->region_id === null && $selectedProvinceBelongsToPhysicalRegion)));
             $selectedPhysicalRegionIsApplicable = $regions->contains(fn ($region): bool => (int) $region->id === (int) $physical_region_id);
             $selectedMunicipalityIsApplicable = $municipalityOptions->contains(fn ($municipality): bool => (int) $municipality->id === (int) $municipality_id);
         @endphp

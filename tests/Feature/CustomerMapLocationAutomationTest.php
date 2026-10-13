@@ -14,6 +14,13 @@ function seedMapAutomationFixture(bool $mappingComplete = true): array
 {
     $now = now();
     DB::table('companies')->insert(['id' => 1, 'name' => 'OMMC', 'code' => 'OMMC', 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('region_types')->insert([
+        ['id' => 1, 'name' => 'Metro Manila', 'sort' => 1, 'created_at' => $now, 'updated_at' => $now],
+        ['id' => 2, 'name' => 'North Luzon', 'sort' => 2, 'created_at' => $now, 'updated_at' => $now],
+        ['id' => 3, 'name' => 'South Luzon', 'sort' => 3, 'created_at' => $now, 'updated_at' => $now],
+        ['id' => 4, 'name' => 'Visayas', 'sort' => 4, 'created_at' => $now, 'updated_at' => $now],
+        ['id' => 5, 'name' => 'Mindanao', 'sort' => 5, 'created_at' => $now, 'updated_at' => $now],
+    ]);
     DB::table('regions')->insert(['id' => 7, 'code' => 'R4A', 'psgc_code' => 'TEST-REGION-7', 'name' => 'Region IV-A (CALABARZON)', 'created_at' => $now, 'updated_at' => $now]);
     DB::table('region_specifics')->insert([
         ['id' => 52, 'region_id' => 7, 'name' => 'Region IV-A (Cavite, Rizal)', 'sort' => 1, 'created_at' => $now, 'updated_at' => $now],
