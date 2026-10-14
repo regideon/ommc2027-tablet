@@ -1346,6 +1346,38 @@ test('Customer Pull rolls back a legacy-identified page when the Company referen
         ->and(DB::table('customer_user')->where('customer_id', -90020)->pluck('user_id')->all())->toBe([$this->user->id]);
 });
 
+test('Customer Pull re-applies a Company-less legacy-identified Customer without an identity conflict', function () {
+    $now = now();
+    DB::table('customers')->insert([
+        'id' => -90100,
+        'server_id' => 90100,
+        'company_id' => null,
+        'name' => 'Cached Company-less Customer',
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    $portalCustomer = ($this->customer)(90100, 'Updated Company-less Customer');
+    $portalCustomer['company_id'] = null;
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [90100],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+
+    expect(collect($steps)->pluck('success')->every(fn (bool $success): bool => $success))->toBeTrue()
+        ->and(end($steps)['done'])->toBeTrue()
+        ->and(DB::table('customers')->where('server_id', 90100)->value('name'))->toBe('Updated Company-less Customer')
+        ->and(DB::table('customers')->where('server_id', 90100)->value('company_id'))->toBeNull();
+});
+
 test('Customer Pull accepts a Customer whose non-null Company reference is unresolved locally and retains the supplied Company id', function () {
     $portalCustomer = ($this->customer)(90002, 'Customer with unresolved Company');
     $portalCustomer['company_id'] = 999;

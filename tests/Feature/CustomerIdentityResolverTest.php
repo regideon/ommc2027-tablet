@@ -129,6 +129,28 @@ test('legacy server ID matching requires corroborating Company and Customer Code
         ->and($uuidConflict->reason)->toBe('server_id_has_different_local_uuid');
 });
 
+test('legacy server ID matching corroborates Company-less Customers when Company is absent on both sides', function () {
+    $localId = insertIdentityResolverCustomer([
+        'server_id' => 72005,
+        'local_uuid' => null,
+        'unique_id' => 'COMPANY-LESS-005',
+        'company_id' => null,
+    ]);
+    $resolver = app(CustomerIdentityResolver::class);
+
+    $match = $resolver->resolve(['id' => 72005, 'local_uuid' => null, 'unique_id' => 'COMPANY-LESS-005', 'company_id' => null]);
+    $codeMismatch = $resolver->resolve(['id' => 72005, 'local_uuid' => null, 'unique_id' => 'OTHER-005', 'company_id' => null]);
+    $mixedCompany = $resolver->resolve(['id' => 72005, 'local_uuid' => null, 'unique_id' => 'COMPANY-LESS-005', 'company_id' => 7]);
+
+    expect($match->status)->toBe(CustomerIdentityResolution::MATCHED)
+        ->and($match->matchedBy)->toBe('server_id_legacy')
+        ->and($match->localId)->toBe($localId)
+        ->and($codeMismatch->status)->toBe(CustomerIdentityResolution::CONFLICT)
+        ->and($codeMismatch->reason)->toBe('legacy_server_id_identity_not_corroborated')
+        ->and($mixedCompany->status)->toBe(CustomerIdentityResolution::CONFLICT)
+        ->and($mixedCompany->reason)->toBe('legacy_server_id_identity_not_corroborated');
+});
+
 test('missing UUID cannot resolve a Push acknowledgment by numeric ID alone', function () {
     $localId = insertIdentityResolverCustomer(['company_id' => 10]);
 

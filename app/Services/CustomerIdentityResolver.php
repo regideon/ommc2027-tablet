@@ -93,9 +93,17 @@ final class CustomerIdentityResolver
 
     private function corroboratesLegacyIdentity(object $localCustomer, array $portalCustomer): bool
     {
+        // The Company must be compatible: equal ids, or absent on both sides
+        // (Company-less Customers on the Tablet and the Portal). A Company
+        // present on only one side, or two different ids, is not corroborating.
         $portalCompanyId = $portalCustomer['company_id'] ?? null;
-        if ($portalCompanyId === null || $localCustomer->company_id === null
-            || (int) $localCustomer->company_id !== (int) $portalCompanyId) {
+        $localCompanyId = $localCustomer->company_id;
+
+        if (($portalCompanyId === null) !== ($localCompanyId === null)) {
+            return false;
+        }
+
+        if ($portalCompanyId !== null && (int) $localCompanyId !== (int) $portalCompanyId) {
             return false;
         }
 
