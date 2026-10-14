@@ -36,6 +36,7 @@ use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -115,6 +116,45 @@ class SyncService
             || $pendingOrRetryable(Training::query())->exists()
             || $pendingOrRetryable(TrainingAttachment::query())->exists()
             || $pendingOrRetryable(CustomerNote::query())->exists();
+    }
+
+    public function retryFailedExpenseAttachment(int $attachmentId): SyncResult
+    {
+        $attachment = ExpenseAttachment::with('expense')->find($attachmentId);
+
+        if (! $attachment || $attachment->sync_status !== 'failed') {
+            return SyncResult::fail('This Expense attachment is no longer available for retry.', 'not_retryable');
+        }
+
+        if (! $attachment->expense?->server_id) {
+            return SyncResult::fail('Sync the Expense before retrying its attachment.', 'expense_not_synced');
+        }
+
+        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
+
+        if (! $user || blank($user->api_token)) {
+            return SyncResult::fail('No API token found. Please log in first.', 'no_token');
+        }
+
+        $result = $this->pushExpenseAttachmentItem($this->client($user->api_token), $attachment);
+
+        if ($result instanceof SyncResult) {
+            return $result;
+        }
+
+        if ($result['busy'] ?? false) {
+            return SyncResult::fail('This Expense attachment is already being retried.', 'retry_in_progress');
+        }
+
+        if (! $result['success']) {
+            $message = ($result['reason'] ?? null) === 'local_file_missing'
+                ? 'The local Expense attachment file is missing. Restore the file before retrying.'
+                : 'Expense attachment retry failed. The failure details are saved and the attachment can be retried.';
+
+            return SyncResult::fail($message, $result['reason'] ?? 'push_failed', 0, 1, 1, [$result['reason'] ?? 'push_failed']);
+        }
+
+        return SyncResult::ok('Expense attachment synchronized.', 1);
     }
 
     /**
@@ -2370,6 +2410,10 @@ class SyncService
                     return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
                 }
 
+                if ($result['busy'] ?? false) {
+                    continue;
+                }
+
                 if ($result['success']) {
                     $pushed++;
                 } else {
@@ -4102,7 +4146,40 @@ class SyncService
      */
     private function pushExpenseAttachmentItem(PendingRequest $client, ExpenseAttachment $attachment): array|SyncResult
     {
+        $lock = Cache::lock('expense-attachment-sync:'.$attachment->id, 180);
+
+        if (! $lock->get()) {
+            return ['success' => false, 'reason' => 'retry_in_progress', 'busy' => true];
+        }
+
         try {
+            $attachment->refresh()->load('expense');
+
+            if ($attachment->sync_status === 'synced') {
+                return ['success' => true];
+            }
+
+            return $this->uploadExpenseAttachmentItem($client, $attachment);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * @return array{success: bool, reason?: string}|SyncResult
+     */
+    private function uploadExpenseAttachmentItem(PendingRequest $client, ExpenseAttachment $attachment): array|SyncResult
+    {
+        try {
+            if (! $attachment->expense || ! $attachment->expense->server_id) {
+                $this->recordItemFailure($attachment, 'expense_not_synced', 'The associated Expense is not available on Portal yet.', [
+                    'stage' => 'expense-attachment:expense',
+                    'endpoint' => '/api/sync/push/expense-attachment',
+                ]);
+
+                return ['success' => false, 'reason' => 'expense_not_synced'];
+            }
+
             if (! $this->isReadableLocalFile($attachment->local_path)) {
                 $this->recordItemFailure($attachment, 'local_file_missing', 'local_file_missing: '.$this->displayPath($attachment->local_path), [
                     'stage' => 'expense-attachment:local-file',
@@ -4947,7 +5024,7 @@ class SyncService
             return SyncResult::fail(
                 $retryable > 0
                     ? ($failed === 1 ? '1 item could not be uploaded and will retry later.' : "{$failed} items could not be uploaded and will retry later.")
-                    : ($failed === 1 ? '1 item failed and reached its automatic retry limit. Correct and save it before using Retry Customer.' : "{$failed} items failed and reached their automatic retry limit. Correct and save them before using Retry Customer."),
+                    : ($failed === 1 ? '1 item failed and reached its automatic retry limit. Review the item and use its available recovery action.' : "{$failed} items failed and reached their automatic retry limit. Review each item and use its available recovery action."),
                 'push_failed',
                 0,
                 $failed,

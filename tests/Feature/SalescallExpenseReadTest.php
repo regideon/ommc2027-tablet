@@ -5,6 +5,7 @@ use App\Filament\Pages\ExpensePage;
 use App\Filament\Pages\SalescallPage;
 use App\Models\Customer;
 use App\Models\Expense;
+use App\Models\ExpenseAttachment;
 use App\Models\ExpenseType;
 use App\Models\Salescall;
 use App\Models\User;
@@ -14,6 +15,7 @@ use App\Services\SyncService;
 use App\Support\ExpensePaymentType;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
@@ -426,6 +428,126 @@ test('contextual expense reads reject Sales Calls outside the viewers visibility
 
     expect(fn () => app(ExpenseReadService::class)->forSalescall($otherCall->id))
         ->toThrow(HttpException::class);
+});
+
+test('exhausted Expense attachment retries can be manually recovered through the existing Portal endpoint', function () {
+    config(['sync.server_url' => 'https://portal.example.test']);
+    Storage::fake('local');
+    Storage::disk('local')->put('expense-receipts/receipt.png', 'receipt-bytes');
+    Http::fake([
+        'portal.example.test/api/sync/salescalls/900/expenses' => Http::response(['expenses' => []]),
+        'portal.example.test/api/sync/push/expense-attachment' => Http::response([
+            'server_id' => 880,
+            'storage_key' => 'expenses/880/receipt.png',
+            'mime_type' => 'image/png',
+            'extension' => 'png',
+            'byte_size' => 13,
+        ]),
+    ]);
+
+    $salescall = omExpenseReadCreateSalescall($this->customer, $this->user, 900);
+    $expense = omExpenseReadCreateExpense($salescall, $this->customer, $this->expenseType, $this->user, [
+        'server_id' => 700,
+        'sync_status' => 'synced',
+    ]);
+    $attachment = ExpenseAttachment::create([
+        'local_uuid' => (string) str()->uuid(),
+        'expense_id' => $expense->id,
+        'local_path' => Storage::disk('local')->path('expense-receipts/receipt.png'),
+        'original_name' => 'receipt.png',
+        'sync_status' => 'failed',
+        'sync_attempts' => 3,
+        'sync_error' => 'portal_upload_failed: previous upload failed',
+    ]);
+
+    $readExpense = app(ExpenseReadService::class)->forSalescall($salescall->id)->first();
+    expect(app(SyncService::class)->hasPendingChanges())->toBeFalse()
+        ->and($readExpense['attachment_sync_status'])->toBe('failed')
+        ->and($readExpense['attachments_required'])->toBeTrue();
+    $result = app(ExpenseReadService::class)->retryAttachmentForVisibleExpense($this->user, $attachment->id);
+
+    expect($result->success)->toBeTrue()
+        ->and($attachment->fresh()->sync_status)->toBe('synced')
+        ->and($attachment->fresh()->server_id)->toBe(880)
+        ->and($attachment->fresh()->sync_attempts)->toBe(3)
+        ->and($attachment->fresh()->sync_error)->toBeNull();
+    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/api/sync/push/expense-attachment')
+        && $request->isMultipart());
+});
+
+test('failed and missing-file Expense attachment retries remain failed and report their reason', function () {
+    config(['sync.server_url' => 'https://portal.example.test']);
+    Storage::fake('local');
+    Storage::disk('local')->put('expense-receipts/receipt.png', 'receipt-bytes');
+    Http::fake([
+        'portal.example.test/api/sync/push/expense-attachment' => Http::sequence()
+            ->push(['message' => 'temporary outage'], 503)
+            ->push(['server_id' => 881], 200),
+    ]);
+
+    $salescall = omExpenseReadCreateSalescall($this->customer, $this->user);
+    $expense = omExpenseReadCreateExpense($salescall, $this->customer, $this->expenseType, $this->user, ['server_id' => 700, 'sync_status' => 'synced']);
+    $attachment = ExpenseAttachment::create([
+        'local_uuid' => (string) str()->uuid(),
+        'expense_id' => $expense->id,
+        'local_path' => Storage::disk('local')->path('expense-receipts/receipt.png'),
+        'original_name' => 'receipt.png',
+        'sync_status' => 'failed',
+        'sync_attempts' => 3,
+        'sync_error' => 'previous failure detail',
+    ]);
+
+    $failed = app(SyncService::class)->retryFailedExpenseAttachment($attachment->id);
+    expect($failed->success)->toBeFalse()
+        ->and($attachment->fresh()->sync_status)->toBe('failed')
+        ->and($attachment->fresh()->sync_attempts)->toBe(4)
+        ->and($attachment->fresh()->sync_error)->toContain('temporary outage');
+
+    $recovered = app(SyncService::class)->retryFailedExpenseAttachment($attachment->id);
+    expect($recovered->success)->toBeTrue()
+        ->and($attachment->fresh()->sync_status)->toBe('synced')
+        ->and($attachment->fresh()->server_id)->toBe(881);
+
+    $missingAttachment = ExpenseAttachment::create([
+        'local_uuid' => (string) str()->uuid(),
+        'expense_id' => $expense->id,
+        'local_path' => Storage::disk('local')->path('expense-receipts/missing.png'),
+        'original_name' => 'missing.png',
+        'sync_status' => 'failed',
+        'sync_attempts' => 3,
+    ]);
+    $missing = app(SyncService::class)->retryFailedExpenseAttachment($missingAttachment->id);
+    expect($missing->success)->toBeFalse()
+        ->and($missingAttachment->fresh()->sync_status)->toBe('failed')
+        ->and($missingAttachment->fresh()->sync_error)->toContain('local_file_missing');
+    Http::assertSentCount(2);
+});
+
+test('Expense attachment retry is blocked while another sync owns its lock', function () {
+    config(['sync.server_url' => 'https://portal.example.test']);
+    $salescall = omExpenseReadCreateSalescall($this->customer, $this->user);
+    $expense = omExpenseReadCreateExpense($salescall, $this->customer, $this->expenseType, $this->user, ['server_id' => 700, 'sync_status' => 'synced']);
+    $attachment = ExpenseAttachment::create([
+        'local_uuid' => (string) str()->uuid(),
+        'expense_id' => $expense->id,
+        'local_path' => '/does/not/matter/while-locked.png',
+        'original_name' => 'receipt.png',
+        'sync_status' => 'failed',
+        'sync_attempts' => 3,
+    ]);
+    $lock = Cache::lock('expense-attachment-sync:'.$attachment->id, 180);
+    expect($lock->get())->toBeTrue();
+
+    try {
+        $result = app(SyncService::class)->retryFailedExpenseAttachment($attachment->id);
+    } finally {
+        $lock->release();
+    }
+
+    expect($result->success)->toBeFalse()
+        ->and($result->errorCode)->toBe('retry_in_progress')
+        ->and($attachment->fresh()->sync_attempts)->toBe(3);
+    Http::assertNothingSent();
 });
 
 test('Expense navigation opens a shared global list scoped to the RSM team', function () {

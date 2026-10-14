@@ -6,10 +6,12 @@ use App\Models\Expense;
 use App\Models\ExpenseAttachment;
 use App\Models\Salescall;
 use App\Models\User;
+use App\Support\ExpenseAmountLimit;
 use App\Support\ExpensePaymentType;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\File;
+use Illuminate\Validation\ValidationException;
 use Throwable;
 
 class ExpenseReadService
@@ -76,6 +78,20 @@ class ExpenseReadService
         return $this->globalReadFailed;
     }
 
+    public function retryAttachmentForVisibleExpense(User $viewer, int $attachmentId): SyncResult
+    {
+        $attachment = ExpenseAttachment::with('expense.salescall')->findOrFail($attachmentId);
+        $expense = $attachment->expense;
+
+        abort_unless($expense && $this->visibleSalescallsQuery($viewer)->whereKey($expense->salescall_id)->exists(), 403);
+
+        if ($attachment->sync_status !== 'failed') {
+            throw ValidationException::withMessages(['attachment' => 'Only failed Expense attachments can be retried.']);
+        }
+
+        return $this->syncService->retryFailedExpenseAttachment($attachment->id);
+    }
+
     /**
      * @param  Collection<int, Expense>  $localExpenses
      * @param  array<int, array<string, mixed>>  $serverExpenses
@@ -107,6 +123,16 @@ class ExpenseReadService
     /** @return array<string, mixed> */
     private function mapLocalExpense(Expense $expense): array
     {
+        $attachments = $expense->attachments->map(fn (ExpenseAttachment $attachment): array => [
+            'id' => $attachment->id,
+            'original_name' => $attachment->original_name,
+            'mime_type' => $attachment->mime_type,
+            'byte_size' => $attachment->byte_size,
+            'url' => $this->expenseAttachmentUrlFor($attachment),
+            'sync_status' => $attachment->sync_status,
+            'sync_error' => $attachment->sync_error,
+        ])->values()->all();
+
         return [
             'id' => $expense->id,
             'server_id' => $expense->server_id,
@@ -135,14 +161,35 @@ class ExpenseReadService
             'approved' => $expense->approved,
             'approver_remarks' => $expense->approver_remarks,
             'sync_status' => $expense->sync_status,
-            'attachments' => $expense->attachments->map(fn (ExpenseAttachment $attachment): array => [
-                'id' => $attachment->id,
-                'original_name' => $attachment->original_name,
-                'mime_type' => $attachment->mime_type,
-                'byte_size' => $attachment->byte_size,
-                'url' => $this->expenseAttachmentUrlFor($attachment),
-            ])->values()->all(),
+            'attachments_required' => $this->attachmentsRequired($expense),
+            'attachment_sync_status' => collect($attachments)->contains(fn (array $attachment): bool => $attachment['sync_status'] !== 'synced')
+                ? (collect($attachments)->contains(fn (array $attachment): bool => $attachment['sync_status'] === 'failed') ? 'failed' : 'pending')
+                : 'synced',
+            'attachments' => $attachments,
         ];
+    }
+
+    private function attachmentsRequired(Expense $expense): bool
+    {
+        if ($expense->payment_type === 'SBC Credit Card') {
+            return true;
+        }
+
+        $code = $expense->expenseType?->code;
+        $amount = (string) $expense->amount;
+
+        if ($code === 'lodging') {
+            return ExpenseAmountLimit::exceeds($amount, '500.00');
+        }
+
+        if ($code === 'per_diem') {
+            $creator = $expense->creator;
+            $limit = $creator?->hasRole('rsm') ? '450.00' : ($creator?->hasRole('drm') ? '320.00' : null);
+
+            return $limit === null || ExpenseAmountLimit::exceeds($amount, $limit);
+        }
+
+        return true;
     }
 
     private function expenseAttachmentUrlFor(ExpenseAttachment $attachment): ?string

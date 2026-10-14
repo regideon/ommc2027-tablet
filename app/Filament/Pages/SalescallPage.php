@@ -165,6 +165,21 @@ class SalescallPage extends Page
         $this->callExpenses = $expenseReadService->forSalescall($salescallId)->all();
     }
 
+    public function retryExpenseAttachment(int $attachmentId, ExpenseReadService $expenseReadService): void
+    {
+        $result = $expenseReadService->retryAttachmentForVisibleExpense(auth()->user(), $attachmentId);
+
+        Notification::make()
+            ->title($result->message)
+            ->color($result->success ? 'success' : 'danger')
+            ->send();
+
+        $selectedSalescallId = (int) ($this->callExpenses[0]['salescall_id'] ?? 0);
+        if ($selectedSalescallId > 0) {
+            $this->loadExpenses($selectedSalescallId, $expenseReadService);
+        }
+    }
+
     private function allPhotoTypesCovered(Collection $coveredTypeIds): bool
     {
         $totalTypes = SalescallImageType::count();
