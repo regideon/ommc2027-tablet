@@ -55,7 +55,7 @@ class SyncService
     /** Local customer edits in these states must not be overwritten by a pull. */
     private const PROTECTED_CUSTOMER_STATUSES = ['pending', 'failed', 'conflict'];
 
-    private const CUSTOMER_PULL_PAGE_SIZE = 500;
+    private const CUSTOMER_PULL_PAGE_SIZE = 100;
 
     private const CUSTOMER_PULL_IDS_PER_REQUEST = 200;
 

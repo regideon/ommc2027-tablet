@@ -110,7 +110,7 @@ test('a first customer pull fetches locations, pages through customers and recor
         ->and(end($steps))->toMatchArray(['done' => true, 'pulled' => 3, 'returned' => 3, 'total' => 3])
         ->and(end($steps)['message'])->toContain('3 returned; 3 inserted, 0 changed, 0 unchanged, 0 rejected')
         ->and(collect($this->requests)->pluck('path')->all())->toBe(['/api/sync/pull/locations', '/api/sync/pull/customers', '/api/sync/pull/customers'])
-        ->and($this->requests[1]['query'])->toBe(['after_id' => '0', 'limit' => '500'])
+        ->and($this->requests[1]['query'])->toBe(['after_id' => '0', 'limit' => '100'])
         ->and(DB::table('municipalities')->count())->toBe(1)
         ->and(DB::table('customers')->whereIn('server_id', [1, 2, 3])->where('is_active', true)->count())->toBe(3)
         ->and(DB::table('customer_category_histories')->where('customer_id', 2)->value('category'))->toBe('AB Loyal')
