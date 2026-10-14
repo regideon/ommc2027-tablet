@@ -908,14 +908,25 @@ class SyncService
 
     private function customerPullExceptionMessage(Throwable $exception, string $stage, string $reference): string
     {
-        $reason = match ($exception->getMessage()) {
+        $rawMessage = $exception->getMessage();
+
+        $reason = match ($rawMessage) {
             'A Portal Customer has no valid required Company ID.' => 'A Portal Customer has no valid required Company ID.',
             default => $stage === 'customer_page_transaction'
                 ? 'The returned Customer page could not be safely applied; its local transaction was rolled back.'
                 : 'The Customer page could not be validated against local reference data.',
         };
 
-        return "Customer Pull failed during {$stage}. {$reason} Reference: {$reference}.";
+        $message = "Customer Pull failed during {$stage}. {$reason}";
+        // Controlled Portal-side reasons (identity conflicts, duplicate or
+        // invalid reference data) are surfaced verbatim so the failure is
+        // diagnosable from the device screen. Unexpected framework/database
+        // errors stay generic.
+        if (str_starts_with($rawMessage, 'Portal ') && ! str_contains($reason, $rawMessage)) {
+            $message .= ' ('.substr($rawMessage, 0, 300).')';
+        }
+
+        return $message." Reference: {$reference}.";
     }
 
     /**
