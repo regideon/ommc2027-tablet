@@ -45,7 +45,6 @@ final class CustomerAggregateReconciler
         ?int $expectedLocalId = null,
         ?string $expectedFingerprint = null,
         bool $requireCompleteContract = false,
-        ?CustomerIdentityResolution $identity = null,
     ): array {
         $customers = $aggregate['customers'] ?? null;
         if (! is_array($customers) || count($customers) !== 1 || ! is_array($customers[0])) {
@@ -75,8 +74,8 @@ final class CustomerAggregateReconciler
             throw new RuntimeException('Complete Portal Customer snapshot omitted its Access or PIC identity data.');
         }
 
-        return DB::transaction(function () use ($aggregate, $customer, $localUserIdsByEmail, $expectedLocalId, $expectedFingerprint, $complete, $identity): array {
-            $identity ??= $this->identityResolver->resolve($customer, $expectedLocalId);
+        return DB::transaction(function () use ($aggregate, $customer, $localUserIdsByEmail, $expectedLocalId, $expectedFingerprint, $complete): array {
+            $identity = $this->identityResolver->resolve($customer, $expectedLocalId);
             if ($identity->isConflict() || $identity->localId === null) {
                 throw new RuntimeException('Portal Customer identity conflict: '.($identity->reason ?? 'unresolved').'.');
             }
