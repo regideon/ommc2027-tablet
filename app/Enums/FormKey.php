@@ -51,7 +51,7 @@ enum FormKey: string
                 'available' => true,
             ],
             self::TRADE_REQUEST->value => [
-                'title' => 'Trade Request',
+                'title' => 'CRR - LSM',
                 'icon' => 'heroicon-o-shopping-bag',
                 'available' => true,
             ],
