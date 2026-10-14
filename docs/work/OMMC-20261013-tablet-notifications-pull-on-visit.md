@@ -2,7 +2,7 @@
 
 - **Title:** Tablet — Pull notifications on page visit only, not during sync pull
 - **Repository role:** Tablet `ommc2027-tablet` only. No Portal changes.
-- **State:** `ACTIVE`
+- **State:** `READY_FOR_TERMINAL_REVIEW`
 - **Design basis:** Human instruction, 2026-10-13: remove the notification
   pull from `SyncService` (the sync flow) and pull when the notifications
   page is visited.
@@ -53,17 +53,37 @@ authorization: none. No commit or push performed.
 
 ## Validation evidence
 
-Pending — implementation in progress.
+- TDD: the schedule-pull test was changed first to require that
+  `/api/sync/pull/notifications` is never called during `pull()` and
+  watched failing ("Unexpected request was recorded") before the removal.
+- Focused: `php artisan test --compact
+  tests/Feature/SyncNotificationsTest.php` → **6 passed (18 assertions)**;
+  `tests/Feature/NotificationsPageTest.php tests/Feature/NotificationsBellTest.php`
+  → **12 passed (22 assertions)** (includes the new page-visit pull test).
+- Full suite: `php -d memory_limit=512M vendor/bin/pest --compact` →
+  **613 passed, 23 failed, 4 skipped (4685 assertions)**. The 23 failures
+  are the same pre-existing set established on this branch tip
+  (`c812058`): 13 documented environment-dependent failures plus 10
+  post-merge `main` customer/sync failures that were reproduced on
+  pristine `HEAD` during the CRR/Giveaway Work; none relate to this
+  change.
+- `vendor/bin/pint --dirty --format agent` → passed.
 
 ## Manual acceptance
 
-Pending.
+Pending. Requires the Human to confirm in runtime:
+
+- Sales call / customers / login pulls no longer fetch notifications
+  (the sync completes as before).
+- Opening the notifications page pulls and displays new notifications.
 
 ## Blockers and remaining work
 
-- No blockers.
+- No blockers. Implementation and validation complete; manual acceptance
+  remains pending the Human's runtime check.
 - Terminal delivery awaits separate explicit Human authorization.
 
 ## Delivery evidence status
 
-None.
+None. Local implementation only; no commits, pushes, or database
+mutations performed for this Work.
