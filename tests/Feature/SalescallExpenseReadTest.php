@@ -15,6 +15,7 @@ use App\Support\ExpensePaymentType;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role;
@@ -127,6 +128,13 @@ test('new Expense form sanitizes a shared decimal Amount input before submitting
         ->and($view)->toContain("'Amount must be greater than zero.'")
         ->and($view)->toContain('input.setCustomValidity(')
         ->and($view)->toContain('if (!this.$refs.expenseEntryForm.reportValidity()) return;')
+        ->and($view)->toContain('lodgingConfirmationPending = true;')
+        ->and($view)->toContain('>No</button>')
+        ->and($view)->toContain('@click="lodgingConfirmationPending = false"')
+        ->and($view)->toContain('>Yes</button>')
+        ->and($view)->toContain('@click="saveExpenseForm(true)"')
+        ->and($view)->toContain('this.expenseForm.form_data.lodging_budget_confirmed = true;')
+        ->and($view)->toContain('expenseAmountExceeds(this.expenseForm.amount, \'500.00\')')
         ->and($view)->toContain('<form x-ref="expenseEntryForm" @submit.prevent="saveExpenseForm()"')
         ->and(strpos($view, 'reportValidity()'))->toBeLessThan(strpos($view, '$wire.saveExpense('))
         ->and($view)->not->toContain('type="number" min="0.01" step="0.01" required x-model="expenseForm.amount"')
@@ -214,6 +222,10 @@ test('new Expense creation enforces the common Amount rule for Per Diem Lodging 
             $expense = $service->createFromSalescall($salescall, $this->user, $base + [
                 'expense_type_code' => $expenseTypeCode,
                 'amount' => $amount,
+                'attachments' => [[
+                    'data' => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/c+8AAAAASUVORK5CYII=',
+                    'original_name' => 'receipt.png',
+                ]],
             ]);
             expect($expense->payment_remarks)->toBeNull();
         }
@@ -232,6 +244,118 @@ test('new Expense creation enforces the common Amount rule for Per Diem Lodging 
     expect(Expense::query()->count())->toBe($countBeforeInvalidAmounts);
 });
 
+test('local Expense creation enforces Per Diem caps and TIN and attachment exceptions', function () {
+    $this->user->assignRole(Role::create(['name' => 'drm', 'guard_name' => 'web']));
+    $salescall = omExpenseReadCreateSalescall($this->customer, $this->user);
+    $service = app(LocalExpenseCreationService::class);
+    $base = [
+        'date_filed' => '2026-10-14',
+        'payment_type' => 'Cash',
+        'invoice_number' => 'INV-1',
+        'establishment' => 'Shop',
+        'location' => 'Manila',
+        'purpose' => 'Business expense',
+        'tin' => null,
+    ];
+
+    $drmAccepted = $service->createFromSalescall($salescall, $this->user, $base + [
+        'expense_type_code' => 'per_diem',
+        'amount' => '320.00',
+    ]);
+    expect($drmAccepted->amount)->toBe('320.0000')
+        ->and($drmAccepted->tin)->toBeNull()
+        ->and($drmAccepted->attachments)->toBeEmpty();
+
+    $beforeRejected = Expense::query()->count();
+    expect(fn () => $service->createFromSalescall($salescall, $this->user, $base + [
+        'expense_type_code' => 'per_diem',
+        'amount' => '320.01',
+    ]))->toThrow(ValidationException::class);
+    expect(Expense::query()->count())->toBe($beforeRejected);
+
+    $this->user->assignRole(Role::create(['name' => 'rsm', 'guard_name' => 'web']));
+    $rsmAccepted = $service->createFromSalescall($salescall, $this->user, $base + [
+        'expense_type_code' => 'per_diem',
+        'amount' => '450.00',
+    ]);
+    expect($rsmAccepted->amount)->toBe('450.0000');
+
+    $beforeRejected = Expense::query()->count();
+    expect(fn () => $service->createFromSalescall($salescall, $this->user, $base + [
+        'expense_type_code' => 'per_diem',
+        'amount' => '450.01',
+    ]))->toThrow(ValidationException::class);
+    expect(Expense::query()->count())->toBe($beforeRejected);
+});
+
+test('local Expense creation requires Lodging confirmation and applies TIN and attachment thresholds', function () {
+    Storage::fake('local');
+    $salescall = omExpenseReadCreateSalescall($this->customer, $this->user);
+    $service = app(LocalExpenseCreationService::class);
+    $base = [
+        'expense_type_code' => 'lodging',
+        'date_filed' => '2026-10-14',
+        'payment_type' => 'Cash',
+        'invoice_number' => 'INV-LODGE',
+        'establishment' => 'Hotel',
+        'location' => 'Manila',
+        'purpose' => 'Business expense',
+        'tin' => null,
+        'form_data' => [],
+    ];
+
+    $accepted = $service->createFromSalescall($salescall, $this->user, $base + ['amount' => '500.00']);
+    expect($accepted->tin)->toBeNull()
+        ->and($accepted->attachments)->toBeEmpty();
+
+    $beforeRejected = Expense::query()->count();
+    expect(fn () => $service->createFromSalescall($salescall, $this->user, $base + ['amount' => '500.01']))
+        ->toThrow(ValidationException::class);
+    expect(Expense::query()->count())->toBe($beforeRejected);
+
+    $confirmedWithoutTin = $base;
+    $confirmedWithoutTin['amount'] = '500.01';
+    $confirmedWithoutTin['form_data'] = ['lodging_budget_confirmed' => true];
+    expect(fn () => $service->createFromSalescall($salescall, $this->user, $confirmedWithoutTin))
+        ->toThrow(ValidationException::class);
+    expect(Expense::query()->count())->toBe($beforeRejected);
+
+    $confirmedWithoutAttachment = $confirmedWithoutTin;
+    $confirmedWithoutAttachment['tin'] = 'TIN-1';
+    expect(fn () => $service->createFromSalescall($salescall, $this->user, $confirmedWithoutAttachment))
+        ->toThrow(ValidationException::class);
+    expect(Expense::query()->count())->toBe($beforeRejected);
+
+    $confirmed = $confirmedWithoutAttachment;
+    $confirmed['attachments'] = [[
+        'data' => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/c+8AAAAASUVORK5CYII=',
+        'original_name' => 'receipt.png',
+    ]];
+    $confirmedExpense = $service->createFromSalescall($salescall, $this->user, $confirmed);
+    expect($confirmedExpense->amount)->toBe('500.0100')
+        ->and($confirmedExpense->form_data['lodging_budget_confirmed'])->toBeTrue()
+        ->and($confirmedExpense->attachments)->toHaveCount(1);
+});
+
+test('local Expense creation always requires an attachment for SBC Credit Card', function () {
+    $salescall = omExpenseReadCreateSalescall($this->customer, $this->user);
+    $base = [
+        'expense_type_code' => 'lodging',
+        'amount' => '10.00',
+        'date_filed' => '2026-10-14',
+        'payment_type' => 'SBC Credit Card',
+        'invoice_number' => 'INV-SBC',
+        'establishment' => 'Hotel',
+        'location' => 'Manila',
+        'purpose' => 'Business expense',
+        'tin' => null,
+    ];
+
+    expect(fn () => app(LocalExpenseCreationService::class)->createFromSalescall($salescall, $this->user, $base))
+        ->toThrow(ValidationException::class);
+    expect(Expense::query()->count())->toBe(0);
+});
+
 test('pending historical Petty Cash syncs as PCV while retaining its old remarks and raw local value', function () {
     config(['sync.server_url' => 'https://portal.example.test']);
     $salescall = omExpenseReadCreateSalescall($this->customer, $this->user, 901);
@@ -245,6 +369,7 @@ test('pending historical Petty Cash syncs as PCV while retaining its old remarks
 
     Http::assertSent(fn ($request): bool => $request->url() === 'https://portal.example.test/api/sync/push/expense'
         && $request['payment_type'] === 'Petty Cash Voucher (PCV)'
+        && $request['attachment_count'] === 0
         && $request['payment_remarks'] === 'Legacy pending remarks');
     expect($expense->fresh()->payment_type)->toBe('Petty Cash')
         ->and($expense->fresh()->payment_remarks)->toBe('Legacy pending remarks');

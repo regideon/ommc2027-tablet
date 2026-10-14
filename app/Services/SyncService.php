@@ -2320,6 +2320,7 @@ class SyncService
                         'longitude' => $expense->longitude,
                         'form_data' => $expense->form_data,
                         'form_schema_version' => $expense->form_schema_version,
+                        'attachment_count' => $expense->attachments()->count(),
                     ]);
 
                     if ($response->status() === 401) {
