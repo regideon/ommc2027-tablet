@@ -1300,7 +1300,7 @@ test('Customer Pull rejects malformed non-null Company IDs before persisting the
     'nonnumeric string' => ['not-a-company-id'],
 ]);
 
-test('Customer Pull rolls back a page with an invalid non-null Company without changing cached Customer or Access', function () {
+test('Customer Pull rolls back a legacy-identified page when the Company reference no longer corroborates', function () {
     $now = now();
     DB::table('customers')->insert([
         'id' => -90020,
@@ -1335,7 +1335,8 @@ test('Customer Pull rolls back a page with an invalid non-null Company without c
     $failure = end($steps);
 
     expect($failure['success'])->toBeFalse()
-        ->and($failure['message'])->toContain('required Company is unavailable on this device')
+        ->and($failure['message'])->toContain('customer_page_transaction')
+        ->toContain('local transaction was rolled back')
         ->and(DB::table('customers')->where('id', -90020)->first())->toMatchArray([
             'server_id' => 90020,
             'company_id' => 1,
@@ -1345,7 +1346,7 @@ test('Customer Pull rolls back a page with an invalid non-null Company without c
         ->and(DB::table('customer_user')->where('customer_id', -90020)->pluck('user_id')->all())->toBe([$this->user->id]);
 });
 
-test('Customer Pull rejects a Customer whose non-null Company reference is unresolved locally', function () {
+test('Customer Pull accepts a Customer whose non-null Company reference is unresolved locally and retains the supplied Company id', function () {
     $portalCustomer = ($this->customer)(90002, 'Customer with unresolved Company');
     $portalCustomer['company_id'] = 999;
     ($this->fakePortal)([
@@ -1359,18 +1360,11 @@ test('Customer Pull rejects a Customer whose non-null Company reference is unres
     ]);
 
     $steps = ($this->runToCompletion)();
-    $customerFailure = end($steps);
 
-    expect($customerFailure)->toMatchArray([
-        'success' => false,
-        'done' => false,
-        'customer_pull_succeeded' => false,
-        'location_pull_succeeded' => true,
-        'location_refresh_failed' => false,
-        'full_sync_succeeded' => false,
-    ])->and($customerFailure['message'])->toContain('required Company is unavailable on this device')
-        ->and($customerFailure)->toMatchArray(['returned' => 1, 'inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'rejected' => 1])
-        ->and(DB::table('customers')->where('server_id', 90002)->exists())->toBeFalse();
+    expect(collect($steps)->pluck('success')->every(fn (bool $success): bool => $success))->toBeTrue()
+        ->and(end($steps)['done'])->toBeTrue()
+        ->and(DB::table('customers')->where('server_id', 90002)->value('company_id'))->toBe(999)
+        ->and(DB::table('customers')->where('server_id', 90002)->value('name'))->toBe('Customer with unresolved Company');
 });
 
 test('Customer Pull and location refresh failures are independently reported', function () {

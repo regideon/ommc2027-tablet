@@ -910,7 +910,6 @@ class SyncService
     {
         $reason = match ($exception->getMessage()) {
             'A Portal Customer has no valid required Company ID.' => 'A Portal Customer has no valid required Company ID.',
-            'A required Company is unavailable on this device. Refresh Portal lookups before retrying.' => 'A required Company is unavailable on this device. Refresh Portal lookups before retrying.',
             default => $stage === 'customer_page_transaction'
                 ? 'The returned Customer page could not be safely applied; its local transaction was rolled back.'
                 : 'The Customer page could not be validated against local reference data.',
@@ -1211,44 +1210,23 @@ class SyncService
     }
 
     /**
-     * Customer Pull may proceed without a valid location snapshot, but any
-     * non-null Company relationship must resolve locally before we persist it.
+     * A non-null Company ID must be well-formed, but it is retained as supplied
+     * even when its local reference row is unavailable — the same policy as the
+     * location fields — so an unresolvable Company never fails a Customer page.
      * A missing Company ID field is treated as null: the Customer is pulled as
-     * Company-less. Location fields are optional scalar IDs and are retained as
-     * supplied even if their local reference rows are unavailable.
+     * Company-less.
      *
      * @param  array<string, mixed>  $data
      */
     private function validateCustomerPullRequiredReferences(array $data): void
     {
-        $customers = $data['customers'] ?? [];
-        if ($customers === []) {
-            return;
-        }
-
-        $companyIds = [];
-        foreach ($customers as $customer) {
+        foreach ($data['customers'] ?? [] as $customer) {
             $companyId = $customer['company_id'] ?? null;
             if ($companyId === null) {
                 continue;
             }
             if ((! is_int($companyId) && (! is_string($companyId) || ! ctype_digit($companyId))) || (int) $companyId < 1) {
                 throw new \RuntimeException('A Portal Customer has no valid required Company ID.');
-            }
-            $companyIds[(int) $companyId] = true;
-        }
-
-        $payloadCompanyIds = array_fill_keys(array_map(
-            static fn (array $company): int => (int) ($company['id'] ?? 0),
-            $data['companies'] ?? [],
-        ), true);
-        $localCompanyIds = DB::table('companies')->whereIn('id', array_keys($companyIds))->pluck('id')
-            ->mapWithKeys(static fn ($id): array => [(int) $id => true])->all();
-        $availableCompanyIds = $payloadCompanyIds + $localCompanyIds;
-
-        foreach (array_keys($companyIds) as $companyId) {
-            if (! isset($availableCompanyIds[$companyId])) {
-                throw new \RuntimeException('A required Company is unavailable on this device. Refresh Portal lookups before retrying.');
             }
         }
     }
