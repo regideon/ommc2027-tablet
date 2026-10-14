@@ -191,3 +191,70 @@ test('completing a visit requires an image when the rep has no region type', fun
 
     expect($salescall->fresh()->status)->toBe('completed');
 });
+
+test('the photo requirement follows the rep\'s region type flag', function () {
+    $requiredType = RegionType::create(['name' => 'Metro Manila', 'sort' => 1, 'is_image_required' => true]);
+    $this->actingAs(User::factory()->create(['region_type_id' => $requiredType->id]));
+
+    Livewire::test(SalescallPage::class)
+        ->assertSet('photoRequired', true);
+
+    $exemptType = RegionType::create(['name' => 'IB Team', 'sort' => 2, 'is_image_required' => false]);
+    $this->actingAs(User::factory()->create(['region_type_id' => $exemptType->id]));
+
+    Livewire::test(SalescallPage::class)
+        ->assertSet('photoRequired', false);
+
+    $this->actingAs(User::factory()->create(['region_type_id' => null]));
+
+    Livewire::test(SalescallPage::class)
+        ->assertSet('photoRequired', true);
+});
+
+test('the page tracks whether the selected sales call has a photo without counting other calls\' photos', function () {
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    $salescall = makeRegionTypeSalescall($user);
+    $otherSalescall = makeRegionTypeSalescall($user);
+
+    SalescallImage::create([
+        'salescall_id' => $otherSalescall->id,
+        'salescall_image_type_id' => 1,
+        'local_path' => '/tmp/photo.jpg',
+        'local_uuid' => (string) Str::uuid(),
+        'sync_status' => 'pending',
+    ]);
+
+    Livewire::test(SalescallPage::class)
+        ->call('loadPhotos', $salescall->id)
+        ->assertSet('hasPhoto', false);
+
+    SalescallImage::create([
+        'salescall_id' => $salescall->id,
+        'salescall_image_type_id' => 1,
+        'local_path' => '/tmp/photo.jpg',
+        'local_uuid' => (string) Str::uuid(),
+        'sync_status' => 'pending',
+    ]);
+
+    Livewire::test(SalescallPage::class)
+        ->call('loadPhotos', $salescall->id)
+        ->assertSet('hasPhoto', true);
+});
+
+test('the submit requirements list shows the photo requirement only when the region type requires an image', function () {
+    $markup = '<span>Photo<span x-show="!hasPhoto"> (missing)</span></span>';
+
+    $requiredType = RegionType::create(['name' => 'Metro Manila', 'sort' => 1, 'is_image_required' => true]);
+    $this->actingAs(User::factory()->create(['region_type_id' => $requiredType->id]));
+
+    Livewire::test(SalescallPage::class)
+        ->assertSeeHtml($markup);
+
+    $exemptType = RegionType::create(['name' => 'IB Team', 'sort' => 2, 'is_image_required' => false]);
+    $this->actingAs(User::factory()->create(['region_type_id' => $exemptType->id]));
+
+    Livewire::test(SalescallPage::class)
+        ->assertDontSeeHtml($markup);
+});

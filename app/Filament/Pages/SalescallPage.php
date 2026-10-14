@@ -92,6 +92,19 @@ class SalescallPage extends Page
 
     public bool $photosComplete = false;
 
+    /**
+     * Whether the logged-in rep's region type requires a photo before a visit
+     * can be Completed (IB Team / OE Team are exempt; no region type means
+     * required). Mirrors the server-side rule in salescallSubmitBlocker() so
+     * the Submit button and requirements list can reflect it up front.
+     */
+    public bool $photoRequired = true;
+
+    /**
+     * Whether the currently selected visit already has at least one photo.
+     */
+    public bool $hasPhoto = false;
+
     public ?int $pendingPhotoSalescallId = null;
 
     public ?int $pendingPhotoTypeId = null;
@@ -116,6 +129,7 @@ class SalescallPage extends Page
     public function mount(): void
     {
         $this->preselectedId = (int) request()->get('call') ?: null;
+        $this->photoRequired = auth()->user()?->regionType?->is_image_required ?? true;
     }
 
     public function loadPhotos(?int $salescallId): void
@@ -134,6 +148,8 @@ class SalescallPage extends Page
             'type' => $img->type?->name ?? '—',
             'category' => $img->type?->category?->name ?? '—',
         ])->all();
+
+        $this->hasPhoto = $images->isNotEmpty();
 
         $this->photosComplete = $this->allPhotoTypesCovered($images->pluck('salescall_image_type_id'));
     }
