@@ -909,7 +909,6 @@ class SyncService
     private function customerPullExceptionMessage(Throwable $exception, string $stage, string $reference): string
     {
         $reason = match ($exception->getMessage()) {
-            'Portal Customer response omitted the Company ID field.' => 'Portal Customer response omitted the Company ID field.',
             'A Portal Customer has no valid required Company ID.' => 'A Portal Customer has no valid required Company ID.',
             'A required Company is unavailable on this device. Refresh Portal lookups before retrying.' => 'A required Company is unavailable on this device. Refresh Portal lookups before retrying.',
             default => $stage === 'customer_page_transaction'
@@ -1212,9 +1211,10 @@ class SyncService
     }
 
     /**
-     * Customer Pull may proceed without a valid location snapshot, but the
-     * Customer's required Company relationship must resolve locally before we
-     * persist it. Location fields are optional scalar IDs and are retained as
+     * Customer Pull may proceed without a valid location snapshot, but any
+     * non-null Company relationship must resolve locally before we persist it.
+     * A missing Company ID field is treated as null: the Customer is pulled as
+     * Company-less. Location fields are optional scalar IDs and are retained as
      * supplied even if their local reference rows are unavailable.
      *
      * @param  array<string, mixed>  $data
@@ -1228,11 +1228,7 @@ class SyncService
 
         $companyIds = [];
         foreach ($customers as $customer) {
-            if (! array_key_exists('company_id', $customer)) {
-                throw new \RuntimeException('Portal Customer response omitted the Company ID field.');
-            }
-
-            $companyId = $customer['company_id'];
+            $companyId = $customer['company_id'] ?? null;
             if ($companyId === null) {
                 continue;
             }

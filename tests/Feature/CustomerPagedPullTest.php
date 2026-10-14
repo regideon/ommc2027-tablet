@@ -1255,7 +1255,7 @@ test('Customer Pull accepts null Company IDs across mixed pages without changing
         ]);
 });
 
-test('Customer Pull rejects a Customer with a missing Company ID field instead of treating omission as null', function () {
+test('Customer Pull treats a missing Company ID field as null and pulls the Customer as Company-less', function () {
     $portalCustomer = ($this->customer)(90001, 'Customer missing Company field');
     unset($portalCustomer['company_id']);
     ($this->fakePortal)([
@@ -1269,11 +1269,11 @@ test('Customer Pull rejects a Customer with a missing Company ID field instead o
     ]);
 
     $steps = ($this->runToCompletion)();
-    $failure = end($steps);
 
-    expect($failure['success'])->toBeFalse()
-        ->and($failure['message'])->toContain('omitted the Company ID field')
-        ->and(DB::table('customers')->where('server_id', 90001)->exists())->toBeFalse();
+    expect(collect($steps)->pluck('success')->every(fn (bool $success): bool => $success))->toBeTrue()
+        ->and(end($steps)['done'])->toBeTrue()
+        ->and(DB::table('customers')->where('server_id', 90001)->whereNull('company_id')->count())->toBe(1)
+        ->and(DB::table('customers')->where('server_id', 90001)->value('name'))->toBe('Customer missing Company field');
 });
 
 test('Customer Pull rejects malformed non-null Company IDs before persisting the Customer', function (mixed $companyId) {
