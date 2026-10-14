@@ -267,12 +267,13 @@ test('Fleet annual category bindings require every available year on Add and pre
             return Http::response(['token' => 'fleet-reservation-token', 'code' => 'FLEET90001']);
         }
 
-        return Http::response([
+        return Http::response(['results' => [[
+            'status' => 'synced',
             'server_id' => 99001,
-            'local_uuid' => $request['local_uuid'],
+            'local_uuid' => $request['customers'][0]['local_uuid'],
             'unique_id' => 'FLEET90001',
             'updated_at' => now()->toISOString(),
-        ]);
+        ]]]);
     });
 
     $completeState = array_replace_recursive(validCustomerCreateState(), [
@@ -300,7 +301,7 @@ test('Fleet annual category bindings require every available year on Add and pre
         ->and($customer->sync_status)->toBe('synced');
 
     Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
-        && collect($request['category_histories'])->pluck('stream')->unique()->all() === ['fleet']);
+        && collect($request['customers'][0]['category_histories'])->pluck('stream')->unique()->all() === ['fleet']);
 
     $edit = Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customer->id])
         ->assertSee('x-model="$wire.categories[\'fleet\'][2018]"', false)
@@ -317,9 +318,9 @@ test('Fleet annual category bindings require every available year on Add and pre
     app(SyncService::class)->pushCustomer($localId);
 
     Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
-        && $request['sync_intent'] === 'update'
-        && collect($request['category_histories'])->contains(fn (array $row): bool => (int) $row['category_year'] === 2018 && $row['category'] === 'Motolite Only')
-        && collect($request['category_histories'])->contains(fn (array $row): bool => (int) $row['category_year'] === 2026 && $row['category'] === 'Competitor'));
+        && $request['customers'][0]['sync_intent'] === 'update'
+        && collect($request['customers'][0]['category_histories'])->contains(fn (array $row): bool => (int) $row['category_year'] === 2018 && $row['category'] === 'Motolite Only')
+        && collect($request['customers'][0]['category_histories'])->contains(fn (array $row): bool => (int) $row['category_year'] === 2026 && $row['category'] === 'Competitor'));
 });
 
 test('Fleet Customer cannot save while visible annual category options are blank', function () {
@@ -376,15 +377,16 @@ test('customer add page saves the complete aggregate locally when its immediate 
         ->and($histories->pluck('category_year')->all())->toBe(range(2018, 2026))
         ->and($histories->pluck('category')->unique()->all())->toBe(['AB Loyal']);
 
-    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer') && $request['landmass_code'] === 'LUZON');
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+        && $request['customers'][0]['landmass_code'] === 'LUZON');
 
     Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
-        && $request['general_category_id'] === 1
-        && $request['region_specific_id'] === 52
-        && $request['province_id'] === 1
-        && $request['municipality_id'] === 1
-        && $request['category_histories'][0]['stream'] === 'ab'
-        && count($request['category_histories']) === 9);
+        && $request['customers'][0]['general_category_id'] === 1
+        && $request['customers'][0]['region_specific_id'] === 52
+        && $request['customers'][0]['province_id'] === 1
+        && $request['customers'][0]['municipality_id'] === 1
+        && $request['customers'][0]['category_histories'][0]['stream'] === 'ab'
+        && count($request['customers'][0]['category_histories']) === 9);
 
     $edit = Livewire::test(CustomerEditPage::class, ['customerId' => $customer->id])
         ->assertOk()
@@ -646,7 +648,12 @@ test('customer add page pushes Access and PIC using user emails instead of local
     $user->forceFill(['api_token' => 'tablet-token'])->save();
     $this->actingAs($user);
     Http::fake(['*api/sync/push/customer' => function ($request) {
-        return Http::response(['server_id' => 100, 'local_uuid' => $request['local_uuid'], 'updated_at' => now()->toISOString()], 200);
+        return Http::response(['results' => [[
+            'status' => 'synced',
+            'server_id' => 100,
+            'local_uuid' => $request['customers'][0]['local_uuid'],
+            'updated_at' => now()->toISOString(),
+        ]]], 200);
     }]);
 
     Livewire::test(CustomerCreatePage::class)
@@ -657,10 +664,10 @@ test('customer add page pushes Access and PIC using user emails instead of local
         ->assertRedirect(CustomerPage::getUrl());
 
     Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
-        && $request['person_in_charge_email'] === 'pic@example.test'
-        && $request['access_user_emails'] === [$user->email, 'pic@example.test']
-        && ! array_key_exists('person_in_charge_id', $request->data())
-        && ! array_key_exists('access_user_ids', $request->data()));
+        && $request['customers'][0]['person_in_charge_email'] === 'pic@example.test'
+        && $request['customers'][0]['access_user_emails'] === [$user->email, 'pic@example.test']
+        && ! array_key_exists('person_in_charge_id', $request['customers'][0])
+        && ! array_key_exists('access_user_ids', $request['customers'][0]));
 });
 
 test('customer add location dependencies keep physical and commercial hierarchies independent', function () {
@@ -1264,7 +1271,12 @@ test('customer add validates supplied Warehouse Code and Delivery Detail values 
     $this->actingAs($user);
     Http::fake(function ($request) {
         if (str_ends_with($request->url(), '/api/sync/push/customer')) {
-            return Http::response(['server_id' => 100, 'local_uuid' => $request['local_uuid'], 'updated_at' => now()->toISOString()], 200);
+            return Http::response(['results' => [[
+                'status' => 'synced',
+                'server_id' => 100,
+                'local_uuid' => $request['customers'][0]['local_uuid'],
+                'updated_at' => now()->toISOString(),
+            ]]], 200);
         }
 
         return Http::response(['server_id' => 100, 'updated_at' => now()->toISOString()], 200);
@@ -1287,8 +1299,8 @@ test('customer add validates supplied Warehouse Code and Delivery Detail values 
         ->and($active['delivery_detail'])->toBe('own_delivery');
 
     Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
-        && data_get($request->data(), 'profile_data.active.warehouse_code') === 'WH-123'
-        && data_get($request->data(), 'profile_data.active.delivery_detail') === 'own_delivery');
+        && data_get($request['customers'][0], 'profile_data.active.warehouse_code') === 'WH-123'
+        && data_get($request['customers'][0], 'profile_data.active.delivery_detail') === 'own_delivery');
 });
 
 test('customer add does not show or require conditional fields when they are inapplicable', function () {

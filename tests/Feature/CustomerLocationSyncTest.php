@@ -73,3 +73,87 @@ test('pull stores location reference tables and customer location foreign keys',
         ->and($accessUser->rsm_id)->toBeNull()
         ->and(DB::table('customer_user')->where('customer_id', 99)->where('user_id', $accessUser->id)->exists())->toBeTrue();
 });
+
+test('pullLocations sends the known version and skips writes when unchanged', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+
+    $user = User::factory()->create(['api_token' => 'test-token']);
+    $this->actingAs($user);
+
+    Http::fake([
+        'portal.test/api/sync/pull/locations*' => Http::response([
+            'status' => 'unchanged',
+            'reference_version' => 'v1',
+        ], 200),
+    ]);
+
+    $result = app(SyncService::class)->pullLocations('v1');
+
+    expect($result->success)->toBeTrue($result->message)
+        ->and(json_decode(DB::table('sync_states')->where('key', 'location_reference_version')->value('value'), true))->toBe('v1')
+        ->and(DB::table('regions')->count())->toBe(0);
+
+    Http::assertSent(function ($request): bool {
+        $url = parse_url($request->url());
+        parse_str($url['query'] ?? '', $query);
+
+        return ($url['path'] ?? null) === '/api/sync/pull/locations'
+            && ($query['known_version'] ?? null) === 'v1';
+    });
+});
+
+test('pullLocations stores the payload version on a full download', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+
+    $user = User::factory()->create(['api_token' => 'test-token']);
+    $this->actingAs($user);
+
+    $payload = emptyLocationReferenceSnapshot();
+    $payload['regions'] = [['id' => 1, 'code' => 'R3', 'psgc_code' => '0300000000', 'name' => 'Region III (Central Luzon)']];
+    $payload['reference_counts']['regions'] = 1;
+    $payload['reference_version'] = 'v2';
+
+    Http::fake([
+        'portal.test/api/sync/pull/locations*' => Http::response($payload, 200),
+    ]);
+
+    $result = app(SyncService::class)->pullLocations();
+
+    expect($result->success)->toBeTrue($result->message)
+        ->and(DB::table('regions')->where('id', 1)->value('name'))->toBe('Region III (Central Luzon)')
+        ->and(json_decode(DB::table('sync_states')->where('key', 'location_reference_version')->value('value'), true))->toBe('v2');
+});
+
+test('pullCustomersStep passes the stored version to the locations phase', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+
+    $user = User::factory()->create(['api_token' => 'test-token']);
+    $this->actingAs($user);
+
+    DB::table('sync_states')->insert([
+        'key' => 'location_reference_version',
+        'value' => json_encode('v1'),
+        'created_at' => now(),
+        'updated_at' => now(),
+    ]);
+
+    Http::fake([
+        'portal.test/api/sync/pull/locations*' => Http::response([
+            'status' => 'unchanged',
+            'reference_version' => 'v1',
+        ], 200),
+        'portal.test/api/sync/pull/*' => Http::response(['customers' => []], 200),
+    ]);
+
+    $step = app(SyncService::class)->pullCustomersStep();
+
+    expect($step['success'])->toBeTrue($step['message']);
+
+    Http::assertSent(function ($request): bool {
+        $url = parse_url($request->url());
+        parse_str($url['query'] ?? '', $query);
+
+        return ($url['path'] ?? null) === '/api/sync/pull/locations'
+            && ($query['known_version'] ?? null) === 'v1';
+    });
+});

@@ -48,15 +48,15 @@
     </div>
 @endif
 
-<div class="space-y-4 md:grid md:grid-cols-[minmax(13rem,0.42fr)_minmax(0,0.58fr)] md:items-start md:gap-4 md:space-y-0">
+<div class="space-y-4 min-[900px]:grid min-[900px]:grid-cols-[minmax(13rem,0.42fr)_minmax(0,0.58fr)] min-[900px]:items-start min-[900px]:gap-4 min-[900px]:space-y-0">
     {{-- Submissions list --}}
-    <div class="{{ $selected !== null ? 'hidden md:block' : '' }} min-w-0 rounded-2xl border border-gray-200 bg-white md:max-h-[calc(100dvh-11rem)] md:overflow-y-auto md:overscroll-contain" style="-webkit-overflow-scrolling: touch;">
-        <div class="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-gray-100 bg-white/95 px-4 py-3 backdrop-blur">
+    <div class="{{ $selected !== null ? 'hidden min-[900px]:block' : '' }} min-w-0 rounded-2xl border border-gray-200 bg-white min-[900px]:max-h-[calc(100dvh-11rem)] min-[900px]:overflow-y-auto min-[900px]:overscroll-contain" style="-webkit-overflow-scrolling: touch;">
+        <div class="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-gray-100 bg-white/95 px-4 py-3 backdrop-blur">
             <div class="min-w-0">
                 <h3 class="text-base font-bold text-[#191c1e]">CRR</h3>
                 <p class="text-xs text-[#737685]">Your CRR submissions</p>
             </div>
-            <div class="flex shrink-0 items-center gap-2">
+            <div class="flex shrink-0 items-center gap-2 ml-auto">
                 <button type="button" wire:click="syncNow" @disabled($syncing) class="flex h-9 items-center gap-1.5 rounded-full bg-[#890f00] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#6f0c00] disabled:opacity-50" title="Sync pending CRRs and refresh the list">
                     <span class="material-symbols-outlined text-lg {{ $syncing ? 'animate-spin' : '' }}">{{ $syncing ? 'sync' : 'refresh' }}</span>
                     <span class="hidden sm:inline">{{ $syncing ? 'Syncing…' : 'Sync' }}</span>
@@ -106,13 +106,13 @@
     </div>
 
     {{-- Detail panel --}}
-    <div class="{{ $selected === null ? 'hidden md:block' : '' }} min-w-0 space-y-4 md:max-h-[calc(100dvh-11rem)] md:overflow-y-auto md:overscroll-contain" style="-webkit-overflow-scrolling: touch;">
+    <div class="{{ $selected === null ? 'hidden min-[900px]:block' : '' }} min-w-0 space-y-4 min-[900px]:max-h-[calc(100dvh-11rem)] min-[900px]:overflow-y-auto min-[900px]:overscroll-contain" style="-webkit-overflow-scrolling: touch;">
         @if ($selected !== null)
             <div class="flex items-center gap-3">
                 <button
                     type="button"
                     wire:click="clearRowSelection"
-                    class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-100 md:hidden"
+                    class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-100 min-[900px]:hidden"
                     title="Back to submissions">
                     <span class="material-symbols-outlined text-[#434654]">arrow_back</span>
                 </button>

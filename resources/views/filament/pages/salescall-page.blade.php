@@ -458,16 +458,16 @@
 
         hasSavedBrands: @entangle('hasSavedBrands'),
         photosComplete: @entangle('photosComplete'),
+        photoRequired: @entangle('photoRequired'),
+        hasPhoto: @entangle('hasPhoto'),
         finishing: false,
         showCancelReason: false,
         cancelReason: '',
         showPartialReason: false,
         partialReason: '',
         get canSubmitSalescall() {
-            // Photo requirement temporarily disabled (optional for now) — uncomment
-            // to re-enable photo-in-every-subcategory as a submit requirement:
-            // return this.hasSavedBrands && this.photosComplete;
-            return this.hasSavedBrands;
+            // Photo is required unless the rep's region type is exempt (IB Team / OE Team).
+            return this.hasSavedBrands && (!this.photoRequired || this.hasPhoto);
         },
         finishVisit(outcome, reason = null) {
             if (this.finishing) return;
@@ -2587,13 +2587,12 @@
                                             <span class="material-symbols-outlined text-sm mat-fill" x-text="hasSavedBrands ? 'check_circle' : 'radio_button_unchecked'"></span>
                                             <span>Brands<span x-show="!hasSavedBrands"> (missing)</span></span>
                                         </span>
-                                        {{-- Photo requirement temporarily disabled (optional for now) — uncomment
-                                             to re-enable "photo in every subcategory" as a submit requirement:
-                                        <span class="flex items-center gap-1.5 shrink-0" :class="photosComplete ? 'text-green-600' : 'text-red-500'">
-                                            <span class="material-symbols-outlined text-sm mat-fill" x-text="photosComplete ? 'check_circle' : 'radio_button_unchecked'"></span>
-                                            <span>Photo in every subcategory<span x-show="!photosComplete"> (missing)</span></span>
+                                        @if($photoRequired)
+                                        <span class="flex items-center gap-1.5 shrink-0" :class="hasPhoto ? 'text-green-600' : 'text-red-500'">
+                                            <span class="material-symbols-outlined text-sm mat-fill" x-text="hasPhoto ? 'check_circle' : 'radio_button_unchecked'"></span>
+                                            <span>Photo<span x-show="!hasPhoto"> (missing)</span></span>
                                         </span>
-                                        --}}
+                                        @endif
                                     </p>
                                 </div>
                                 <div class="grid grid-cols-2 gap-2">

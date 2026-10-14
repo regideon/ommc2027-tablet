@@ -701,3 +701,55 @@ test('opening the Forms page with a form parameter selects that form', function 
         ->test(FormsPage::class)
         ->assertSet('selectedForm', 'crr');
 });
+
+test('every form list and details split only from 900px up inside the rail', function () {
+    $user = formsPageUser();
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+    formsPageFakePortal();
+
+    $component = Livewire::test(FormsPage::class);
+
+    foreach (FormKey::cases() as $form) {
+        $component->call('selectForm', $form->slug())
+            ->assertSeeHtml('min-[900px]:grid-cols-[minmax(13rem,0.42fr)_minmax(0,0.58fr)]')
+            ->assertSeeHtml('hidden min-[900px]:block')
+            ->assertSeeHtml('flex flex-wrap items-center justify-between gap-x-3 gap-y-2')
+            ->assertSeeHtml('flex shrink-0 items-center gap-2 ml-auto')
+            ->assertDontSeeHtml('md:grid md:grid-cols-[minmax(13rem,0.42fr)');
+    }
+});
+
+test('the back to submissions button hides only from 900px up', function () {
+    $user = formsPageUser();
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+    formsPageFakePortal();
+
+    $program = formsPageProgram();
+    $crr = app(CrrService::class)->create($user, [
+        'crr_program_id' => $program->id,
+        'date_implemented' => '2026-10-11',
+        'amount' => '1500.50',
+        'details' => 'Sample details',
+        'remarks' => 'Sample remarks',
+        'salescall_uuid' => null,
+        'attachments' => [],
+    ]);
+
+    Livewire::test(FormsPage::class)
+        ->call('selectRow', 'local:'.$crr->local_uuid)
+        ->assertSeeHtml('class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-100 min-[900px]:hidden"')
+        ->assertDontSeeHtml('rounded-full bg-gray-100 md:hidden');
+});
+
+test('compiled theme styles carry the 900px form list and details split', function () {
+    $manifest = json_decode(file_get_contents(public_path('build/manifest.json')), true);
+    $themePath = public_path('build/'.$manifest['resources/css/filament/saleshub/theme.css']['file']);
+    $themeCss = file_get_contents($themePath);
+
+    expect($themeCss)
+        ->toContain('@media (width>=900px)')
+        ->toContain('.min-\[900px\]\:grid{display:grid}')
+        ->toContain('.min-\[900px\]\:grid-cols-\[minmax\(13rem\,0\.42fr\)_minmax\(0\,0\.58fr\)\]{grid-template-columns:minmax(13rem,.42fr) minmax(0,.58fr)}');
+});

@@ -32,18 +32,25 @@ test('push sends the customer location foreign keys', function () {
         'updated_at' => now(),
     ]);
 
-    Http::fake([
-        'portal.test/api/sync/push/customer' => Http::response(['server_id' => 501, 'updated_at' => now()->toISOString()], 200),
-    ]);
+    Http::fake(function ($request) {
+        return Http::response(['results' => [[
+            'status' => 'synced',
+            'server_id' => 501,
+            'local_uuid' => $request['customers'][0]['local_uuid'],
+            'updated_at' => now()->toISOString(),
+        ]]]);
+    });
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) {
+        $payload = $request['customers'][0];
+
         return str_ends_with($request->url(), '/api/sync/push/customer')
-            && $request['province_id'] === 7
-            && $request['municipality_id'] === 9
-            && $request['barangay_id'] === 55
-            && $request['area_cluster_id'] === 61;
+            && $payload['province_id'] === 7
+            && $payload['municipality_id'] === 9
+            && $payload['barangay_id'] === 55
+            && $payload['area_cluster_id'] === 61;
     });
 });
 
@@ -69,14 +76,19 @@ test('push omits unknown location foreign keys instead of sending null', functio
         'updated_at' => now(),
     ]);
 
-    Http::fake([
-        'portal.test/api/sync/push/customer' => Http::response(['server_id' => 501, 'updated_at' => now()->toISOString()], 200),
-    ]);
+    Http::fake(function ($request) {
+        return Http::response(['results' => [[
+            'status' => 'synced',
+            'server_id' => 501,
+            'local_uuid' => $request['customers'][0]['local_uuid'],
+            'updated_at' => now()->toISOString(),
+        ]]]);
+    });
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) {
-        $data = $request->data();
+        $data = $request['customers'][0];
 
         return str_ends_with($request->url(), '/api/sync/push/customer')
             && ! array_key_exists('province_id', $data)
