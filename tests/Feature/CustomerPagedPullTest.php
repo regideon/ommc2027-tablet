@@ -1378,6 +1378,56 @@ test('Customer Pull re-applies a Company-less legacy-identified Customer without
         ->and(DB::table('customers')->where('server_id', 90100)->value('company_id'))->toBeNull();
 });
 
+test('Customer Pull applies brand links that resolve and skips ones whose reference rows are not on the device', function () {
+    DB::table('material_groups')->insert(['id' => 1, 'name' => 'Group', 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('brands')->insert(['id' => 1, 'material_group_id' => 1, 'name' => 'Brand', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    $portalCustomer = ($this->customer)(90201, 'Customer with mixed brand links');
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'customer_brands' => [
+                ['customer_id' => 90201, 'material_group_id' => 1, 'brand_id' => 1, 'quantity' => 4],
+                ['customer_id' => 90201, 'material_group_id' => 77, 'brand_id' => 777, 'quantity' => 9],
+            ],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [90201],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+
+    expect(collect($steps)->pluck('success')->every(fn (bool $success): bool => $success))->toBeTrue()
+        ->and(end($steps)['done'])->toBeTrue()
+        ->and(DB::table('customers')->where('server_id', 90201)->value('name'))->toBe('Customer with mixed brand links')
+        ->and(DB::table('customer_brands')->where('customer_id', 90201)->count())->toBe(1)
+        ->and(DB::table('customer_brands')->where('customer_id', 90201)->value('brand_id'))->toBe(1);
+});
+
+test('Customer Pull skips category links whose reference rows are not on the device', function () {
+    $portalCustomer = ($this->customer)(90202, 'Customer with unresolved category link');
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'customer_categories' => [
+                ['customer_id' => 90202, 'category_id' => 55, 'sub_category_id' => 555],
+            ],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [90202],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+
+    expect(collect($steps)->pluck('success')->every(fn (bool $success): bool => $success))->toBeTrue()
+        ->and(end($steps)['done'])->toBeTrue()
+        ->and(DB::table('customers')->where('server_id', 90202)->exists())->toBeTrue()
+        ->and(DB::table('customer_categories')->where('customer_id', 90202)->exists())->toBeFalse();
+});
+
 test('Customer Pull accepts a Customer whose non-null Company reference is unresolved locally and retains the supplied Company id', function () {
     $portalCustomer = ($this->customer)(90002, 'Customer with unresolved Company');
     $portalCustomer['company_id'] = 999;

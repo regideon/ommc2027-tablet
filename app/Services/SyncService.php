@@ -32,6 +32,7 @@ use App\Models\User;
 use App\Support\ExpensePaymentType;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Carbon;
@@ -919,11 +920,17 @@ class SyncService
 
         $message = "Customer Pull failed during {$stage}. {$reason}";
         // Controlled Portal-side reasons (identity conflicts, duplicate or
-        // invalid reference data) are surfaced verbatim so the failure is
-        // diagnosable from the device screen. Unexpected framework/database
-        // errors stay generic.
-        if (str_starts_with($rawMessage, 'Portal ') && ! str_contains($reason, $rawMessage)) {
-            $message .= ' ('.substr($rawMessage, 0, 300).')';
+        // invalid reference data) and database errors are surfaced so a failed
+        // page is diagnosable from the device screen without the log.
+        $detail = null;
+        if (str_starts_with($rawMessage, 'Portal ')) {
+            $detail = $rawMessage;
+        } elseif ($exception instanceof QueryException) {
+            $detail = (string) strtok($rawMessage, "\n");
+        }
+
+        if ($detail !== null && ! str_contains($reason, $detail)) {
+            $message .= ' ('.substr($detail, 0, 300).')';
         }
 
         return $message." Reference: {$reference}.";
