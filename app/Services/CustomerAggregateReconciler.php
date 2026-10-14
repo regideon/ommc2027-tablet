@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
 final class CustomerAggregateReconciler
@@ -45,7 +46,6 @@ final class CustomerAggregateReconciler
         ?int $expectedLocalId = null,
         ?string $expectedFingerprint = null,
         bool $requireCompleteContract = false,
-        ?CustomerIdentityResolution $identity = null,
     ): array {
         $customers = $aggregate['customers'] ?? null;
         if (! is_array($customers) || count($customers) !== 1 || ! is_array($customers[0])) {
@@ -75,8 +75,8 @@ final class CustomerAggregateReconciler
             throw new RuntimeException('Complete Portal Customer snapshot omitted its Access or PIC identity data.');
         }
 
-        return DB::transaction(function () use ($aggregate, $customer, $localUserIdsByEmail, $expectedLocalId, $expectedFingerprint, $complete, $identity): array {
-            $identity ??= $this->identityResolver->resolve($customer, $expectedLocalId);
+        return DB::transaction(function () use ($aggregate, $customer, $localUserIdsByEmail, $expectedLocalId, $expectedFingerprint, $complete): array {
+            $identity = $this->identityResolver->resolve($customer, $expectedLocalId);
             if ($identity->isConflict() || $identity->localId === null) {
                 throw new RuntimeException('Portal Customer identity conflict: '.($identity->reason ?? 'unresolved').'.');
             }
@@ -498,6 +498,22 @@ final class CustomerAggregateReconciler
         return DB::table('salescall_categories')->where('customer_id', $customerId)->whereIn('sync_status', ['pending', 'failed', 'syncing', 'conflict'])->exists();
     }
 
+    /** @param array<string, mixed> $row */
+    private function brandReferencesResolve(array $row): bool
+    {
+        return isset($row['material_group_id'], $row['brand_id'])
+            && DB::table('material_groups')->where('id', $row['material_group_id'])->exists()
+            && DB::table('brands')->where('id', $row['brand_id'])->exists();
+    }
+
+    /** @param array<string, mixed> $row */
+    private function categoryReferencesResolve(array $row): bool
+    {
+        return isset($row['category_id'], $row['sub_category_id'])
+            && DB::table('categories')->where('id', $row['category_id'])->exists()
+            && DB::table('sub_categories')->where('id', $row['sub_category_id'])->exists();
+    }
+
     private function applyBrandCollection(int $customerId, array $rows, bool $complete): void
     {
         $retainedIds = [];
@@ -506,6 +522,25 @@ final class CustomerAggregateReconciler
                 ->where('material_group_id', $row['material_group_id'])->where('brand_id', $row['brand_id']);
             $query = ($row['last_salescall_id'] ?? null) === null ? $query->whereNull('last_salescall_id') : $query->where('last_salescall_id', $row['last_salescall_id']);
             $existing = $query->first();
+
+            // The Portal reference sync does not guarantee every referenced
+            // Brand or Material Group is available locally (disabled Brands are
+            // not served, and a reference may arrive after the Customer). Keep
+            // any existing local link and skip the unwritable row instead of
+            // aborting the whole page transaction.
+            if (! $this->brandReferencesResolve($row)) {
+                if ($existing) {
+                    $retainedIds[] = (int) $existing->id;
+                }
+                Log::warning('sync:customer-brands:unresolved-reference', [
+                    'customer_id' => $customerId,
+                    'material_group_id' => $row['material_group_id'] ?? null,
+                    'brand_id' => $row['brand_id'] ?? null,
+                ]);
+
+                continue;
+            }
+
             $values = [
                 'customer_id' => $customerId,
                 'material_group_id' => $row['material_group_id'],
@@ -549,6 +584,19 @@ final class CustomerAggregateReconciler
         }
 
         $row = $rows[0];
+
+        // See applyBrandCollection(): keep any existing local link and skip an
+        // unwritable reference instead of aborting the whole page transaction.
+        if (! $this->categoryReferencesResolve($row)) {
+            Log::warning('sync:customer-categories:unresolved-reference', [
+                'customer_id' => $customerId,
+                'category_id' => $row['category_id'] ?? null,
+                'sub_category_id' => $row['sub_category_id'] ?? null,
+            ]);
+
+            return;
+        }
+
         DB::table('customer_categories')->updateOrInsert(
             ['customer_id' => $customerId],
             [

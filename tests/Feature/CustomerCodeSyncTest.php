@@ -29,13 +29,12 @@ test('customer sync sends the reservation token and reconciles Portal unique_id'
     ]);
 
     Http::fake([
-        'portal.test/api/sync/push/customer' => Http::response(['results' => [[
-            'status' => 'synced',
+        'portal.test/api/sync/push/customer' => Http::response([
             'server_id' => 456,
             'local_uuid' => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
             'unique_id' => 'IB53383',
             'updated_at' => now()->toISOString(),
-        ]]]),
+        ]),
     ]);
 
     $this->actingAs($user);
@@ -43,7 +42,7 @@ test('customer sync sends the reservation token and reconciles Portal unique_id'
 
     expect($result->success)->toBeTrue();
     Http::assertSent(fn ($request): bool => $request->url() === 'http://portal.test/api/sync/push/customer'
-        && $request->data()['customers'][0]['customer_code_reservation_token'] === $token);
+        && $request->data()['customer_code_reservation_token'] === $token);
 
     $customer = DB::table('customers')->where('id', -123)->first();
     expect($customer->server_id)->toBe(456)
