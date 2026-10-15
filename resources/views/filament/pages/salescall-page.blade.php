@@ -313,6 +313,7 @@
             crr: @js(\App\Filament\Pages\CrrFormPage::getUrl()),
             signage: @js(\App\Filament\Pages\SignageFormPage::getUrl()),
             marketing: @js(\App\Filament\Pages\MarketingFormPage::getUrl()),
+            tradeRequest: @js(\App\Filament\Pages\TradeRequestFormPage::getUrl()),
             tradeCheck: @js(\App\Filament\Pages\TradeCheckFormPage::getUrl()),
             giveaway: @js(\App\Filament\Pages\GiveawayFormPage::getUrl()),
         },
@@ -409,6 +410,7 @@
 
             $wire.loadPhotos(id);
             $wire.loadBrands(id);
+            $wire.loadFormRequirements(id);
             $wire.loadCategories(id);
             $wire.loadExpenses(id);
             const call = this.calls.find(c => c.id === id);
@@ -460,6 +462,9 @@
         photosComplete: @entangle('photosComplete'),
         photoRequired: @entangle('photoRequired'),
         hasPhoto: @entangle('hasPhoto'),
+        hasSignageForm: @entangle('hasSignageForm'),
+        hasMarketingForm: @entangle('hasMarketingForm'),
+        hasTradeRequestForm: @entangle('hasTradeRequestForm'),
         finishing: false,
         showCancelReason: false,
         cancelReason: '',
@@ -467,7 +472,9 @@
         partialReason: '',
         get canSubmitSalescall() {
             // Photo is required unless the rep's region type is exempt (IB Team / OE Team).
-            return this.hasSavedBrands && (!this.photoRequired || this.hasPhoto);
+            // CRR Signage, Marketing, and Trade Request forms are always required.
+            return this.hasSavedBrands && (!this.photoRequired || this.hasPhoto)
+                && this.hasSignageForm && this.hasMarketingForm && this.hasTradeRequestForm;
         },
         finishVisit(outcome, reason = null) {
             if (this.finishing) return;
@@ -722,7 +729,7 @@
 
         checkedIn = selectedCall ? (selectedCall.status !== 'scheduled' && selectedCall.status !== 'cancelled') : false;
         
-        if (selected) { $wire.loadPhotos(selected); $wire.loadBrands(selected); $wire.loadCategories(selected); }
+        if (selected) { $wire.loadPhotos(selected); $wire.loadBrands(selected); $wire.loadFormRequirements(selected); $wire.loadCategories(selected); }
 
         $watch('currentBrands', (b) => {
             if (!b || !Object.keys(b).length) return;
@@ -1822,6 +1829,7 @@
                                     ['assignment', 'CRR', 'Customer Call Report', 'crr'],
                                     ['image', 'CRR Signage', 'Signage request form', 'signage'],
                                     ['campaign', 'Marketing', 'Local Store Marketing', 'marketing'],
+                                    ['shopping_bag', 'Trade Request', 'Trade request form', 'tradeRequest'],
                                     ['checklist', 'Trade Check', 'Trade check form', 'tradeCheck'],
                                     ['redeem', 'Giveaway', 'Giveaway form', 'giveaway'],
                                 ] as [$icon, $label, $sub, $formKey])
@@ -2593,6 +2601,18 @@
                                             <span>Photo<span x-show="!hasPhoto"> (missing)</span></span>
                                         </span>
                                         @endif
+                                        <span class="flex items-center gap-1.5 shrink-0" :class="hasSignageForm ? 'text-green-600' : 'text-red-500'">
+                                            <span class="material-symbols-outlined text-sm mat-fill" x-text="hasSignageForm ? 'check_circle' : 'radio_button_unchecked'"></span>
+                                            <span>CRR Signage<span x-show="!hasSignageForm"> (missing)</span></span>
+                                        </span>
+                                        <span class="flex items-center gap-1.5 shrink-0" :class="hasMarketingForm ? 'text-green-600' : 'text-red-500'">
+                                            <span class="material-symbols-outlined text-sm mat-fill" x-text="hasMarketingForm ? 'check_circle' : 'radio_button_unchecked'"></span>
+                                            <span>Marketing<span x-show="!hasMarketingForm"> (missing)</span></span>
+                                        </span>
+                                        <span class="flex items-center gap-1.5 shrink-0" :class="hasTradeRequestForm ? 'text-green-600' : 'text-red-500'">
+                                            <span class="material-symbols-outlined text-sm mat-fill" x-text="hasTradeRequestForm ? 'check_circle' : 'radio_button_unchecked'"></span>
+                                            <span>Trade Request<span x-show="!hasTradeRequestForm"> (missing)</span></span>
+                                        </span>
                                     </p>
                                 </div>
                                 <div class="grid grid-cols-2 gap-2">

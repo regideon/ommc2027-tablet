@@ -6,6 +6,7 @@ use App\Contracts\FormSubmissionService;
 use App\Enums\Marketing\RealizationStage;
 use App\Enums\RACStatus;
 use App\Enums\SPSStatus;
+use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\Marketing\Marketing;
 use App\Models\Forms\Marketing\MarketingMechanic;
 use App\Models\Forms\Marketing\MarketingProgram;
@@ -139,7 +140,15 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
     {
         $validated = Validator::make($input, $this->rules())->validate();
 
-        return DB::transaction(function () use ($user, $validated): Marketing {
+        $salescallId = $this->resolveSalescall($validated['salescall_uuid'] ?? null);
+
+        if ($salescallId !== null && ! $this->crrExistsFor($salescallId, $user)) {
+            throw ValidationException::withMessages([
+                'salescall_uuid' => ['Create a CRR for this sales call before creating a Marketing Recommendation.'],
+            ]);
+        }
+
+        return DB::transaction(function () use ($user, $validated, $salescallId): Marketing {
             $marketing = Marketing::create([
                 'local_uuid' => (string) Str::uuid(),
                 'submitted_at' => $validated['submitted_at'] ?? now(),
@@ -147,7 +156,7 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
                 'region_type_id' => $validated['region_type_id'],
                 'role_id' => $this->resolveRoleId($user),
                 'program_id' => $validated['program_id'],
-                'salescall_id' => $this->resolveSalescall($validated['salescall_uuid'] ?? null),
+                'salescall_id' => $salescallId,
                 'duration_start_at' => $validated['duration_start_at'],
                 'duration_end_at' => $validated['duration_end_at'],
                 'objective' => $validated['objective'],
@@ -508,6 +517,18 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
         }
 
         return (int) Role::firstOrCreate(['name' => 'drm', 'guard_name' => 'web'])->id;
+    }
+
+    /**
+     * A Marketing Recommendation tied to a visit requires the rep's own CRR
+     * for that same visit.
+     */
+    private function crrExistsFor(int $salescallId, User $user): bool
+    {
+        return Crr::query()
+            ->where('salescall_id', $salescallId)
+            ->where('submitted_by', $user->id)
+            ->exists();
     }
 
     /**
