@@ -9,6 +9,12 @@ Preserve unrelated worktree changes. Implementation authorization does not
 authorize commit or push; terminal delivery requires separate explicit Human
 authorization.
 
+## NativePHP photo and media work
+
+Before changing Camera, Gallery, photo attachments, or NativePHP media events,
+read `docs/playbooks/nativephp-photo-integration.md` and inspect the existing
+flow it documents.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.

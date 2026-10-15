@@ -121,6 +121,8 @@ class SalescallPage extends Page
 
     public ?int $pendingPhotoTypeId = null;
 
+    public string $photoDiagnosticsComponentId = '';
+
     /**
      * Pending native captures keyed by the capture ID delivered back on
      * PhotoTaken / MediaSelected / PhotoCancelled / PermissionDenied events.
@@ -142,6 +144,7 @@ class SalescallPage extends Page
     {
         $this->preselectedId = (int) request()->get('call') ?: null;
         $this->photoRequired = auth()->user()?->regionType?->is_image_required ?? true;
+        $this->photoDiagnosticsComponentId = (string) \Str::uuid();
     }
 
     public function loadPhotos(?int $salescallId): void
@@ -333,16 +336,60 @@ class SalescallPage extends Page
     {
         $this->pendingPhotoSalescallId = $salescallId;
         $this->pendingPhotoTypeId = $typeId;
+        $actionAttemptId = (string) \Str::uuid();
+
+        $this->logPhotoDiagnostic('photo_action_initiated', 'camera', null, [
+            'action_attempt_id' => $actionAttemptId,
+        ]);
 
         if (function_exists('nativephp_call')) {
-            $capture = Camera::getPhoto();
+            try {
+                $capture = Camera::getPhoto();
+                $captureId = $capture->getId();
+            } catch (\Throwable $exception) {
+                $this->logPhotoDiagnostic('native_operation_setup_failed', 'camera', null, [
+                    'exception_class' => $exception::class,
+                    'action_attempt_id' => $actionAttemptId,
+                ]);
 
-            $this->pendingPhoto[$capture->getId()] = [
+                throw $exception;
+            }
+
+            $this->logPhotoDiagnostic('capture_id_generated', 'camera', $captureId, [
+                'action_attempt_id' => $actionAttemptId,
+            ]);
+
+            $this->pendingPhoto[$captureId] = [
                 'salescall_id' => $salescallId,
                 'type_id' => $typeId,
             ];
 
-            $capture->start();
+            $this->logPhotoDiagnostic('pending_capture_registered', 'camera', $captureId, [
+                'pending_capture_count' => count($this->pendingPhoto),
+                'action_attempt_id' => $actionAttemptId,
+            ]);
+
+            try {
+                $this->logPhotoDiagnostic('native_operation_invoked', 'camera', $captureId, [
+                    'action_attempt_id' => $actionAttemptId,
+                ]);
+                $startReportedSuccess = $capture->start();
+                $this->logPhotoDiagnostic('native_operation_start_result', 'camera', $captureId, [
+                    'start_reported_success' => $startReportedSuccess,
+                    'action_attempt_id' => $actionAttemptId,
+                ]);
+            } catch (\Throwable $exception) {
+                $this->logPhotoDiagnostic('native_operation_failed', 'camera', $captureId, [
+                    'exception_class' => $exception::class,
+                    'action_attempt_id' => $actionAttemptId,
+                ]);
+
+                throw $exception;
+            }
+        } else {
+            $this->logPhotoDiagnostic('native_bridge_unavailable', 'camera', null, [
+                'action_attempt_id' => $actionAttemptId,
+            ]);
         }
     }
 
@@ -350,52 +397,134 @@ class SalescallPage extends Page
     {
         $this->pendingPhotoSalescallId = $salescallId;
         $this->pendingPhotoTypeId = $typeId;
+        $actionAttemptId = (string) \Str::uuid();
+
+        $this->logPhotoDiagnostic('photo_action_initiated', 'gallery', null, [
+            'action_attempt_id' => $actionAttemptId,
+        ]);
 
         if (function_exists('nativephp_call')) {
-            $picker = Camera::pickImages('image')->single();
+            try {
+                $picker = Camera::pickImages('image')->single();
+                $captureId = $picker->getId();
+            } catch (\Throwable $exception) {
+                $this->logPhotoDiagnostic('native_operation_setup_failed', 'gallery', null, [
+                    'exception_class' => $exception::class,
+                    'action_attempt_id' => $actionAttemptId,
+                ]);
 
-            $this->pendingPhoto[$picker->getId()] = [
+                throw $exception;
+            }
+
+            $this->logPhotoDiagnostic('capture_id_generated', 'gallery', $captureId, [
+                'action_attempt_id' => $actionAttemptId,
+            ]);
+
+            $this->pendingPhoto[$captureId] = [
                 'salescall_id' => $salescallId,
                 'type_id' => $typeId,
             ];
 
-            $picker->start();
+            $this->logPhotoDiagnostic('pending_capture_registered', 'gallery', $captureId, [
+                'pending_capture_count' => count($this->pendingPhoto),
+                'action_attempt_id' => $actionAttemptId,
+            ]);
+
+            try {
+                $this->logPhotoDiagnostic('native_operation_invoked', 'gallery', $captureId, [
+                    'action_attempt_id' => $actionAttemptId,
+                ]);
+                $startReportedSuccess = $picker->start();
+                $this->logPhotoDiagnostic('native_operation_start_result', 'gallery', $captureId, [
+                    'start_reported_success' => $startReportedSuccess,
+                    'action_attempt_id' => $actionAttemptId,
+                ]);
+            } catch (\Throwable $exception) {
+                $this->logPhotoDiagnostic('native_operation_failed', 'gallery', $captureId, [
+                    'exception_class' => $exception::class,
+                    'action_attempt_id' => $actionAttemptId,
+                ]);
+
+                throw $exception;
+            }
+        } else {
+            $this->logPhotoDiagnostic('native_bridge_unavailable', 'gallery', null, [
+                'action_attempt_id' => $actionAttemptId,
+            ]);
         }
     }
 
     /**
-     * TEMP: diagnostic sink for the photo-flow instrumentation in salescall-page.blade.php.
-     * Only invoked when window.__photoServerLog is enabled; writes a Laravel log line.
+     * Emit one bounded, redacted record for a Sales Call native photo lifecycle stage.
+     * Capture IDs are hashed so records remain correlatable without exposing raw IDs.
      *
-     * @param  array<string, mixed>  $state
+     * @param  array<string, int|string|bool|null>  $details
      */
-    public function logPhotoFlow(array $state): void
+    private function logPhotoDiagnostic(string $event, string $source, ?string $captureId = null, array $details = []): void
     {
-        Log::info('[photoflow]', $state);
+        Log::info('salescall_photo_diagnostic', [
+            'event' => $event,
+            'source' => $source,
+            'capture_correlation' => $captureId === null ? null : substr(hash('sha256', $captureId), 0, 16),
+            'component_instance' => $this->photoDiagnosticsComponentId ?: null,
+            ...$details,
+        ]);
     }
 
     #[On('native:'.PhotoTaken::class)]
     public function onPhotoTaken(string $path, string $mimeType = 'image/jpeg', ?string $id = null): void
     {
-        [$salescallId, $typeId] = $this->resolvePendingPhotoContext($id);
+        if ($this->hasPendingAttachmentContext($id)) {
+            $this->onAttachmentPhotoTaken($path, $mimeType, $id);
+
+            return;
+        }
+
+        $this->logPhotoDiagnostic('native_event_received', 'camera', $id, [
+            'native_event' => 'photo_taken',
+        ]);
+
+        [$salescallId, $typeId] = $this->resolvePendingPhotoContext($id, 'camera');
 
         if (! $salescallId || ! $typeId) {
             return;
         }
 
-        $this->saveImageFromPath($path, $salescallId, $typeId);
+        $this->saveImageFromPath($path, $salescallId, $typeId, 'camera', $id);
     }
 
     #[On('native:'.MediaSelected::class)]
     public function onMediaSelected(bool $success, array $files = [], int $count = 0, ?string $error = null, bool $cancelled = false, ?string $id = null): void
     {
-        [$salescallId, $typeId] = $this->resolvePendingPhotoContext($id);
+        if ($this->hasPendingAttachmentContext($id)) {
+            $this->onAttachmentMediaSelected($success, $files, $count, $error, $cancelled, $id);
+
+            return;
+        }
+
+        $this->logPhotoDiagnostic('native_event_received', 'gallery', $id, [
+            'native_event' => 'media_selected',
+            'success' => $success,
+            'cancelled' => $cancelled,
+            'returned_file_count' => count($files),
+        ]);
+
+        [$salescallId, $typeId] = $this->resolvePendingPhotoContext($id, 'gallery');
 
         if ($cancelled) {
+            $this->logPhotoDiagnostic('photo_selection_cancelled', 'gallery', $id);
+
             return;
         }
 
         if (! $success || empty($files) || ! $salescallId || ! $typeId) {
+            $this->logPhotoDiagnostic('gallery_result_rejected', 'gallery', $id, [
+                'success' => $success,
+                'returned_file_count' => count($files),
+                'context_available' => (bool) ($salescallId && $typeId),
+                'error_present' => $error !== null && $error !== '',
+            ]);
+
             Notification::make()
                 ->title($error ?: 'Could not import the selected photo.')
                 ->danger()
@@ -407,6 +536,10 @@ class SalescallPage extends Page
         $path = NativeMediaPath::resolve($files[0]);
 
         if ($path === null) {
+            $this->logPhotoDiagnostic('returned_file_invalid', 'gallery', $id, [
+                'failure' => 'invalid_path_payload',
+            ]);
+
             Notification::make()
                 ->title('Selected photo path is invalid.')
                 ->danger()
@@ -415,33 +548,55 @@ class SalescallPage extends Page
             return;
         }
 
-        $this->saveImageFromPath($path, $salescallId, $typeId);
+        $this->saveImageFromPath($path, $salescallId, $typeId, 'gallery', $id);
     }
 
     #[On('native:'.PhotoCancelled::class)]
-    public function onPhotoCancelled(bool $cancelled = true, ?string $id = null): void
+    public function onPhotoCancelled(bool $cancelled = true, ?string $id = null, ?string $failure = null): void
     {
-        if ($id !== null) {
-            unset($this->pendingPhoto[$id]);
+        if ($this->hasPendingAttachmentContext($id)) {
+            $this->onAttachmentPhotoCancelled($cancelled, $id);
 
             return;
         }
 
-        $this->pendingPhoto = [];
-        $this->pendingPhotoSalescallId = null;
-        $this->pendingPhotoTypeId = null;
+        $this->logPhotoDiagnostic('native_event_received', 'camera', $id, [
+            'native_event' => 'photo_cancelled',
+            'cancelled' => $cancelled,
+            'failure' => $this->safeCameraFailure($failure),
+        ]);
+
+        $this->resolvePendingPhotoContext($id, 'camera');
+        $this->clearPendingPhotoContextsForUncorrelatedEvent($id, 'camera');
+        $safeFailure = $this->safeCameraFailure($failure);
+        $failed = $safeFailure !== null || ! $cancelled;
+
+        $this->logPhotoDiagnostic(
+            $failed
+                ? 'photo_capture_failed'
+                : 'photo_capture_cancelled',
+            'camera',
+            $id,
+            ['failure' => $safeFailure ?? ($failed ? 'native_capture_failed' : null)],
+        );
     }
 
     #[On('native:'.PermissionDenied::class)]
     public function onCameraPermissionDenied(string $action = 'photo', ?string $id = null): void
     {
-        if ($id !== null) {
-            unset($this->pendingPhoto[$id]);
-        } else {
-            $this->pendingPhoto = [];
-            $this->pendingPhotoSalescallId = null;
-            $this->pendingPhotoTypeId = null;
+        if ($this->hasPendingAttachmentContext($id)) {
+            $this->onAttachmentPermissionDenied($action, $id);
+
+            return;
         }
+
+        $this->logPhotoDiagnostic('native_event_received', 'camera', $id, [
+            'native_event' => 'permission_denied',
+            'action' => $action === 'video' ? 'video' : 'photo',
+        ]);
+
+        $this->resolvePendingPhotoContext($id, 'camera');
+        $this->clearPendingPhotoContextsForUncorrelatedEvent($id, 'camera');
 
         Notification::make()
             ->title('Camera permission is required to take photos.')
@@ -457,16 +612,27 @@ class SalescallPage extends Page
      *
      * @return array{0: ?int, 1: ?int} [salescallId, typeId]
      */
-    private function resolvePendingPhotoContext(?string $id): array
+    private function resolvePendingPhotoContext(?string $id, string $source): array
     {
         if ($id !== null && isset($this->pendingPhoto[$id])) {
             $context = $this->pendingPhoto[$id];
             unset($this->pendingPhoto[$id]);
 
+            $this->logPhotoDiagnostic('capture_context_matched', $source, $id, [
+                'match_method' => 'capture_id',
+                'pending_capture_count' => count($this->pendingPhoto),
+            ]);
+
             return [$context['salescall_id'], $context['type_id']];
         }
 
         if ($id !== null) {
+            $this->logPhotoDiagnostic('capture_context_unmatched', $source, $id, [
+                'match_method' => 'capture_id',
+                'pending_capture_count' => count($this->pendingPhoto),
+                'discarded_without_persistence' => true,
+            ]);
+
             return [null, null];
         }
 
@@ -475,15 +641,52 @@ class SalescallPage extends Page
         $this->pendingPhotoSalescallId = null;
         $this->pendingPhotoTypeId = null;
 
+        $this->logPhotoDiagnostic(
+            $salescallId && $typeId ? 'capture_context_matched' : 'capture_context_missing',
+            $source,
+            null,
+            ['match_method' => 'legacy_pending_fields'],
+        );
+
         return [$salescallId, $typeId];
     }
 
-    private function saveImageFromPath(string $sourcePath, int $salescallId, int $typeId): void
+    private function safeCameraFailure(?string $failure): ?string
+    {
+        return in_array($failure, [
+            'image_unavailable',
+            'jpeg_encoding_failed',
+            'photo_write_failed',
+            'presentation_unavailable',
+            'camera_unavailable',
+        ], true)
+            ? $failure
+            : null;
+    }
+
+    private function clearPendingPhotoContextsForUncorrelatedEvent(?string $id, string $source): void
+    {
+        if ($id !== null) {
+            return;
+        }
+
+        $clearedCount = count($this->pendingPhoto);
+        $this->pendingPhoto = [];
+
+        $this->logPhotoDiagnostic('uncorrelated_event_cleared_pending_contexts', $source, null, [
+            'cleared_capture_count' => $clearedCount,
+        ]);
+    }
+
+    private function saveImageFromPath(string $sourcePath, int $salescallId, int $typeId, string $source = 'native', ?string $captureId = null): void
     {
         $resolvedPath = NativeMediaPath::resolve($sourcePath) ?? $sourcePath;
 
         if (! is_file($resolvedPath)) {
-            Log::warning('Sales call photo source file missing', ['path' => $resolvedPath]);
+            $this->logPhotoDiagnostic('returned_file_invalid', $source, $captureId, [
+                'failure' => 'source_file_missing',
+            ]);
+            Log::warning('Sales call photo source file missing.');
             Notification::make()
                 ->title('Photo file was not available. Please try again.')
                 ->danger()
@@ -493,13 +696,21 @@ class SalescallPage extends Page
         }
 
         $ext = strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)) ?: 'jpg';
+        $fileSize = @filesize($resolvedPath);
+        $mimeType = @mime_content_type($resolvedPath);
+        $this->logPhotoDiagnostic('returned_file_validated', $source, $captureId, [
+            'extension' => preg_match('/^[a-z0-9]{1,8}$/', $ext) ? $ext : 'other',
+            'size_bytes' => is_int($fileSize) ? $fileSize : null,
+            'mime_type' => is_string($mimeType) && preg_match('#^[a-z0-9.+-]+/[a-z0-9.+-]+$#i', $mimeType) ? $mimeType : 'unknown',
+        ]);
         $filename = 'salescall_images/'.\Str::uuid().'.'.$ext;
 
         Storage::disk('local')->makeDirectory('salescall_images');
         $fullPath = Storage::disk('local')->path($filename);
 
         if (! @copy($resolvedPath, $fullPath)) {
-            Log::warning('Sales call photo copy failed', ['from' => $resolvedPath, 'to' => $fullPath]);
+            $this->logPhotoDiagnostic('photo_file_copy_failed', $source, $captureId);
+            Log::warning('Sales call photo copy failed.');
             Notification::make()
                 ->title('Could not save the photo.')
                 ->danger()
@@ -508,21 +719,43 @@ class SalescallPage extends Page
             return;
         }
 
+        $this->logPhotoDiagnostic('photo_file_copied_to_local_storage', $source, $captureId, [
+            'size_bytes' => is_int($fileSize) ? $fileSize : null,
+        ]);
+
         [$latitude, $longitude] = $this->extractPhotoGps($fullPath);
 
-        $image = SalescallImage::create([
-            'salescall_id' => $salescallId,
-            'salescall_image_type_id' => $typeId,
-            'local_path' => $fullPath,
-            'local_uuid' => (string) \Str::uuid(),
-            'latitude' => $latitude,
-            'longitude' => $longitude,
+        try {
+            $image = SalescallImage::create([
+                'salescall_id' => $salescallId,
+                'salescall_image_type_id' => $typeId,
+                'local_path' => $fullPath,
+                'local_uuid' => (string) \Str::uuid(),
+                'latitude' => $latitude,
+                'longitude' => $longitude,
+                'sync_status' => 'pending',
+            ]);
+        } catch (\Throwable $exception) {
+            $this->logPhotoDiagnostic('salescall_image_persistence_failed', $source, $captureId, [
+                'exception_class' => $exception::class,
+            ]);
+
+            throw $exception;
+        }
+
+        $this->logPhotoDiagnostic('salescall_image_persisted', $source, $captureId, [
             'sync_status' => 'pending',
         ]);
 
         $this->mirrorPhotoForPreview($image);
 
         $this->loadPhotos($salescallId);
+
+        $previewRelativePath = $this->previewMirrorRelativePath($image);
+        $this->logPhotoDiagnostic('photo_preview_refreshed', $source, $captureId, [
+            'preview_available' => is_file(public_path($previewRelativePath)),
+            'photo_count' => count($this->callPhotos),
+        ]);
     }
 
     /**
@@ -557,7 +790,6 @@ class SalescallPage extends Page
         }
     }
 
-    #[On('native:'.PhotoTaken::class)]
     public function onAttachmentPhotoTaken(string $path, string $mimeType = 'image/jpeg', ?string $id = null): void
     {
         $salescallId = $this->resolvePendingAttachmentContext($id);
@@ -569,7 +801,6 @@ class SalescallPage extends Page
         $this->saveProfileAttachmentFromPath($path, $salescallId);
     }
 
-    #[On('native:'.MediaSelected::class)]
     public function onAttachmentMediaSelected(bool $success, array $files = [], int $count = 0, ?string $error = null, bool $cancelled = false, ?string $id = null): void
     {
         $salescallId = $this->resolvePendingAttachmentContext($id);
@@ -603,7 +834,6 @@ class SalescallPage extends Page
         $this->saveProfileAttachmentFromPath($path, $salescallId);
     }
 
-    #[On('native:'.PhotoCancelled::class)]
     public function onAttachmentPhotoCancelled(bool $cancelled = true, ?string $id = null): void
     {
         if ($id !== null) {
@@ -611,7 +841,6 @@ class SalescallPage extends Page
         }
     }
 
-    #[On('native:'.PermissionDenied::class)]
     public function onAttachmentPermissionDenied(string $action = 'photo', ?string $id = null): void
     {
         if ($id !== null && ! isset($this->pendingAttachment[$id])) {
@@ -643,6 +872,11 @@ class SalescallPage extends Page
         unset($this->pendingAttachment[$id]);
 
         return $context['salescall_id'];
+    }
+
+    private function hasPendingAttachmentContext(?string $id): bool
+    {
+        return $id !== null && isset($this->pendingAttachment[$id]);
     }
 
     private function saveProfileAttachmentFromPath(string $sourcePath, int $salescallId): void
