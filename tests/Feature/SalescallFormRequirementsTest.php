@@ -69,7 +69,7 @@ function salescallFormRequirementsVisit(): array
     return [$user, $salescall];
 }
 
-test('completing a visit is blocked until the Signage, Marketing, and Trade Check forms exist for the sales call', function () {
+test('completing a visit is blocked until the Signage, Marketing, and Trade Request forms exist for the sales call', function () {
     salescallFormRequirementsStatuses();
     [$user, $salescall] = salescallFormRequirementsVisit();
     $this->actingAs($user);
@@ -92,7 +92,31 @@ test('completing a visit is blocked until the Signage, Marketing, and Trade Chec
         ->call('initiateFinish', $salescall->id, 'completed')
         ->assertNotDispatched('finish-done');
 
+    attachTradeRequestSubmission($user, $salescall);
+
+    Livewire::test(SalescallPage::class)
+        ->call('initiateFinish', $salescall->id, 'completed')
+        ->assertDispatched('finish-done', salescallId: $salescall->id, outcome: 'completed');
+
+    expect($salescall->fresh()->status)->toBe('completed');
+});
+
+test('a Trade Check submission does not satisfy the completed visit requirement', function () {
+    salescallFormRequirementsStatuses();
+    [$user, $salescall] = salescallFormRequirementsVisit();
+    $this->actingAs($user);
+
+    attachSignageSubmission($user, $salescall);
+    attachMarketingSubmission($user, $salescall);
     attachTradeCheckSubmission($user, $salescall);
+
+    Livewire::test(SalescallPage::class)
+        ->call('initiateFinish', $salescall->id, 'completed')
+        ->assertNotDispatched('finish-done');
+
+    expect($salescall->fresh()->status)->not->toBe('completed');
+
+    attachTradeRequestSubmission($user, $salescall);
 
     Livewire::test(SalescallPage::class)
         ->call('initiateFinish', $salescall->id, 'completed')
@@ -149,4 +173,45 @@ test('partially completing a visit does not require the three forms', function (
         ->assertDispatched('finish-done', salescallId: $salescall->id, outcome: 'partially_completed');
 
     expect($salescall->fresh()->status)->toBe('partially_completed');
+});
+
+test('the page tracks the required forms of the selected sales call without counting other calls or reps', function () {
+    [$user, $salescall] = salescallFormRequirementsVisit();
+    $otherUser = User::factory()->create();
+    $this->actingAs($user);
+
+    $otherSalescall = Salescall::create([
+        'itinerary_id' => $salescall->itinerary_id,
+        'customer_id' => $salescall->customer_id,
+        'created_by' => $user->id,
+        'local_uuid' => (string) Str::uuid(),
+        'sync_status' => 'pending',
+        'actual_in' => now(),
+    ]);
+
+    attachRequiredSalescallForms($otherUser, $salescall);
+    attachRequiredSalescallForms($user, $otherSalescall);
+
+    Livewire::test(SalescallPage::class)
+        ->call('loadFormRequirements', $salescall->id)
+        ->assertSet('hasSignageForm', false)
+        ->assertSet('hasMarketingForm', false)
+        ->assertSet('hasTradeRequestForm', false);
+
+    attachRequiredSalescallForms($user, $salescall);
+
+    Livewire::test(SalescallPage::class)
+        ->call('loadFormRequirements', $salescall->id)
+        ->assertSet('hasSignageForm', true)
+        ->assertSet('hasMarketingForm', true)
+        ->assertSet('hasTradeRequestForm', true);
+});
+
+test('the submit requirements list shows the required form items', function () {
+    $this->actingAs(User::factory()->create());
+
+    Livewire::test(SalescallPage::class)
+        ->assertSeeHtml('<span>CRR Signage<span x-show="!hasSignageForm"> (missing)</span></span>')
+        ->assertSeeHtml('<span>Marketing<span x-show="!hasMarketingForm"> (missing)</span></span>')
+        ->assertSeeHtml('<span>Trade Request<span x-show="!hasTradeRequestForm"> (missing)</span></span>');
 });

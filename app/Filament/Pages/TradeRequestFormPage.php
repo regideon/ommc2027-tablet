@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Enums\FormKey;
 use App\Enums\TradeRequest\TradeRequestAttachmentType;
+use App\Filament\Concerns\LocksRequestedSalescall;
 use App\Filament\Concerns\StagesAttachments;
 use App\Models\Forms\TradeRequest\TradeProduct;
 use App\Models\Forms\TradeRequest\TradeRequest;
@@ -25,6 +26,7 @@ use Throwable;
 
 class TradeRequestFormPage extends Page
 {
+    use LocksRequestedSalescall;
     use StagesAttachments;
 
     protected string $view = 'filament.pages.trade-request-form-page';
@@ -151,6 +153,8 @@ class TradeRequestFormPage extends Page
         if ($this->items === []) {
             $this->items = [$this->blankItemRow()];
         }
+
+        $this->applyRequestedSalescallLock();
     }
 
     public function save(TradeRequestService $service): void

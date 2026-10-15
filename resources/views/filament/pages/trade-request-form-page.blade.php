@@ -62,12 +62,15 @@
                 </div>
                 <div>
                     <label class="field-label">Sales Call</label>
-                    <select wire:model="salescall_uuid" class="field-input bg-white">
+                    <select wire:model="salescall_uuid" class="field-input bg-white" @disabled($salescallLocked)>
                         <option value="">No linked sales call</option>
                         @foreach ($salescalls as $salescall)
                             <option value="{{ $salescall['uuid'] }}">{{ $salescall['label'] }}</option>
                         @endforeach
                     </select>
+                    @if ($salescallLocked)
+                        <p class="text-xs text-[#737685] mt-1">Started from this Sales Call — locked to this visit.</p>
+                    @endif
                     <p class="field-error">{{ $formErrors['salescall_uuid'][0] ?? '' }}</p>
                 </div>
             </div>

@@ -7,6 +7,8 @@ use App\Models\Forms\CRRSignage\SignageType;
 use App\Models\Forms\Marketing\Marketing;
 use App\Models\Forms\Marketing\MarketingProgram;
 use App\Models\Forms\TradeCheck\TradeCheck;
+use App\Models\Forms\TradeRequest\TradeProduct;
+use App\Models\Forms\TradeRequest\TradeRequest;
 use App\Models\RegionType;
 use App\Models\Salescall;
 use App\Models\User;
@@ -123,9 +125,22 @@ function attachTradeCheckSubmission(User $user, Salescall $salescall): void
     ]);
 }
 
+function attachTradeRequestSubmission(User $user, Salescall $salescall): void
+{
+    $product = TradeProduct::create(['name' => 'Trade Request Product']);
+
+    TradeRequest::create([
+        'local_uuid' => (string) Str::uuid(),
+        'submitted_by' => $user->id,
+        'salescall_id' => $salescall->id,
+        'product_id' => $product->id,
+        'sync_status' => 'pending',
+    ]);
+}
+
 function attachRequiredSalescallForms(User $user, Salescall $salescall): void
 {
     attachSignageSubmission($user, $salescall);
     attachMarketingSubmission($user, $salescall);
-    attachTradeCheckSubmission($user, $salescall);
+    attachTradeRequestSubmission($user, $salescall);
 }
