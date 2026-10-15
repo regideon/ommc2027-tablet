@@ -120,13 +120,7 @@ test('creation commits locally and a later push reconciles successfully', functi
         if (str_ends_with($request->url(), '/api/sync/push/customer')) {
             expect(DB::table('customers')->where('name', 'Created Shop')->exists())->toBeTrue();
 
-            return Http::response(['results' => [[
-                'status' => 'synced',
-                'server_id' => 881,
-                'local_uuid' => $request['customers'][0]['local_uuid'],
-                'unique_id' => 'OMMC0881',
-                'updated_at' => now()->toISOString(),
-            ]]]);
+            return Http::response(['server_id' => 881, 'unique_id' => 'OMMC0881', 'updated_at' => now()->toISOString()]);
         }
 
         return Http::response(['token' => '33333333-3333-4333-8333-333333333333', 'code' => 'OMMC0881']);

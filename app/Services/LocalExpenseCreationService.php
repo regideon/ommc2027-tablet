@@ -7,6 +7,7 @@ use App\Models\ExpenseAttachment;
 use App\Models\ExpenseType;
 use App\Models\Salescall;
 use App\Models\User;
+use App\Support\ExpenseAmountLimit;
 use App\Support\ExpensePaymentType;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -35,7 +36,7 @@ class LocalExpenseCreationService
     private const FORM_KEYS = [
         'communication_expenses' => [],
         'emergency_expenses' => [],
-        'lodging' => ['number_of_nights', 'hotel'],
+        'lodging' => ['number_of_nights', 'hotel', 'lodging_budget_confirmed'],
         'per_diem' => ['meal', 'number_of_days'],
         'ancillary_expenses' => ['expense_kind', 'expense_kind_other'],
         'airfare' => ['route'],
@@ -72,7 +73,7 @@ class LocalExpenseCreationService
             'establishment' => ['required', 'string', 'max:255'],
             'location' => ['required', 'string', 'max:2000'],
             'purpose' => ['required', 'string', 'max:5000'],
-            'tin' => ['required', 'string', 'max:255'],
+            'tin' => ['nullable', 'string', 'max:255'],
             'latitude' => ['nullable', 'numeric', 'between:-90,90'],
             'longitude' => ['nullable', 'numeric', 'between:-180,180'],
             'form_data' => ['nullable', 'array'],
@@ -98,6 +99,8 @@ class LocalExpenseCreationService
             ]);
         }
 
+        $this->validateBusinessRequirements($creator, $expenseType->code, $validated, $formData, $attachments);
+
         $storedPaths = [];
 
         try {
@@ -118,7 +121,7 @@ class LocalExpenseCreationService
                     'establishment' => $validated['establishment'],
                     'location' => $validated['location'],
                     'purpose' => $validated['purpose'],
-                    'tin' => $validated['tin'],
+                    'tin' => $validated['tin'] ?? null,
                     'latitude' => $validated['latitude'] ?? null,
                     'longitude' => $validated['longitude'] ?? null,
                     'form_data' => $formData,
@@ -434,6 +437,7 @@ class LocalExpenseCreationService
             'lodging' => [
                 'number_of_nights' => ['nullable', 'integer', 'min:0'],
                 'hotel' => ['nullable', 'string', 'max:255'],
+                'lodging_budget_confirmed' => ['nullable', 'boolean'],
             ],
             'per_diem' => [
                 'meal' => ['nullable', 'string', 'max:255'],
@@ -459,6 +463,57 @@ class LocalExpenseCreationService
         $normalized = $this->validateFormData($normalizedInput, $rules);
 
         return array_filter($normalized, static fn (mixed $value): bool => $value !== null);
+    }
+
+    /**
+     * Enforce the workbook's conditional Per Diem, Lodging, TIN, and attachment rules.
+     *
+     * @param  array<string, mixed>  $data
+     * @param  array<string, mixed>  $formData
+     * @param  array<int, array<string, mixed>>  $attachments
+     */
+    private function validateBusinessRequirements(User $creator, string $expenseTypeCode, array $data, array $formData, array $attachments): void
+    {
+        $perDiemLimit = $creator->hasRole('rsm')
+            ? '450.00'
+            : ($creator->hasRole('drm') ? '320.00' : null);
+
+        if ($expenseTypeCode === 'per_diem' && $perDiemLimit !== null
+            && ExpenseAmountLimit::exceeds($data['amount'], $perDiemLimit)) {
+            throw ValidationException::withMessages([
+                'amount' => 'The Per Diem amount exceeds the approved limit of PHP '.$perDiemLimit.'.',
+            ]);
+        }
+
+        $isLodging = $expenseTypeCode === 'lodging';
+        $lodgingOverThreshold = $isLodging && ExpenseAmountLimit::exceeds($data['amount'], '500.00');
+        $wasLodgingConfirmed = in_array($formData['lodging_budget_confirmed'] ?? null, [true, 1, '1'], true);
+        if ($lodgingOverThreshold && ! $wasLodgingConfirmed) {
+            throw ValidationException::withMessages([
+                'form_data.lodging_budget_confirmed' => 'Confirmation is required to proceed with Lodging above PHP 500.00.',
+            ]);
+        }
+
+        $tinExempt = ($expenseTypeCode === 'per_diem'
+                && $perDiemLimit !== null
+                && ! ExpenseAmountLimit::exceeds($data['amount'], $perDiemLimit))
+            || ($isLodging && ! $lodgingOverThreshold);
+        if (! $tinExempt && blank($data['tin'] ?? null)) {
+            throw ValidationException::withMessages([
+                'tin' => 'A TIN is required for this Expense amount.',
+            ]);
+        }
+
+        $attachmentExempt = ($expenseTypeCode === 'per_diem'
+                && $perDiemLimit !== null
+                && ! ExpenseAmountLimit::exceeds($data['amount'], $perDiemLimit))
+            || ($isLodging && ! $lodgingOverThreshold);
+        $attachmentsRequired = $data['payment_type'] === 'SBC Credit Card' || ! $attachmentExempt;
+        if ($attachmentsRequired && $attachments === []) {
+            throw ValidationException::withMessages([
+                'attachments' => 'At least one attachment is required for this Expense.',
+            ]);
+        }
     }
 
     /**

@@ -6,6 +6,7 @@ use App\Filament\Pages\MarketingFormPage;
 use App\Filament\Pages\SalescallPage;
 use App\Filament\Pages\SignageFormPage;
 use App\Filament\Pages\TradeCheckFormPage;
+use App\Filament\Pages\TradeRequestFormPage;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Js;
@@ -13,7 +14,7 @@ use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
 
-test('the sales call page wires redirect buttons to the CRR, Signage, Marketing, Trade Check, and Giveaway forms', function () {
+test('the sales call page wires redirect buttons to the CRR, Signage, Marketing, Trade Request, Trade Check, and Giveaway forms', function () {
     $user = User::factory()->create();
     $this->actingAs($user);
 
@@ -22,11 +23,13 @@ test('the sales call page wires redirect buttons to the CRR, Signage, Marketing,
         ->assertSeeHtml('title="CRR — Customer Call Report"')
         ->assertSee('CRR Signage')
         ->assertSee('Local Store Marketing')
+        ->assertSeeHtml('title="Trade Request — Trade request form"')
         ->assertSee('Trade Check')
         ->assertSee('Giveaway form')
         ->assertSeeHtml("openSalescallForm('crr')")
         ->assertSeeHtml("openSalescallForm('signage')")
         ->assertSeeHtml("openSalescallForm('marketing')")
+        ->assertSeeHtml("openSalescallForm('tradeRequest')")
         ->assertSeeHtml("openSalescallForm('tradeCheck')")
         ->assertSeeHtml("openSalescallForm('giveaway')");
 
@@ -34,6 +37,7 @@ test('the sales call page wires redirect buttons to the CRR, Signage, Marketing,
         ->toContain('crr: '.Js::from(CrrFormPage::getUrl()).',')
         ->toContain('signage: '.Js::from(SignageFormPage::getUrl()).',')
         ->toContain('marketing: '.Js::from(MarketingFormPage::getUrl()).',')
+        ->toContain('tradeRequest: '.Js::from(TradeRequestFormPage::getUrl()).',')
         ->toContain('tradeCheck: '.Js::from(TradeCheckFormPage::getUrl()).',')
         ->toContain('giveaway: '.Js::from(GiveawayFormPage::getUrl()).',');
 });

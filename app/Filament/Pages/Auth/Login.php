@@ -24,16 +24,21 @@ class Login extends \Filament\Auth\Pages\Login
 
         $user = User::where('email', $email)->first();
 
-        if ($user) {
-            if (! Hash::check($password, $user->password)) {
-                $this->throwFailureValidationException();
-            }
+        if (! $sync->isConfigured()) {
+            throw ValidationException::withMessages([
+                'data.email' => 'Portal authentication is not configured on this device.',
+            ]);
+        }
 
-            Filament::auth()->login($user, $remember);
-            session()->regenerate();
+        if ($sync->isPortalResponsive()) {
+            $tokenResult = $sync->refreshToken($email, $password);
 
-            if ($sync->isReachable()) {
-                $sync->refreshToken($email, $password);
+            if ($tokenResult->success) {
+                // refreshToken reconciles the Portal identity, roles, password hash, and token locally.
+                $user = User::where('email', $email)->firstOrFail();
+                Filament::auth()->login($user, $remember);
+                session()->regenerate();
+
                 $pullResult = $sync->pull();
 
                 if (! $pullResult->success) {
@@ -42,41 +47,32 @@ class Login extends \Filament\Auth\Pages\Login
 
                 $user = User::where('email', $email)->firstOrFail();
                 Filament::auth()->login($user, $remember);
+
+                app(TrustedLoginService::class)->mark($user);
+
+                $this->requestDevicePermissions();
+
+                return app(LoginResponse::class);
             }
 
-            app(TrustedLoginService::class)->mark($user);
-
-            $this->requestDevicePermissions();
-
-            return app(LoginResponse::class);
+            if ($tokenResult->errorCode !== 'connection_error') {
+                $this->throwFailureValidationException();
+            }
         }
 
-        // No local user — first login requires internet
-        if (! $sync->isReachable()) {
+        // Only a connection failure permits the previously approved offline path.
+        if (! $user) {
             throw ValidationException::withMessages([
                 'data.email' => 'No local account found. Connect to the internet for first login.',
             ]);
         }
 
-        $tokenResult = $sync->refreshToken($email, $password);
-
-        if (! $tokenResult->success) {
+        if (! Hash::check($password, $user->password)) {
             $this->throwFailureValidationException();
         }
 
-        $user = User::where('email', $email)->firstOrFail();
-
         Filament::auth()->login($user, $remember);
         session()->regenerate();
-
-        $pullResult = $sync->pull();
-
-        if (! $pullResult->success) {
-            Notification::make()->title($pullResult->message)->danger()->send();
-        }
-
-        $user = User::where('email', $email)->firstOrFail();
-        Filament::auth()->login($user, $remember);
 
         app(TrustedLoginService::class)->mark($user);
 

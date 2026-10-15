@@ -10,6 +10,7 @@
             expenseAmountInputError: '',
             expenseAttachments: [],
             expenseAttachmentError: '',
+            lodgingConfirmationPending: false,
             emptyExpenseForm() {
                 const today = new Date();
                 const date = new Date(today.getTime() - today.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -44,6 +45,15 @@
                 }[typeCode] || {};
             },
             expenseError(field) { return (this.expenseErrors[field] || [])[0] || ''; },
+            expenseAmountExceeds(value, limit) {
+                const [amountWholeInput = '0', amountFractionInput = ''] = String(value).split('.');
+                const [limitWholeInput = '0', limitFractionInput = ''] = String(limit).split('.');
+                const amountWhole = amountWholeInput.replace(/^0+(?=\d)/, '');
+                const limitWhole = limitWholeInput.replace(/^0+(?=\d)/, '');
+                if (amountWhole.length !== limitWhole.length) return amountWhole.length > limitWhole.length;
+                if (amountWhole !== limitWhole) return amountWhole > limitWhole;
+                return amountFractionInput.padEnd(2, '0').slice(0, 2) > limitFractionInput.padEnd(2, '0').slice(0, 2);
+            },
             onExpenseAmountInput(event) {
                 const input = event.target;
                 const candidate = input.value;
@@ -134,15 +144,26 @@
                 reader.readAsDataURL(file);
             },
             removeExpenseAttachment(index) { this.expenseAttachments.splice(index, 1); },
-            async saveExpenseForm() {
+            async saveExpenseForm(confirmedLodgingBudget = false) {
                 if (this.expenseSaving) return;
                 if (!this.$refs.expenseEntryForm.reportValidity()) return;
-                this.expenseSaving = true;
-                this.expenseErrors = {};
                 if (['representation', 'staff_meeting'].includes(this.expenseSelectedType.code)) {
                     this.expenseForm.form_data.names_included = (this.expenseForm.form_data.names_included || [])
                         .map(name => String(name).trim()).filter(Boolean);
                 }
+                if (this.expenseSelectedType.code === 'lodging') {
+                    delete this.expenseForm.form_data.lodging_budget_confirmed;
+                    if (this.expenseAmountExceeds(this.expenseForm.amount, '500.00')) {
+                        if (!confirmedLodgingBudget) {
+                            this.lodgingConfirmationPending = true;
+                            return;
+                        }
+                        this.expenseForm.form_data.lodging_budget_confirmed = true;
+                    }
+                }
+                this.lodgingConfirmationPending = false;
+                this.expenseSaving = true;
+                this.expenseErrors = {};
                 const result = await $wire.saveExpense(this.expenseForm, this.expenseAttachments);
                 this.expenseSaving = false;
                 if (!result?.ok) this.expenseErrors = result?.errors || { form: ['The Expense could not be saved.'] };
@@ -175,6 +196,16 @@
         </div>
 
         <form x-ref="expenseEntryForm" @submit.prevent="saveExpenseForm()" class="space-y-4">
+            <div x-show="lodgingConfirmationPending" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-5" role="dialog" aria-modal="true" aria-labelledby="lodging-budget-confirmation-title">
+                <div class="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl">
+                    <h2 id="lodging-budget-confirmation-title" class="text-lg font-bold text-[#191c1e]">Budget Exceeding</h2>
+                    <p class="mt-2 text-sm text-[#434654]">The amount entered exceeds the allowed budget. Are you sure you want to proceed?</p>
+                    <div class="mt-5 grid grid-cols-2 gap-3">
+                        <button type="button" @click="lodgingConfirmationPending = false" class="h-11 rounded-xl border border-gray-200 text-[#434654] font-bold">No</button>
+                        <button type="button" @click="saveExpenseForm(true)" class="h-11 rounded-xl bg-[#890f00] text-white font-bold">Yes</button>
+                    </div>
+                </div>
+            </div>
             <div class="p-3 bg-gray-50 border border-gray-200 rounded-xl">
                 <p class="text-[10px] font-black text-[#737685] uppercase tracking-wider">Expense Type</p>
                 <p class="font-bold text-[#191c1e]" x-text="expenseSelectedType.label"></p>

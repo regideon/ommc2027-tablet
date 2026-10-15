@@ -129,6 +129,28 @@ test('legacy server ID matching requires corroborating Company and Customer Code
         ->and($uuidConflict->reason)->toBe('server_id_has_different_local_uuid');
 });
 
+test('legacy server ID matching corroborates Company-less Customers when Company is absent on both sides', function () {
+    $localId = insertIdentityResolverCustomer([
+        'server_id' => 72005,
+        'local_uuid' => null,
+        'unique_id' => 'COMPANY-LESS-005',
+        'company_id' => null,
+    ]);
+    $resolver = app(CustomerIdentityResolver::class);
+
+    $match = $resolver->resolve(['id' => 72005, 'local_uuid' => null, 'unique_id' => 'COMPANY-LESS-005', 'company_id' => null]);
+    $codeMismatch = $resolver->resolve(['id' => 72005, 'local_uuid' => null, 'unique_id' => 'OTHER-005', 'company_id' => null]);
+    $mixedCompany = $resolver->resolve(['id' => 72005, 'local_uuid' => null, 'unique_id' => 'COMPANY-LESS-005', 'company_id' => 7]);
+
+    expect($match->status)->toBe(CustomerIdentityResolution::MATCHED)
+        ->and($match->matchedBy)->toBe('server_id_legacy')
+        ->and($match->localId)->toBe($localId)
+        ->and($codeMismatch->status)->toBe(CustomerIdentityResolution::CONFLICT)
+        ->and($codeMismatch->reason)->toBe('legacy_server_id_identity_not_corroborated')
+        ->and($mixedCompany->status)->toBe(CustomerIdentityResolution::CONFLICT)
+        ->and($mixedCompany->reason)->toBe('legacy_server_id_identity_not_corroborated');
+});
+
 test('missing UUID cannot resolve a Push acknowledgment by numeric ID alone', function () {
     $localId = insertIdentityResolverCustomer(['company_id' => 10]);
 
@@ -141,42 +163,4 @@ test('missing UUID cannot resolve a Push acknowledgment by numeric ID alone', fu
 
     expect($result->status)->toBe(CustomerIdentityResolution::CONFLICT)
         ->and($result->reason)->toBe('acknowledgment_has_no_matching_local_uuid');
-});
-
-test('resolveMany resolves a page with the same outcomes as per-customer resolve', function () {
-    DB::table('companies')->insert(['id' => 7, 'name' => 'Batch Company', 'code' => 'BATCH', 'created_at' => now(), 'updated_at' => now()]);
-
-    $uuid = (string) Str::uuid();
-    $uuidLocal = insertIdentityResolverCustomer(['local_uuid' => $uuid, 'company_id' => 7, 'unique_id' => 'BATCH-U']);
-    $legacyLocal = insertIdentityResolverCustomer(['server_id' => 73001, 'company_id' => 7, 'unique_id' => 'BATCH-L']);
-
-    $page = [
-        ['id' => 73000, 'local_uuid' => $uuid, 'unique_id' => 'BATCH-U', 'company_id' => 7],
-        ['id' => 73001, 'local_uuid' => null, 'unique_id' => 'BATCH-L', 'company_id' => 7],
-        ['id' => 73002, 'local_uuid' => (string) Str::uuid(), 'unique_id' => 'BATCH-N', 'company_id' => 7],
-    ];
-
-    $many = app(CustomerIdentityResolver::class)->resolveMany($page);
-
-    expect($many)->toHaveCount(3)
-        ->and($many[0]->status)->toBe(CustomerIdentityResolution::MATCHED)
-        ->and($many[0]->matchedBy)->toBe('local_uuid')
-        ->and($many[0]->localId)->toBe($uuidLocal)
-        ->and($many[1]->status)->toBe(CustomerIdentityResolution::MATCHED)
-        ->and($many[1]->matchedBy)->toBe('server_id_legacy')
-        ->and($many[1]->localId)->toBe($legacyLocal)
-        ->and($many[2]->status)->toBe(CustomerIdentityResolution::NEW)
-        ->and($many[2]->localId)->toBe(73002);
-});
-
-test('resolveMany reports duplicate server ids as conflicts', function () {
-    insertIdentityResolverCustomer(['server_id' => 73010]);
-    insertIdentityResolverCustomer(['server_id' => 73010]);
-
-    $many = app(CustomerIdentityResolver::class)->resolveMany([
-        ['id' => 73010, 'local_uuid' => (string) Str::uuid(), 'unique_id' => 'X', 'company_id' => null],
-    ]);
-
-    expect($many[0]->status)->toBe(CustomerIdentityResolution::CONFLICT)
-        ->and($many[0]->reason)->toBe('duplicate_server_id');
 });

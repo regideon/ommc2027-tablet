@@ -84,6 +84,19 @@
                 if (expense.approved === false) return `DISAPPROVED${expense.approver_remarks ? ` (${expense.approver_remarks})` : ''}`;
                 return expense.sync_status === 'pending' ? 'PENDING SYNC' : 'PROCESSING';
             },
+            expenseSyncSummary(expense) {
+                const expenseStatus = expense.sync_status === 'synced' ? 'Expense synchronized' : 'Expense not synchronized';
+                if (expense.attachments_required && !(expense.attachments || []).length) {
+                    return `${expenseStatus}; required attachment missing`;
+                }
+                if (expense.attachment_sync_status === 'failed') {
+                    return `${expenseStatus}; ${expense.attachments_required ? 'required ' : ''}attachment failed`;
+                }
+                if (expense.attachment_sync_status === 'pending') {
+                    return `${expenseStatus}; ${expense.attachments_required ? 'required ' : ''}attachment pending`;
+                }
+                return expense.sync_status === 'synced' ? 'Expense and required attachments fully synchronized' : expenseStatus;
+            },
         }));
     </script>
 @endonce
@@ -134,6 +147,7 @@
         style="-webkit-overflow-scrolling: touch;">
         <template x-if="selectedExpense">
             <div class="space-y-4">
+                <div class="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-[#434654]" x-text="expenseSyncSummary(selectedExpense)"></div>
                 <div class="flex items-center gap-3">
                     @if($context === 'salescall')
                         <button type="button" @click="backToList()" class="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center shrink-0">
@@ -201,10 +215,13 @@
                         <span class="text-xs text-[#737685]" x-text="(selectedExpense.attachments || []).length"></span>
                     </div>
                     <template x-for="attachment in (selectedExpense.attachments || [])" :key="attachment.id || attachment.original_name">
-                        <div class="flex items-center gap-2 py-2 border-b border-gray-100 last:border-0">
+                        <div class="flex flex-wrap items-center gap-2 py-2 border-b border-gray-100 last:border-0">
                             <span class="material-symbols-outlined text-[#737685]">attach_file</span>
                             <span class="text-sm text-[#191c1e] truncate" x-text="attachment.original_name || 'Attachment'"></span>
+                            <span class="text-xs text-[#737685]" x-show="attachment.sync_status" x-text="attachment.sync_status"></span>
                             <a x-show="attachment.url" :href="attachment.url" target="_blank" rel="noopener" class="ml-auto text-xs font-bold text-[#890f00] shrink-0">View</a>
+                            <button type="button" x-show="attachment.sync_status === 'failed' && attachment.id" @click="$wire.retryExpenseAttachment(attachment.id)" wire:loading.attr="disabled" class="text-xs font-bold text-[#890f00]">Retry upload</button>
+                            <p x-show="attachment.sync_error" class="basis-full text-xs text-red-700" x-text="attachment.sync_error"></p>
                         </div>
                     </template>
                     <p x-show="(selectedExpense.attachments || []).length === 0" class="text-sm text-[#737685]">No attachments.</p>

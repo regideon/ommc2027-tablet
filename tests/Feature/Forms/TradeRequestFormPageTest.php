@@ -5,10 +5,13 @@ use App\Enums\TradeRequest\Size;
 use App\Enums\TradeRequest\TradeRequestAttachmentType;
 use App\Filament\Pages\FormsPage;
 use App\Filament\Pages\TradeRequestFormPage;
+use App\Models\Customer;
 use App\Models\Forms\TradeRequest\TradeProduct;
 use App\Models\Forms\TradeRequest\TradeRequest;
 use App\Models\Forms\TradeRequest\TradeRequestAttachment;
 use App\Models\Forms\TradeRequest\TradeType;
+use App\Models\Itinerary;
+use App\Models\Salescall;
 use App\Models\StagedAttachment;
 use App\Models\User;
 use App\Services\Forms\TradeRequestService;
@@ -16,6 +19,7 @@ use App\Services\StagedAttachmentService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
@@ -223,4 +227,59 @@ test('the edit route aborts 403 for a non-pending submission', function () {
 
     $this->get(TradeRequestFormPage::getUrl(['submission' => $tradeRequest->id]))
         ->assertForbidden();
+});
+
+function tradeRequestFormPageSalescall(User $user): Salescall
+{
+    $customer = Customer::create(['name' => 'Trade Request Salescall Customer', 'is_active' => true]);
+    $itinerary = Itinerary::create(['created_by' => $user->id, 'itinerary_status_id' => 2]);
+
+    return Salescall::create([
+        'itinerary_id' => $itinerary->id,
+        'customer_id' => $customer->id,
+        'created_by' => $user->id,
+        'local_uuid' => (string) Str::uuid(),
+        'sync_status' => 'pending',
+        'actual_in' => now(),
+    ]);
+}
+
+test('opening the Trade Request form from a sales call preselects and locks that sales call', function () {
+    $user = tradeRequestFormPageUser();
+    $this->actingAs($user);
+
+    $salescall = tradeRequestFormPageSalescall($user);
+
+    Livewire::withQueryParams(['salescall' => $salescall->local_uuid])
+        ->test(TradeRequestFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', $salescall->local_uuid, true)
+        ->assertSet('salescallLocked', true, true)
+        ->assertSee('Started from this Sales Call')
+        ->assertSeeHtml('wire:model="salescall_uuid" class="field-input bg-white" disabled');
+});
+
+test('opening the Trade Request form with an unknown sales call uuid does not preselect or lock', function () {
+    $user = tradeRequestFormPageUser();
+    $this->actingAs($user);
+
+    Livewire::withQueryParams(['salescall' => (string) Str::uuid()])
+        ->test(TradeRequestFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', null, true)
+        ->assertSet('salescallLocked', false, true);
+});
+
+test('a sales call owned by another rep is ignored when opening the Trade Request form', function () {
+    $user = tradeRequestFormPageUser();
+    $otherUser = User::factory()->create();
+    $this->actingAs($user);
+
+    $foreignSalescall = tradeRequestFormPageSalescall($otherUser);
+
+    Livewire::withQueryParams(['salescall' => $foreignSalescall->local_uuid])
+        ->test(TradeRequestFormPage::class)
+        ->assertOk()
+        ->assertSet('salescall_uuid', null, true)
+        ->assertSet('salescallLocked', false, true);
 });

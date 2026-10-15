@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Services\ExpenseReadService;
 use BackedEnum;
+use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use Throwable;
@@ -46,5 +47,17 @@ class ExpensePage extends Page
             $this->expenses = [];
             $this->expenseLoadError = 'Expenses could not be loaded. Refresh to try again.';
         }
+    }
+
+    public function retryExpenseAttachment(int $attachmentId, ExpenseReadService $expenseReadService): void
+    {
+        $result = $expenseReadService->retryAttachmentForVisibleExpense(auth()->user(), $attachmentId);
+
+        Notification::make()
+            ->title($result->message)
+            ->color($result->success ? 'success' : 'danger')
+            ->send();
+
+        $this->loadExpenses($expenseReadService);
     }
 }

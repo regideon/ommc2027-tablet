@@ -1255,7 +1255,7 @@ test('Customer Pull accepts null Company IDs across mixed pages without changing
         ]);
 });
 
-test('Customer Pull rejects a Customer with a missing Company ID field instead of treating omission as null', function () {
+test('Customer Pull treats a missing Company ID field as null and pulls the Customer as Company-less', function () {
     $portalCustomer = ($this->customer)(90001, 'Customer missing Company field');
     unset($portalCustomer['company_id']);
     ($this->fakePortal)([
@@ -1269,11 +1269,11 @@ test('Customer Pull rejects a Customer with a missing Company ID field instead o
     ]);
 
     $steps = ($this->runToCompletion)();
-    $failure = end($steps);
 
-    expect($failure['success'])->toBeFalse()
-        ->and($failure['message'])->toContain('omitted the Company ID field')
-        ->and(DB::table('customers')->where('server_id', 90001)->exists())->toBeFalse();
+    expect(collect($steps)->pluck('success')->every(fn (bool $success): bool => $success))->toBeTrue()
+        ->and(end($steps)['done'])->toBeTrue()
+        ->and(DB::table('customers')->where('server_id', 90001)->whereNull('company_id')->count())->toBe(1)
+        ->and(DB::table('customers')->where('server_id', 90001)->value('name'))->toBe('Customer missing Company field');
 });
 
 test('Customer Pull rejects malformed non-null Company IDs before persisting the Customer', function (mixed $companyId) {
@@ -1300,7 +1300,7 @@ test('Customer Pull rejects malformed non-null Company IDs before persisting the
     'nonnumeric string' => ['not-a-company-id'],
 ]);
 
-test('Customer Pull rolls back a page with an invalid non-null Company without changing cached Customer or Access', function () {
+test('Customer Pull rolls back a legacy-identified page when the Company reference no longer corroborates', function () {
     $now = now();
     DB::table('customers')->insert([
         'id' => -90020,
@@ -1335,7 +1335,8 @@ test('Customer Pull rolls back a page with an invalid non-null Company without c
     $failure = end($steps);
 
     expect($failure['success'])->toBeFalse()
-        ->and($failure['message'])->toContain('required Company is unavailable on this device')
+        ->and($failure['message'])->toContain('customer_page_transaction')
+        ->toContain('local transaction was rolled back')
         ->and(DB::table('customers')->where('id', -90020)->first())->toMatchArray([
             'server_id' => 90020,
             'company_id' => 1,
@@ -1345,7 +1346,89 @@ test('Customer Pull rolls back a page with an invalid non-null Company without c
         ->and(DB::table('customer_user')->where('customer_id', -90020)->pluck('user_id')->all())->toBe([$this->user->id]);
 });
 
-test('Customer Pull rejects a Customer whose non-null Company reference is unresolved locally', function () {
+test('Customer Pull re-applies a Company-less legacy-identified Customer without an identity conflict', function () {
+    $now = now();
+    DB::table('customers')->insert([
+        'id' => -90100,
+        'server_id' => 90100,
+        'company_id' => null,
+        'name' => 'Cached Company-less Customer',
+        'is_active' => true,
+        'sync_status' => 'synced',
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]);
+    $portalCustomer = ($this->customer)(90100, 'Updated Company-less Customer');
+    $portalCustomer['company_id'] = null;
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [90100],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+
+    expect(collect($steps)->pluck('success')->every(fn (bool $success): bool => $success))->toBeTrue()
+        ->and(end($steps)['done'])->toBeTrue()
+        ->and(DB::table('customers')->where('server_id', 90100)->value('name'))->toBe('Updated Company-less Customer')
+        ->and(DB::table('customers')->where('server_id', 90100)->value('company_id'))->toBeNull();
+});
+
+test('Customer Pull applies brand links that resolve and skips ones whose reference rows are not on the device', function () {
+    DB::table('material_groups')->insert(['id' => 1, 'name' => 'Group', 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('brands')->insert(['id' => 1, 'material_group_id' => 1, 'name' => 'Brand', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    $portalCustomer = ($this->customer)(90201, 'Customer with mixed brand links');
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'customer_brands' => [
+                ['customer_id' => 90201, 'material_group_id' => 1, 'brand_id' => 1, 'quantity' => 4],
+                ['customer_id' => 90201, 'material_group_id' => 77, 'brand_id' => 777, 'quantity' => 9],
+            ],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [90201],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+
+    expect(collect($steps)->pluck('success')->every(fn (bool $success): bool => $success))->toBeTrue()
+        ->and(end($steps)['done'])->toBeTrue()
+        ->and(DB::table('customers')->where('server_id', 90201)->value('name'))->toBe('Customer with mixed brand links')
+        ->and(DB::table('customer_brands')->where('customer_id', 90201)->count())->toBe(1)
+        ->and(DB::table('customer_brands')->where('customer_id', 90201)->value('brand_id'))->toBe(1);
+});
+
+test('Customer Pull skips category links whose reference rows are not on the device', function () {
+    $portalCustomer = ($this->customer)(90202, 'Customer with unresolved category link');
+    ($this->fakePortal)([
+        0 => Http::response([
+            'customers' => [$portalCustomer],
+            'customer_categories' => [
+                ['customer_id' => 90202, 'category_id' => 55, 'sub_category_id' => 555],
+            ],
+            'next_after_id' => null,
+            'total' => 1,
+            'server_time' => '2026-10-10T01:00:00.000000Z',
+            'scope_ids' => [90202],
+        ]),
+    ]);
+
+    $steps = ($this->runToCompletion)();
+
+    expect(collect($steps)->pluck('success')->every(fn (bool $success): bool => $success))->toBeTrue()
+        ->and(end($steps)['done'])->toBeTrue()
+        ->and(DB::table('customers')->where('server_id', 90202)->exists())->toBeTrue()
+        ->and(DB::table('customer_categories')->where('customer_id', 90202)->exists())->toBeFalse();
+});
+
+test('Customer Pull accepts a Customer whose non-null Company reference is unresolved locally and retains the supplied Company id', function () {
     $portalCustomer = ($this->customer)(90002, 'Customer with unresolved Company');
     $portalCustomer['company_id'] = 999;
     ($this->fakePortal)([
@@ -1359,18 +1442,11 @@ test('Customer Pull rejects a Customer whose non-null Company reference is unres
     ]);
 
     $steps = ($this->runToCompletion)();
-    $customerFailure = end($steps);
 
-    expect($customerFailure)->toMatchArray([
-        'success' => false,
-        'done' => false,
-        'customer_pull_succeeded' => false,
-        'location_pull_succeeded' => true,
-        'location_refresh_failed' => false,
-        'full_sync_succeeded' => false,
-    ])->and($customerFailure['message'])->toContain('required Company is unavailable on this device')
-        ->and($customerFailure)->toMatchArray(['returned' => 1, 'inserted' => 0, 'updated' => 0, 'unchanged' => 0, 'rejected' => 1])
-        ->and(DB::table('customers')->where('server_id', 90002)->exists())->toBeFalse();
+    expect(collect($steps)->pluck('success')->every(fn (bool $success): bool => $success))->toBeTrue()
+        ->and(end($steps)['done'])->toBeTrue()
+        ->and(DB::table('customers')->where('server_id', 90002)->value('company_id'))->toBe(999)
+        ->and(DB::table('customers')->where('server_id', 90002)->value('name'))->toBe('Customer with unresolved Company');
 });
 
 test('Customer Pull and location refresh failures are independently reported', function () {
@@ -1431,90 +1507,4 @@ test('a pre-existing interrupted pages-phase run is treated as having completed 
         'location_refresh_failed' => false,
         'full_sync_succeeded' => true,
     ]);
-});
-
-test('a final page with a matching scope fingerprint leaves customer scopes untouched', function () {
-    DB::table('customers')->insert(['id' => 50, 'server_id' => 50, 'name' => 'Previously in scope', 'is_active' => true, 'sync_status' => 'synced']);
-    DB::table('customer_scopes')->insert(['user_id' => $this->user->id, 'customer_id' => 50]);
-    DB::table('sync_states')->insert([
-        'key' => 'customers.scope_fingerprint.'.$this->user->id,
-        'value' => json_encode('fp-1'),
-        'created_at' => now(),
-        'updated_at' => now(),
-    ]);
-
-    ($this->fakePortal)([
-        0 => Http::response([
-            'customers' => [($this->customer)(1)],
-            'next_after_id' => null,
-            'total' => 1,
-            'server_time' => '2026-10-14T01:00:00.000000Z',
-            'scope_ids' => null,
-            'scope_fingerprint' => 'fp-1',
-        ]),
-    ]);
-
-    $steps = ($this->runToCompletion)();
-    $customerRequests = collect($this->requests)->where('path', '/api/sync/pull/customers')->values();
-
-    expect(end($steps)['done'])->toBeTrue()
-        ->and($customerRequests[0]['query']['known_scope_fingerprint'])->toBe('fp-1')
-        // The scope was not rewritten: the previously stored row survives.
-        ->and(DB::table('customer_scopes')->where('user_id', $this->user->id)->pluck('customer_id')->all())->toBe([50])
-        ->and(json_decode(DB::table('sync_states')->where('key', 'customers.scope_fingerprint.'.$this->user->id)->value('value'), true))->toBe('fp-1');
-});
-
-test('a final page with scope ids rewrites the scope and stores the fingerprint', function () {
-    ($this->fakePortal)([
-        0 => Http::response([
-            'customers' => [($this->customer)(1)],
-            'next_after_id' => null,
-            'total' => 1,
-            'server_time' => '2026-10-14T01:00:00.000000Z',
-            'scope_ids' => [1],
-            'scope_fingerprint' => 'fp-2',
-        ]),
-    ]);
-
-    ($this->runToCompletion)();
-
-    $localId = (int) DB::table('customers')->where('server_id', 1)->value('id');
-
-    expect($localId)->toBeGreaterThan(0)
-        ->and(DB::table('customer_scopes')->where('user_id', $this->user->id)->pluck('customer_id')->all())->toBe([$localId])
-        ->and(json_decode(DB::table('sync_states')->where('key', 'customers.scope_fingerprint.'.$this->user->id)->value('value'), true))->toBe('fp-2');
-});
-
-test('customer page requests send the stored scope fingerprint', function () {
-    DB::table('sync_states')->insert([
-        'key' => 'customers.scope_fingerprint.'.$this->user->id,
-        'value' => json_encode('stored-fp'),
-        'created_at' => now(),
-        'updated_at' => now(),
-    ]);
-
-    ($this->fakePortal)([
-        0 => Http::response([
-            'customers' => [($this->customer)(1)],
-            'next_after_id' => 1,
-            'total' => 2,
-            'server_time' => '2026-10-14T01:00:00.000000Z',
-            'scope_ids' => null,
-        ]),
-        1 => Http::response([
-            'customers' => [($this->customer)(2)],
-            'next_after_id' => null,
-            'total' => null,
-            'server_time' => '2026-10-14T01:00:01.000000Z',
-            'scope_ids' => [1, 2],
-        ]),
-    ]);
-
-    ($this->runToCompletion)();
-
-    $customerRequests = collect($this->requests)->where('path', '/api/sync/pull/customers')->values();
-
-    expect($customerRequests)->toHaveCount(2)
-        ->and($customerRequests[0]['query']['known_scope_fingerprint'])->toBe('stored-fp')
-        ->and($customerRequests[1]['query']['known_scope_fingerprint'])->toBe('stored-fp');
 });
