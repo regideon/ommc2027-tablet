@@ -20,14 +20,14 @@ enum CameraFunctions {
     ///   - (empty map - results are returned via events)
     /// Events:
     ///   - Fires "Native\Mobile\Events\Camera\PhotoTaken" (or custom event) when photo is captured
-    ///   - Fires "Native\Mobile\Events\Camera\PhotoCancelled" (or custom event) when user cancels
+    ///   - Fires "Native\Mobile\Events\Camera\PhotoCancelled" (or custom event) on cancellation or photo processing failure
     ///   - Fires "Native\Mobile\Events\Camera\PermissionDenied" when camera permission is denied
     class GetPhoto: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             let id = parameters["id"] as? String
             let event = parameters["event"] as? String
 
-            print("📸 Capturing photo with id=\(id ?? "nil"), event=\(event ?? "nil")")
+            print("📸 Capturing photo; capture id present=\(id != nil)")
 
             // Helper to fire permission denied event
             func firePermissionDenied() {
@@ -80,9 +80,12 @@ enum CameraFunctions {
                 CameraPhotoDelegate.shared.pendingPhotoId = id
                 CameraPhotoDelegate.shared.pendingPhotoEvent = event
 
-                func fireCancel() {
+                func fireCancel(failure: String? = nil) {
                     let cancelEventClass = "Native\\Mobile\\Events\\Camera\\PhotoCancelled"
-                    var payload: [String: Any] = ["cancelled": true]
+                    // The NativePHP PhotoCancelled event constructor accepts only
+                    // `cancelled` and `id`. Represent an operational failure as
+                    // cancelled=false so event dispatch remains constructor-safe.
+                    var payload: [String: Any] = ["cancelled": failure == nil]
                     if let id = id {
                         payload["id"] = id
                     }
@@ -96,13 +99,13 @@ enum CameraFunctions {
                         .first(where: { $0.isKeyWindow })?
                         .rootViewController else {
                     print("❌ Failed to get root view controller")
-                    fireCancel()
+                    fireCancel(failure: "presentation_unavailable")
                     return
                 }
 
                 guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
                     print("❌ Camera not available")
-                    fireCancel()
+                    fireCancel(failure: "camera_unavailable")
                     return
                 }
 
@@ -138,7 +141,7 @@ enum CameraFunctions {
             let id = parameters["id"] as? String
             let event = parameters["event"] as? String
 
-            print("🖼️ Picking media with mediaType=\(mediaType), multiple=\(multiple), maxItems=\(maxItems), id=\(id ?? "nil"), event=\(event ?? "nil")")
+            print("🖼️ Picking media; capture id present=\(id != nil), mediaType=\(mediaType)")
 
             DispatchQueue.main.async {
                 CameraGalleryManager.shared.openGallery(
@@ -411,7 +414,7 @@ final class CameraPhotoDelegate: NSObject, UIImagePickerControllerDelegate, UINa
         // Get the image
         guard let image = info[.originalImage] as? UIImage else {
             print("❌ Failed to get photo image")
-            var payload: [String: Any] = ["cancelled": true]
+            var payload: [String: Any] = ["cancelled": false]
             if let id = pendingPhotoId {
                 payload["id"] = id
             }
@@ -444,7 +447,7 @@ final class CameraPhotoDelegate: NSObject, UIImagePickerControllerDelegate, UINa
                 // Convert to JPEG and save
                 guard let jpegData = image.jpegData(compressionQuality: 0.9) else {
                     print("❌ Failed to convert image to JPEG")
-                    var payload: [String: Any] = ["cancelled": true]
+                    var payload: [String: Any] = ["cancelled": false]
                     if let id = self?.pendingPhotoId {
                         payload["id"] = id
                     }
@@ -477,12 +480,12 @@ final class CameraPhotoDelegate: NSObject, UIImagePickerControllerDelegate, UINa
                 // Dispatch event with slight delay to ensure UI is ready
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     LaravelBridge.shared.send?(eventClass, payload)
-                    print("✅ Photo captured successfully: \(fileURL.path)")
+                    print("✅ Photo captured successfully")
                 }
 
             } catch {
-                print("❌ Saving photo failed: \(error)")
-                var payload: [String: Any] = ["cancelled": true]
+                print("❌ Saving photo failed")
+                var payload: [String: Any] = ["cancelled": false]
                 if let id = self?.pendingPhotoId {
                     payload["id"] = id
                 }
@@ -634,8 +637,8 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
                 result.itemProvider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { url, error in
                     defer { group.leave() }
 
-                    if let error = error {
-                        print("❌ Failed to load image representation: \(error)")
+                    if error != nil {
+                        print("❌ Failed to load image representation")
                         return
                     }
 
@@ -723,7 +726,7 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
                     "type": "image"
                 ]
             } catch {
-                print("Error writing JPEG gallery image: \(error)")
+                print("Error writing JPEG gallery image")
             }
         }
 
@@ -744,7 +747,7 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
                 "type": "image"
             ]
         } catch {
-            print("Error copying gallery image: \(error)")
+            print("Error copying gallery image")
             return nil
         }
     }
