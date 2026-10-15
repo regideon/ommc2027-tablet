@@ -41,3 +41,5 @@ Homestead.yaml
 Thumbs.db
 /nativephp/vendor
 /nativephp/android/laravel/vendor
+/graphify-out
+.opencode

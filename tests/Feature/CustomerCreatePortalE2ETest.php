@@ -199,10 +199,17 @@ test('Tablet Add Customer submits and round-trips through an isolated Portal API
     $page->call('saveCustomer')->assertRedirect();
 
     $local = Customer::query()->where('name', 'Isolated E2E Laguna Customer')->firstOrFail();
-    expect($local->sync_status)->toBe('synced')
+    expect($local->sync_status)->toBe('pending')
         ->and($local->id)->toBeLessThan(0)
+        ->and($local->server_id)->toBeNull()
+        ->and($local->unique_id)->toStartWith('OMMC');
+
+    app(SyncService::class)->pushCustomer((int) $local->id);
+
+    $local->refresh();
+
+    expect($local->sync_status)->toBe('synced')
         ->and($local->server_id)->not->toBeNull()
-        ->and($local->unique_id)->toStartWith('OMMC')
         ->and($local->general_category_id)->toBe(1)
         ->and($local->competitor_volume)->toBe(2)
         ->and($local->region_specific_id)->toBe(53)

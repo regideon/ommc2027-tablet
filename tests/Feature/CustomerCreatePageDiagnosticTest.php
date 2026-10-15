@@ -297,7 +297,14 @@ test('Fleet annual category bindings require every available year on Add and pre
 
     expect($histories)->toHaveCount(count(config('customer_trade_form.category_streams.fleet.years')))
         ->and($histories->first()->category)->toBe('Motolite Only')
-        ->and($customer->server_id)->toBe(99001)
+        ->and($customer->server_id)->toBeNull()
+        ->and($customer->sync_status)->toBe('pending');
+
+    app(SyncService::class)->pushCustomer((int) $customer->id);
+
+    $customer = DB::table('customers')->where('id', $customer->id)->first();
+
+    expect($customer->server_id)->toBe(99001)
         ->and($customer->sync_status)->toBe('synced');
 
     Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
@@ -339,7 +346,7 @@ test('Fleet Customer cannot save while visible annual category options are blank
     expect(DB::table('customers')->where('name', 'Fleet Empty Category Contract')->exists())->toBeFalse();
 });
 
-test('customer add page saves the complete aggregate locally when its immediate push fails', function () {
+test('customer add page saves the complete aggregate locally and records a later push failure', function () {
     $user = seedCustomerCreateFixtures();
     $user->forceFill(['api_token' => 'tablet-token'])->save();
     $this->actingAs($user);
@@ -356,8 +363,8 @@ test('customer add page saves the complete aggregate locally when its immediate 
         ->and($customer->id)->toBeLessThan(0)
         ->and($customer->local_uuid)->not->toBeNull()
         ->and($customer->server_id)->toBeNull()
-        ->and($customer->sync_status)->toBe('failed')
-        ->and($customer->sync_attempts)->toBe(1)
+        ->and($customer->sync_status)->toBe('pending')
+        ->and($customer->sync_attempts)->toBe(0)
         ->and($customer->company_id)->toBe(1)
         ->and($customer->landmass_code)->toBe('LUZON')
         ->and($customer->region_specific_id)->toBe(52)
@@ -376,6 +383,13 @@ test('customer add page saves the complete aggregate locally when its immediate 
     expect($histories)->toHaveCount(9)
         ->and($histories->pluck('category_year')->all())->toBe(range(2018, 2026))
         ->and($histories->pluck('category')->unique()->all())->toBe(['AB Loyal']);
+
+    app(SyncService::class)->pushCustomer((int) $customer->id);
+
+    $customer = DB::table('customers')->where('id', $customer->id)->first();
+
+    expect($customer->sync_status)->toBe('failed')
+        ->and($customer->sync_attempts)->toBe(1);
 
     Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
         && $request['customers'][0]['landmass_code'] === 'LUZON');
@@ -662,6 +676,8 @@ test('customer add page pushes Access and PIC using user emails instead of local
         ->set('access_user_ids', [$user->id, $pic->id])
         ->call('saveCustomer')
         ->assertRedirect(CustomerPage::getUrl());
+
+    app(SyncService::class)->pushCustomer((int) DB::table('customers')->where('name', 'Diagnostic Customer')->value('id'));
 
     Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
         && $request['customers'][0]['person_in_charge_email'] === 'pic@example.test'
@@ -1297,6 +1313,8 @@ test('customer add validates supplied Warehouse Code and Delivery Detail values 
     $active = json_decode(DB::table('customer_trade_profiles')->where('customer_id', $customer->id)->value('profile_data'), true)['active'];
     expect($active['warehouse_code'])->toBe('WH-123')
         ->and($active['delivery_detail'])->toBe('own_delivery');
+
+    app(SyncService::class)->pushCustomer((int) $customer->id);
 
     Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
         && data_get($request['customers'][0], 'profile_data.active.warehouse_code') === 'WH-123'
