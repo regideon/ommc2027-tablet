@@ -79,7 +79,7 @@ test('reservation failure leaves Customer Code blank without local allocation', 
         ->assertSet('customer_code_reservation_token', null);
 });
 
-test('creation keeps the reservation token on the local Customer when its automatic push fails', function () {
+test('creation keeps the reservation token locally and records a later push failure', function () {
     $user = seedCustomerCodePageFixtures('tablet-token');
     $this->actingAs($user);
     config(['sync.server_url' => 'http://portal.test']);
@@ -91,17 +91,27 @@ test('creation keeps the reservation token on the local Customer when its automa
         ->set('unique_id', 'OMMC08738')
         ->set('customer_code_reservation_token', '11111111-1111-4111-8111-111111111111')
         ->call('saveCustomer')
-        ->assertRedirect(CustomerPage::getUrl())
-        ->assertSessionHas('filament.notifications.0.body', 'Portal returned HTTP 500: Specific Region ID is invalid');
+        ->assertRedirect(CustomerPage::getUrl());
 
     $customer = DB::table('customers')->where('name', 'Pending Customer')->first();
+
+    expect($customer->customer_code_reservation_token)->toBe('11111111-1111-4111-8111-111111111111')
+        ->and($customer->sync_status)->toBe('pending')
+        ->and($customer->sync_attempts)->toBe(0);
+
+    $result = app(SyncService::class)->pushCustomer((int) $customer->id);
+
+    $customer = DB::table('customers')->where('id', $customer->id)->first();
+
     expect($customer->customer_code_reservation_token)->toBe('11111111-1111-4111-8111-111111111111')
         ->and($customer->sync_status)->toBe('failed')
-        ->and($customer->sync_attempts)->toBe(1);
+        ->and($customer->sync_attempts)->toBe(1)
+        ->and($result->message)->toContain('Specific Region ID is invalid');
+
     Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer'));
 });
 
-test('creation commits locally before successful automatic Customer reconciliation', function () {
+test('creation commits locally and a later push reconciles successfully', function () {
     $user = seedCustomerCodePageFixtures('tablet-token');
     $this->actingAs($user);
     config(['sync.server_url' => 'http://portal.test']);
@@ -123,14 +133,23 @@ test('creation commits locally before successful automatic Customer reconciliati
         ->assertRedirect(CustomerPage::getUrl());
 
     $customer = DB::table('customers')->where('name', 'Created Shop')->first();
+
+    expect($customer->sync_status)->toBe('pending')
+        ->and($customer->server_id)->toBeNull();
+
+    app(SyncService::class)->pushCustomer((int) $customer->id);
+
+    $customer = DB::table('customers')->where('id', $customer->id)->first();
+
     expect($customer->sync_status)->toBe('synced')
         ->and($customer->server_id)->toBe(881)
         ->and($customer->unique_id)->toBe('OMMC0881')
         ->and($customer->customer_code_reservation_token)->toBeNull();
+
     Http::assertSentCount(2);
 });
 
-test('creation remains successful and locally stored when automatic push throws offline', function () {
+test('creation stays locally stored and a later push that throws offline is recorded', function () {
     $user = seedCustomerCodePageFixtures('tablet-token');
     $this->actingAs($user);
     config(['sync.server_url' => 'http://portal.test']);
@@ -150,6 +169,13 @@ test('creation remains successful and locally stored when automatic push throws 
         ->assertRedirect(CustomerPage::getUrl());
 
     $customer = DB::table('customers')->where('name', 'Offline Created Shop')->first();
+    expect($customer)->not->toBeNull()
+        ->and($customer->sync_status)->toBe('pending')
+        ->and($customer->sync_attempts)->toBe(0);
+
+    app(SyncService::class)->pushCustomer((int) $customer->id);
+
+    $customer = DB::table('customers')->where('id', $customer->id)->first();
     expect($customer)->not->toBeNull()
         ->and($customer->sync_status)->toBe('failed')
         ->and($customer->sync_attempts)->toBe(1);

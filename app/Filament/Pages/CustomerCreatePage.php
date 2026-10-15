@@ -676,17 +676,10 @@ class CustomerCreatePage extends Page
             return (int) $customer->id;
         });
 
-        $pushResult = app(SyncService::class)->pushCustomer($customerId);
-
-        if ($pushResult->success && $pushResult->failedCount === 0) {
-            Notification::make()->title('Customer created and synced')->success()->send();
-        } else {
-            Notification::make()
-                ->title('Customer saved locally; synchronization is still pending.')
-                ->body($pushResult->message)
-                ->warning()
-                ->send();
-        }
+        Notification::make()
+            ->title('Customer saved locally. It will sync on the next synchronization.')
+            ->success()
+            ->send();
 
         $this->redirect(CustomerPage::getUrl());
     }
