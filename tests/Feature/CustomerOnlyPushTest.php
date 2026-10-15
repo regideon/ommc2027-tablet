@@ -62,7 +62,7 @@ test('Customer-only push sends pending and retryable failed customers and reconc
         ->and(DB::table('itineraries')->value('sync_status'))->toBe('pending');
 
     Http::assertSentCount(2);
-    Http::assertSent(fn ($request): bool => $request->url() === 'http://portal.test/api/sync/push/customer'
+    Http::assertSent(fn ($request): bool => $request->url() === 'http://portal.test/api/customers/sync'
         && $request->data()['customer_code_reservation_token'] === $token);
 });
 
@@ -71,7 +71,7 @@ test('Customer-only push retains a failed local record as retryable', function (
     $user = User::factory()->create(['api_token' => 'tablet-token']);
     $this->actingAs($user);
     $customerId = insertPushCustomer('Offline Shop');
-    Http::fake(['portal.test/api/sync/push/customer' => Http::response(['message' => 'Unavailable'], 503)]);
+    Http::fake(['portal.test/api/customers/sync' => Http::response(['message' => 'Unavailable'], 503)]);
 
     $result = app(SyncService::class)->pushCustomer($customerId);
     $customer = DB::table('customers')->where('id', $customerId)->first();
@@ -89,7 +89,7 @@ test('Customer Push acknowledgment resolves the existing local row by UUID and p
     $this->actingAs($user);
     $customerId = insertPushCustomer('Acknowledged Offline Shop');
     $localUuid = DB::table('customers')->where('id', $customerId)->value('local_uuid');
-    Http::fake(['portal.test/api/sync/push/customer' => Http::response([
+    Http::fake(['portal.test/api/customers/sync' => Http::response([
         'server_id' => 72011,
         'local_uuid' => $localUuid,
         'unique_id' => 'PORTAL-72011',
@@ -111,7 +111,7 @@ test('versioned Customer Push acknowledgment applies the authoritative aggregate
     $this->actingAs($user);
     $customerId = insertPushCustomer('Offline name');
     $localUuid = DB::table('customers')->where('id', $customerId)->value('local_uuid');
-    Http::fake(['portal.test/api/sync/push/customer' => Http::response([
+    Http::fake(['portal.test/api/customers/sync' => Http::response([
         'server_id' => 72021,
         'local_uuid' => $localUuid,
         'unique_id' => 'PORTAL-72021',
@@ -163,7 +163,7 @@ test('Customer Push acknowledgment with a conflicting UUID does not bind the Por
     $unrelatedId = insertPushCustomer('Unrelated Existing Portal Shop', 'synced');
     DB::table('customers')->where('id', $unrelatedId)->update(['server_id' => 72012]);
     $localUuid = DB::table('customers')->where('id', $customerId)->value('local_uuid');
-    Http::fake(['portal.test/api/sync/push/customer' => Http::response([
+    Http::fake(['portal.test/api/customers/sync' => Http::response([
         'server_id' => 72012,
         'local_uuid' => (string) Str::uuid(),
         'unique_id' => 'UNRELATED-CODE',
@@ -227,7 +227,7 @@ test('an exhausted Customer requires a saved correction and retries once with it
     $token = '22222222-2222-4222-8222-222222222222';
     $customerId = insertPushCustomer('Before Correction', 'failed', 3, $token);
     DB::table('customers')->where('id', $customerId)->update(['local_uuid' => '11111111-1111-4111-8111-111111111111', 'sync_error' => '422: invalid optional value']);
-    Http::fake(['portal.test/api/sync/push/customer' => Http::response([
+    Http::fake(['portal.test/api/customers/sync' => Http::response([
         'server_id' => 991,
         'local_uuid' => '11111111-1111-4111-8111-111111111111',
         'unique_id' => 'CODE-Before Correction',
@@ -271,7 +271,7 @@ test('an in-flight claim prevents a concurrent Customer push from issuing anothe
     $customerId = insertPushCustomer('Claimed Shop', 'pending', 0);
     $concurrent = null;
     Http::fake(function ($request) use ($customerId, &$concurrent) {
-        if (str_ends_with($request->url(), '/api/sync/push/customer')) {
+        if (str_ends_with($request->url(), '/api/customers/sync')) {
             $concurrent = app(SyncService::class)->pushCustomer($customerId);
 
             return Http::response(['server_id' => 992, 'local_uuid' => $request['local_uuid'], 'updated_at' => now()->toISOString()]);
@@ -314,7 +314,7 @@ test('Portal rejects an invalid local reference as a recoverable failure and exp
         'created_at' => now(),
         'updated_at' => now(),
     ]);
-    Http::fake(['portal.test/api/sync/push/customer' => Http::sequence()
+    Http::fake(['portal.test/api/customers/sync' => Http::sequence()
         ->push(['message' => 'Invalid Specific Region ID.', 'errors' => ['region_specific_id' => ['ID 53 does not exist in Portal.']]], 422)
         ->push(['server_id' => 993, 'local_uuid' => $localUuid, 'unique_id' => 'CODE-Stale Reference Customer', 'updated_at' => now()->toISOString()])]);
 
@@ -350,11 +350,11 @@ test('Portal rejects an invalid local reference as a recoverable failure and exp
         ->and(DB::table('customers')->where('local_uuid', $localUuid)->count())->toBe(1);
 
     Http::assertSentCount(2);
-    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/customers/sync')
         && $request['region_specific_id'] === 53
         && $request['local_uuid'] === $localUuid
         && $request['customer_code_reservation_token'] === $reservationToken);
-    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/customers/sync')
         && $request['region_specific_id'] === 54
         && $request['local_uuid'] === $localUuid
         && $request['unique_id'] === 'CODE-Stale Reference Customer'
@@ -368,7 +368,7 @@ test('Customer page manual action uses Customer-only push and exposes loading co
     insertPushCustomer('Manual Shop');
     $customerId = DB::table('customers')->latest('id')->value('id');
     $localUuid = DB::table('customers')->where('id', $customerId)->value('local_uuid');
-    Http::fake(['portal.test/api/sync/push/customer' => Http::response(['server_id' => 304, 'local_uuid' => $localUuid, 'updated_at' => now()->toISOString()])]);
+    Http::fake(['portal.test/api/customers/sync' => Http::response(['server_id' => 304, 'local_uuid' => $localUuid, 'updated_at' => now()->toISOString()])]);
 
     Livewire::test(CustomerPage::class)
         ->assertSee('Push Customers')
@@ -473,7 +473,7 @@ test('failed manual push keeps Push Customers red while customer work remains', 
     $user = User::factory()->create(['api_token' => 'tablet-token']);
     $this->actingAs($user);
     insertPushCustomer('Failed Indicator Shop');
-    Http::fake(['portal.test/api/sync/push/customer' => Http::response(['message' => 'Unavailable'], 503)]);
+    Http::fake(['portal.test/api/customers/sync' => Http::response(['message' => 'Unavailable'], 503)]);
 
     Livewire::test(CustomerPage::class)
         ->assertSee('text-red-500 hover:text-red-600', false)
@@ -517,7 +517,7 @@ test('successful push stores the Portal ID and synced state while retaining a la
         'created_at' => now(),
         'updated_at' => now(),
     ]);
-    Http::fake(['portal.test/api/sync/push/customer' => Http::response([
+    Http::fake(['portal.test/api/customers/sync' => Http::response([
         'server_id' => 98003,
         'local_uuid' => $localUuid,
         'updated_at' => now()->toISOString(),
@@ -531,7 +531,7 @@ test('successful push stores the Portal ID and synced state while retaining a la
         ->and($saved->server_id)->toBe(98003)
         ->and($saved->sync_status)->toBe('synced');
 
-    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/customers/sync')
         && $request['local_uuid'] === $localUuid
         && $request['server_id'] === null
         && $request['sync_intent'] === 'create');
@@ -542,7 +542,7 @@ test('a successful HTTP response without a valid Portal ID is never marked synce
     $user = User::factory()->create(['api_token' => 'tablet-token']);
     $this->actingAs($user);
     $localId = insertPushCustomer('Missing Portal ID Customer');
-    Http::fake(['portal.test/api/sync/push/customer' => Http::response(['message' => 'Malformed acknowledgment'], 200)]);
+    Http::fake(['portal.test/api/customers/sync' => Http::response(['message' => 'Malformed acknowledgment'], 200)]);
 
     $result = app(SyncService::class)->pushCustomer($localId);
     $saved = DB::table('customers')->where('id', $localId)->first();

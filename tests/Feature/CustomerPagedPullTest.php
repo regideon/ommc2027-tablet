@@ -57,8 +57,8 @@ beforeEach(function () {
             $this->requests[] = ['path' => $url['path'], 'query' => $query];
 
             return match ($url['path']) {
-                '/api/sync/pull/locations' => Http::response($this->locationPayload ?? ($this->makeLocationPayload)(['municipalities' => [['id' => 1, 'region_id' => null, 'province_id' => null, 'name' => 'M1', 'enabled' => true]]])),
-                '/api/sync/pull/customers' => $customerPages[isset($query['ids']) ? 'ids' : (int) ($query['after_id'] ?? 0)],
+                '/api/locations/pull' => Http::response($this->locationPayload ?? ($this->makeLocationPayload)(['municipalities' => [['id' => 1, 'region_id' => null, 'province_id' => null, 'name' => 'M1', 'enabled' => true]]])),
+                '/api/customers/pull' => $customerPages[isset($query['ids']) ? 'ids' : (int) ($query['after_id'] ?? 0)],
                 default => Http::response([], 404),
             };
         });
@@ -109,7 +109,7 @@ test('a first customer pull fetches locations, pages through customers and recor
     expect(collect($steps)->pluck('success')->all())->toBe([true, true, true])
         ->and(end($steps))->toMatchArray(['done' => true, 'pulled' => 3, 'returned' => 3, 'total' => 3])
         ->and(end($steps)['message'])->toContain('3 returned; 3 inserted, 0 changed, 0 unchanged, 0 rejected')
-        ->and(collect($this->requests)->pluck('path')->all())->toBe(['/api/sync/pull/locations', '/api/sync/pull/customers', '/api/sync/pull/customers'])
+        ->and(collect($this->requests)->pluck('path')->all())->toBe(['/api/locations/pull', '/api/customers/pull', '/api/customers/pull'])
         ->and($this->requests[1]['query'])->toBe(['after_id' => '0', 'limit' => '100'])
         ->and(DB::table('municipalities')->count())->toBe(1)
         ->and(DB::table('customers')->whereIn('server_id', [1, 2, 3])->where('is_active', true)->count())->toBe(3)
@@ -337,7 +337,7 @@ test('a later customer pull asks only for changes and fetches customers that re-
 
     expect(end($steps))->toMatchArray(['done' => true, 'pulled' => 2, 'returned' => 2, 'updated' => 2])
         ->and(end($steps)['message'])->toContain('2 changed')
-        ->and(collect($this->requests)->pluck('path')->all())->toBe(['/api/sync/pull/locations', '/api/sync/pull/customers', '/api/sync/pull/customers'])
+        ->and(collect($this->requests)->pluck('path')->all())->toBe(['/api/locations/pull', '/api/customers/pull', '/api/customers/pull'])
         ->and($this->requests[1]['query'])->toMatchArray(['updated_since' => '2026-10-04T00:00:00.000000Z'])
         ->and($this->requests[2]['query'])->toBe(['ids' => '2'])
         ->and(DB::table('customers')->where('id', 1)->value('name'))->toBe('Renamed')
@@ -369,7 +369,7 @@ test('a later customer pull refreshes location references before changed custome
 
     $steps = ($this->runToCompletion)();
     expect(end($steps)['done'])->toBeTrue()
-        ->and(collect($this->requests)->pluck('path')->first())->toBe('/api/sync/pull/locations')
+        ->and(collect($this->requests)->pluck('path')->first())->toBe('/api/locations/pull')
         ->and(DB::table('region_specifics')->where('id', 14)->value('name'))->toBe('Specific 14')
         ->and(DB::table('area_clusters')->where('id', 24)->value('region_specific_id'))->toBe(14)
         ->and(DB::table('provinces')->where('id', 34)->value('region_id'))->toBe(4)
@@ -439,7 +439,7 @@ test('the salescall pull uses the schedule endpoint and fetches locations only w
     $locationPayload['landmass_options'] = [];
 
     Http::fake(function (Request $request) use ($locationPayload) {
-        if (str_ends_with($request->url(), '/api/sync/pull/locations')) {
+        if (str_ends_with($request->url(), '/api/locations/pull')) {
             return Http::response($locationPayload);
         }
 
@@ -450,11 +450,11 @@ test('the salescall pull uses the schedule endpoint and fetches locations only w
     expect(app(SyncService::class)->pull()->success)->toBeTrue();
 
     Http::assertSentCount(3);
-    expect(Http::recorded(fn (Request $request) => str_ends_with($request->url(), '/api/sync/pull/locations'))->count())->toBe(1)
-        ->and(Http::recorded(fn (Request $request) => str_contains($request->url(), '/api/sync/pull/schedule'))->count())->toBe(2)
-        ->and(Http::recorded(fn (Request $request) => str_contains($request->url(), '/api/sync/pull/notifications'))->count())->toBe(0);
+    expect(Http::recorded(fn (Request $request) => str_ends_with($request->url(), '/api/locations/pull'))->count())->toBe(1)
+        ->and(Http::recorded(fn (Request $request) => str_contains($request->url(), '/api/schedule/pull'))->count())->toBe(2)
+        ->and(Http::recorded(fn (Request $request) => str_contains($request->url(), '/api/notifications/pull'))->count())->toBe(0);
 
-    Http::assertNotSent(fn (Request $request) => str_ends_with($request->url(), '/api/sync/pull'));
+    Http::assertNotSent(fn (Request $request) => str_ends_with($request->url(), '/api/pull'));
 });
 
 test('salescall pull refreshes a legacy v1 reference snapshot before resolving creator groups', function (): void {
@@ -473,8 +473,8 @@ test('salescall pull refreshes a legacy v1 reference snapshot before resolving c
         'users' => [['email' => $this->user->email, 'name' => $this->user->name, 'last_name' => 'Rivera']],
     ]];
     Http::fake([
-        'portal.test/api/sync/pull/locations' => Http::response($payload),
-        'portal.test/api/sync/pull/schedule' => Http::response(['itineraries' => [], 'customers' => []]),
+        'portal.test/api/locations/pull' => Http::response($payload),
+        'portal.test/api/schedule/pull' => Http::response(['itineraries' => [], 'customers' => []]),
     ]);
 
     $result = app(SyncService::class)->pull();
@@ -494,7 +494,7 @@ test('salescall pull refreshes a legacy v1 reference snapshot before resolving c
         ->assertSet('access_user_ids', [$reloadedUser->id])
         ->assertSee('Jordan Rivera');
 
-    Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/api/sync/pull/locations'));
+    Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/api/locations/pull'));
 });
 
 test('the customers page offers a customer pull and starts it when none has completed', function () {
@@ -1132,7 +1132,7 @@ test('an invalid location snapshot is rejected atomically while the independent 
             'location_refresh_failed' => true,
             'full_sync_succeeded' => false,
         ])->and($customerStep['message'])->toContain('Customer Pull succeeded', 'Location references could not be refreshed', 'Full synchronization is incomplete')
-        ->and(collect($this->requests)->pluck('path')->all())->toBe(['/api/sync/pull/locations', '/api/sync/pull/customers'])
+        ->and(collect($this->requests)->pluck('path')->all())->toBe(['/api/locations/pull', '/api/customers/pull'])
         ->and(DB::table('regions')->where('id', 1)->value('name'))->toBe('Existing local Region')
         ->and(DB::table('regions')->where('id', 2)->exists())->toBeFalse()
         ->and(DB::table('area_clusters')->where('id', 24)->exists())->toBeFalse()
@@ -1248,10 +1248,10 @@ test('Customer Pull accepts null Company IDs across mixed pages without changing
         ->and(DB::table('customer_access_mappings')->where('scope', 'group')->where('mapping_key', 'NULL-COMPANY-CREATOR')->exists())->toBeTrue()
         ->and(app(CustomerAccessMappingResolver::class)->forCreator($this->user->id)['user_ids'])->toBe([$this->user->id])
         ->and(array_column($this->requests, 'path'))->toBe([
-            '/api/sync/pull/locations',
-            '/api/sync/pull/customers',
-            '/api/sync/pull/customers',
-            '/api/sync/pull/customers',
+            '/api/locations/pull',
+            '/api/customers/pull',
+            '/api/customers/pull',
+            '/api/customers/pull',
         ]);
 });
 

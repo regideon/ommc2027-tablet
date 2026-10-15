@@ -1,0 +1,7 @@
+{
+  "code": "customer_conflict",
+  "message": "Customer changed on Portal.",
+  "server_id": 2,
+  "local_uuid": "0f6e0f06-6a02-4f5b-9c5a-3f0d2a1b7c40",
+  "updated_at": "2026-10-15T00:00:00.000000Z"
+}

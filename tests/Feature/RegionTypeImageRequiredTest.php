@@ -71,8 +71,8 @@ test('pull syncs region types and links the logged-in user to their region type'
     $this->actingAs($user);
 
     Http::fake([
-        'portal.test/api/sync/pull/locations' => Http::response(emptyLocationReferenceSnapshot(), 200),
-        'portal.test/api/sync/pull/*' => Http::response([
+        'portal.test/api/locations/pull' => Http::response(emptyLocationReferenceSnapshot(), 200),
+        'portal.test/api/*/pull*' => Http::response([
             'region_types' => [
                 ['id' => 5, 'name' => 'Metro Manila', 'sort' => 1, 'is_image_required' => true],
                 ['id' => 6, 'name' => 'IB Team', 'sort' => 8, 'is_image_required' => false],

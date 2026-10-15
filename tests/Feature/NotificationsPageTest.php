@@ -97,7 +97,7 @@ test('a failed background refresh keeps local rows visible', function () {
 
     Http::fake([
         'portal.test/api/ping' => Http::response([], 200),
-        'portal.test/api/sync/pull/notifications*' => Http::response(['error' => 'Server error'], 500),
+        'portal.test/api/notifications/pull*' => Http::response(['error' => 'Server error'], 500),
     ]);
 
     Livewire::test(NotificationsPage::class)
@@ -115,7 +115,7 @@ test('refreshing the page pulls new notifications from the portal', function () 
 
     Http::fake([
         'portal.test/api/ping' => Http::response([], 200),
-        'portal.test/api/sync/pull/notifications*' => Http::response([
+        'portal.test/api/notifications/pull*' => Http::response([
             'notifications' => [[
                 'id' => $id,
                 'title' => 'Pulled on visit',

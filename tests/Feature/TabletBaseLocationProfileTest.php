@@ -77,7 +77,7 @@ test('push sends a pending base location to the portal and clears the flag', fun
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) {
-        return $request->url() === 'http://portal.test/api/sync/push/base-location'
+        return $request->url() === 'http://portal.test/api/base-locations/push'
             && (float) $request['base_start_latitude'] === 14.5
             && (float) $request['base_start_longitude'] === 121.0;
     });
@@ -98,8 +98,8 @@ test('pull does not overwrite a locally pending base location', function () {
     $this->actingAs($user);
 
     Http::fake([
-        'portal.test/api/sync/pull/locations' => Http::response(emptyLocationReferenceSnapshot(), 200),
-        'portal.test/api/sync/pull/*' => Http::response([
+        'portal.test/api/locations/pull' => Http::response(emptyLocationReferenceSnapshot(), 200),
+        'portal.test/api/*/pull*' => Http::response([
             'users' => [[
                 'id' => 99,
                 'email' => 'drm@example.com',
@@ -130,8 +130,8 @@ test('pull overwrites the base location when there is nothing pending', function
     $this->actingAs($user);
 
     Http::fake([
-        'portal.test/api/sync/pull/locations' => Http::response(emptyLocationReferenceSnapshot(), 200),
-        'portal.test/api/sync/pull/*' => Http::response([
+        'portal.test/api/locations/pull' => Http::response(emptyLocationReferenceSnapshot(), 200),
+        'portal.test/api/*/pull*' => Http::response([
             'users' => [[
                 'id' => 99,
                 'email' => 'drm@example.com',

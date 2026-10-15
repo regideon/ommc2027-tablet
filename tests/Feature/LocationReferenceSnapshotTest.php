@@ -74,7 +74,7 @@ test('a complete location response applies validated references without changing
     DB::table('barangays')->insert(['id' => 60, 'municipality_id' => 50, 'code' => 'B60', 'name' => 'Barangay', 'enabled' => true]);
     DB::table('customers')->insert(['id' => -60, 'name' => 'Historical Customer', 'region_specific_id' => 20, 'municipality_id' => 50, 'is_active' => true, 'sync_status' => 'synced']);
 
-    Http::fake(['portal.test/api/sync/pull/locations' => Http::response(($this->snapshot)([
+    Http::fake(['portal.test/api/locations/pull' => Http::response(($this->snapshot)([
         'regions' => [['id' => 2, 'code' => 'R2', 'name' => 'Current Region'], ['id' => 3, 'code' => 'R3', 'name' => 'Commercial Parent Region']],
         'region_specifics' => [['id' => 20, 'region_id' => 3, 'name' => 'Commercial Region']],
         'area_clusters' => [['id' => 30, 'region_specific_id' => 20, 'code' => 'A30', 'name' => 'Cluster', 'enabled' => true]],
@@ -104,14 +104,14 @@ test('location mapping references are strictly validated and cached with the sna
         'id' => 1, 'location_level' => 'province', 'location_id' => 40,
         'decision' => 'mapped', 'area_cluster_id' => 30,
     ]];
-    Http::fake(['portal.test/api/sync/pull/locations' => Http::response($payload)]);
+    Http::fake(['portal.test/api/locations/pull' => Http::response($payload)]);
 
     $result = syncLocationSnapshot()->pullLocations();
     expect($result->success)->toBeTrue($result->message)
         ->and(DB::table('location_area_cluster_mappings')->where('location_id', 40)->value('area_cluster_id'))->toBe(30);
 
     $payload['location_area_cluster_mappings'][0]['area_cluster_id'] = 999;
-    Http::fake(['portal.test/api/sync/pull/locations' => Http::response($payload)]);
+    Http::fake(['portal.test/api/locations/pull' => Http::response($payload)]);
     $rejected = syncLocationSnapshot()->pullLocations();
     expect($rejected->success)->toBeFalse()
         ->and(DB::table('location_area_cluster_mappings')->where('location_id', 40)->value('area_cluster_id'))->toBe(30);
@@ -170,7 +170,7 @@ test('the restored Specific Region manifest and all 34 dependent Area Clusters p
         }
     }
 
-    Http::fake(['portal.test/api/sync/pull/locations' => Http::response(($this->snapshot)([
+    Http::fake(['portal.test/api/locations/pull' => Http::response(($this->snapshot)([
         'regions' => $regions,
         'region_specifics' => $regionSpecifics,
         'area_clusters' => $areaClusters,
@@ -212,7 +212,7 @@ test('location pull caches Access mappings and resolves their Users by exact ema
             'users' => [['email' => 'unresolved.creator.group@example.test', 'name' => 'Offline Reference']],
         ],
     ];
-    Http::fake(['portal.test/api/sync/pull/locations' => Http::response($payload)]);
+    Http::fake(['portal.test/api/locations/pull' => Http::response($payload)]);
 
     $result = syncLocationSnapshot()->pullLocations();
 
@@ -244,7 +244,7 @@ test('older creator-group references without last_name preserve a saved local su
         'is_complete' => true,
         'users' => [['email' => $user->email, 'name' => 'Jordan']],
     ]];
-    Http::fake(['portal.test/api/sync/pull/locations' => Http::response($payload)]);
+    Http::fake(['portal.test/api/locations/pull' => Http::response($payload)]);
 
     $result = syncLocationSnapshot()->pullLocations();
 
@@ -267,7 +267,7 @@ test('legacy v1 location snapshots without creator mappings are rejected and pre
     ]);
     $legacyPayload['reference_contract_version'] = 1;
     unset($legacyPayload['customer_access_mappings']);
-    Http::fake(['portal.test/api/sync/pull/locations' => Http::response($legacyPayload)]);
+    Http::fake(['portal.test/api/locations/pull' => Http::response($legacyPayload)]);
 
     $result = syncLocationSnapshot()->pullLocations();
 
@@ -296,7 +296,7 @@ test('invalid Access mapping references reject the full snapshot and preserve th
         'is_complete' => true,
         'users' => [['email' => 'mapped@example.test', 'name' => 'Mapped User']],
     ]];
-    Http::fake(['portal.test/api/sync/pull/locations' => Http::response($payload)]);
+    Http::fake(['portal.test/api/locations/pull' => Http::response($payload)]);
 
     $result = syncLocationSnapshot()->pullLocations();
 
@@ -307,7 +307,7 @@ test('invalid Access mapping references reject the full snapshot and preserve th
 });
 
 test('a complete location pull succeeds when the historical membership table is empty or absent', function (): void {
-    Http::fake(['portal.test/api/sync/pull/locations' => Http::sequence()
+    Http::fake(['portal.test/api/locations/pull' => Http::sequence()
         ->push(($this->snapshot)(['regions' => [['id' => 91, 'code' => 'R91', 'name' => 'Pulled Region']]]))
         ->push(($this->snapshot)(['regions' => [['id' => 92, 'code' => 'R92', 'name' => 'Pulled Without Membership Table']]]))]);
 
@@ -347,7 +347,7 @@ test('malformed json, missing sections, invalid rows, and count mismatches prese
 
 test('a failed refresh leaves the last complete membership unchanged', function (): void {
     DB::table('location_reference_memberships')->insert(['reference_type' => 'regions', 'reference_id' => 77]);
-    Http::fake(['portal.test/api/sync/pull/locations' => Http::sequence()
+    Http::fake(['portal.test/api/locations/pull' => Http::sequence()
         ->push(($this->snapshot)(['regions' => [['id' => 77, 'code' => 'R77', 'psgc_code' => '770000000', 'name' => 'Previously Confirmed Region']]]))
         ->push(['message' => 'unavailable'], 503)]);
 
@@ -363,7 +363,7 @@ test('a failed refresh leaves the last complete membership unchanged', function 
 test('a new Customer is blocked when no complete location and Landmass snapshot is available', function (): void {
     DB::table('companies')->insert(['id' => 1, 'name' => 'FLEET', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
     Http::fake(function ($request) {
-        if (str_ends_with($request->url(), '/api/sync/reserve-customer-code')) {
+        if (str_ends_with($request->url(), '/api/customers/reserve-code')) {
             return Http::response(['token' => '11111111-1111-4111-8111-111111111111', 'code' => 'FLEET1001']);
         }
 
@@ -385,7 +385,7 @@ test('Add Customer blocks when required reference options are unavailable', func
     Schema::dropIfExists('location_reference_memberships');
     DB::table('companies')->insert(['id' => 1, 'name' => 'FLEET', 'code' => 'FLEET', 'created_at' => now(), 'updated_at' => now()]);
     Http::fake(function ($request) {
-        if (str_ends_with($request->url(), '/api/sync/reserve-customer-code')) {
+        if (str_ends_with($request->url(), '/api/customers/reserve-code')) {
             return Http::response(['token' => '22222222-2222-4222-8222-222222222222', 'code' => 'FLEET1002']);
         }
 
@@ -450,7 +450,7 @@ test('all six location selectors load local names but Add blocks before a comple
     DB::table('municipalities')->insert(['id' => 51, 'region_id' => 11, 'province_id' => 41, 'name' => 'City One', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
     DB::table('barangays')->insert(['id' => 61, 'municipality_id' => 51, 'code' => 'B61', 'name' => 'Barangay One', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
     Http::fake(function ($request) {
-        if (str_ends_with($request->url(), '/api/sync/reserve-customer-code')) {
+        if (str_ends_with($request->url(), '/api/customers/reserve-code')) {
             return Http::response(['token' => '33333333-3333-4333-8333-333333333333', 'code' => 'FLEET1003']);
         }
 

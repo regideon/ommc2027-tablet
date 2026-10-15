@@ -70,7 +70,7 @@ function tradeCheckPullPayload(): array
 
 function tradeCheckFakePull(?array $payload = null): void
 {
-    Http::fake(['*/api/sync/forms/trade-check/pull' => Http::response($payload ?? tradeCheckPullPayload(), 200)]);
+    Http::fake(['*/api/forms/trade-check/pull' => Http::response($payload ?? tradeCheckPullPayload(), 200)]);
 }
 
 function tradeCheckPngDataUri(): string
@@ -258,7 +258,7 @@ test('server status changes for the mapped user are cached on pull', function ()
         ['submitted_by' => 2, 'rsm_status' => 2, 'tdh_status' => 2, 'item' => ['name' => 'DF Signage - Condition']],
     ];
 
-    Http::fake(['*/api/sync/forms/trade-check/pull' => Http::response($payload, 200)]);
+    Http::fake(['*/api/forms/trade-check/pull' => Http::response($payload, 200)]);
 
     $user = tradeCheckWorkflowUser();
     $user->update(['server_id' => 2]);
@@ -300,14 +300,14 @@ test('pushing a Trade Check posts the template, answers and stores the server id
         'answers' => [$items[0]->id => 'Yes', $items[1]->id => 'Good'],
     ]);
 
-    Http::fake(fn ($request) => str_contains($request->url(), '/api/sync/forms/trade-check/push')
+    Http::fake(fn ($request) => str_contains($request->url(), '/api/forms/trade-check/push')
         ? Http::response(['server_id' => 501], 200)
         : Http::response([], 200));
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) {
-        return str_ends_with($request->url(), '/api/sync/forms/trade-check/push')
+        return str_ends_with($request->url(), '/api/forms/trade-check/push')
             && $request['name'] === 'Trade Check Evaluation'
             && count($request['groups']) === 1
             && count($request['groups'][0]['items']) === 2
@@ -346,13 +346,13 @@ test('Trade Check attachments push after the parent with the item reference', fu
 
     // One push syncs the parent, then its attachment in the same run.
     Http::fake([
-        '*/api/sync/forms/trade-check/push' => Http::response(['server_id' => 501], 200),
-        '*/api/sync/forms/trade-check/attach' => Http::response(['server_id' => 88, 'uploaded_file_id' => 88], 200),
+        '*/api/forms/trade-check/push' => Http::response(['server_id' => 501], 200),
+        '*/api/forms/trade-check/attach' => Http::response(['server_id' => 88, 'uploaded_file_id' => 88], 200),
         '*' => Http::response([], 200),
     ]);
     app(SyncService::class)->push();
 
-    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/api/sync/forms/trade-check/attach'));
+    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/api/forms/trade-check/attach'));
 
     expect($attachment->fresh()->sync_status)->toBe('synced')
         ->and($attachment->fresh()->server_id)->toBe(88)

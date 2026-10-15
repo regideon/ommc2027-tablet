@@ -10,7 +10,7 @@ uses(RefreshDatabase::class);
 
 /**
  * The on-device SQLite database is empty until the first successful pull
- * (lookup data like salescall_statuses is delivered by /api/sync/pull, not by
+ * (lookup data like salescall_statuses is delivered by /api/pull, not by
  * a migration seed). A missing table used to crash the dashboard / initial
  * pull with "no such table: salescall_statuses". The ensure migration creates
  * the table, and the pull must tolerate it being empty until the server sends
@@ -25,8 +25,8 @@ test('pull succeeds when the salescall_statuses table exists but is empty', func
     expect(DB::table('salescall_statuses')->count())->toBe(0);
 
     Http::fake([
-        'portal.test/api/sync/pull/locations' => Http::response(emptyLocationReferenceSnapshot(), 200),
-        'portal.test/api/sync/pull/*' => Http::response([
+        'portal.test/api/locations/pull' => Http::response(emptyLocationReferenceSnapshot(), 200),
+        'portal.test/api/*/pull*' => Http::response([
             'customers' => [],
             'salescall_statuses' => [],
             'salescall_types' => [],
@@ -60,8 +60,8 @@ test('pull inserts and updates salescall_statuses from the payload', function ()
     $this->actingAs($user);
 
     Http::fake([
-        'portal.test/api/sync/pull/locations' => Http::response(emptyLocationReferenceSnapshot(), 200),
-        'portal.test/api/sync/pull/schedule' => Http::sequence()
+        'portal.test/api/locations/pull' => Http::response(emptyLocationReferenceSnapshot(), 200),
+        'portal.test/api/schedule/pull' => Http::sequence()
             ->push([
                 'customers' => [],
                 'salescall_statuses' => [['id' => 1, 'name' => 'Pending']],

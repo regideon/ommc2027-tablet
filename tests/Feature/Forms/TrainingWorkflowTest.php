@@ -55,9 +55,9 @@ function trainingPullRows(): array
 function trainingFakePortal(array $trainings = []): void
 {
     Http::fake([
-        '*/api/sync/forms/training/topics' => Http::response(['training_topics' => [['id' => 801, 'name' => 'Product Knowledge']]], 200),
-        '*/api/sync/forms/training/positions' => Http::response(['training_positions' => [['id' => 901, 'name' => 'Driver']]], 200),
-        '*/api/sync/forms/training/pull' => Http::response(['trainings' => $trainings], 200),
+        '*/api/forms/training/topics' => Http::response(['training_topics' => [['id' => 801, 'name' => 'Product Knowledge']]], 200),
+        '*/api/forms/training/positions' => Http::response(['training_positions' => [['id' => 901, 'name' => 'Driver']]], 200),
+        '*/api/forms/training/pull' => Http::response(['trainings' => $trainings], 200),
     ]);
 }
 
@@ -547,15 +547,15 @@ test('pushing a Training posts the header and participant snapshot with master s
     ]));
 
     Http::fake([
-        '*/api/sync/forms/training/push' => Http::response(['server_id' => 1101], 200),
-        '*/api/sync/forms/training/attach' => Http::response(['server_id' => 1150, 'uploaded_file_id' => 1150], 200),
+        '*/api/forms/training/push' => Http::response(['server_id' => 1101], 200),
+        '*/api/forms/training/attach' => Http::response(['server_id' => 1150, 'uploaded_file_id' => 1150], 200),
         '*' => Http::response([], 200),
     ]);
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) {
-        return str_ends_with($request->url(), '/api/sync/forms/training/push')
+        return str_ends_with($request->url(), '/api/forms/training/push')
             && $request['topic_id'] === 801
             && $request['other_topic'] === null
             && $request['preferred_at'] === '2026-11-01 09:00:00'
@@ -596,15 +596,15 @@ test('Training attachments push after the parent with their type', function () {
         ->firstOrFail();
 
     Http::fake([
-        '*/api/sync/forms/training/push' => Http::response(['server_id' => 1101], 200),
-        '*/api/sync/forms/training/attach' => Http::response(['server_id' => 88, 'uploaded_file_id' => 77], 200),
+        '*/api/forms/training/push' => Http::response(['server_id' => 1101], 200),
+        '*/api/forms/training/attach' => Http::response(['server_id' => 88, 'uploaded_file_id' => 77], 200),
         '*' => Http::response([], 200),
     ]);
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) {
-        if (! str_ends_with($request->url(), '/api/sync/forms/training/attach')) {
+        if (! str_ends_with($request->url(), '/api/forms/training/attach')) {
             return false;
         }
 

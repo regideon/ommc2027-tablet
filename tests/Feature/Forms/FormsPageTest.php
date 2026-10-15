@@ -51,22 +51,22 @@ function formsPageUser(): User
 function formsPageFakePortal(array $crrs = [], array $programs = [], array $tradeChecks = []): void
 {
     Http::fake(fn ($request) => match (true) {
-        str_contains($request->url(), '/api/sync/forms/crr/programs') => Http::response(['crr_programs' => $programs], 200),
-        str_contains($request->url(), '/api/sync/forms/crr/pull') => Http::response(['crrs' => $crrs], 200),
-        str_contains($request->url(), '/api/sync/forms/marketing/programs') => Http::response(['marketing_programs' => []], 200),
-        str_contains($request->url(), '/api/sync/forms/marketing/pull') => Http::response(['marketings' => []], 200),
-        str_contains($request->url(), '/api/sync/forms/trade-check/pull') => Http::response(['trade_checks' => $tradeChecks], 200),
-        str_contains($request->url(), '/api/sync/forms/giveaway/pull') => Http::response(['giveaways' => []], 200),
-        str_contains($request->url(), '/api/sync/forms/repair/pull') => Http::response(['repairs' => []], 200),
-        str_contains($request->url(), '/api/sync/forms/crr-signage/products') => Http::response(['signage_products' => [['id' => 301, 'name' => 'Tarpaulin']]], 200),
-        str_contains($request->url(), '/api/sync/forms/crr-signage/types') => Http::response(['signage_types' => [['id' => 401, 'name' => 'Horizontal']]], 200),
-        str_contains($request->url(), '/api/sync/forms/crr-signage/pull') => Http::response(['signages' => []], 200),
-        str_contains($request->url(), '/api/sync/forms/trade-request/products') => Http::response(['trade_products' => [['id' => 501, 'name' => 'Jacket']]], 200),
-        str_contains($request->url(), '/api/sync/forms/trade-request/types') => Http::response(['trade_types' => [['id' => 601, 'name' => 'Apparel']]], 200),
-        str_contains($request->url(), '/api/sync/forms/trade-request/pull') => Http::response(['trade_requests' => []], 200),
-        str_contains($request->url(), '/api/sync/forms/training/topics') => Http::response(['training_topics' => [['id' => 801, 'name' => 'Product Knowledge']]], 200),
-        str_contains($request->url(), '/api/sync/forms/training/positions') => Http::response(['training_positions' => [['id' => 901, 'name' => 'Driver']]], 200),
-        str_contains($request->url(), '/api/sync/forms/training/pull') => Http::response(['trainings' => []], 200),
+        str_contains($request->url(), '/api/forms/crr/programs') => Http::response(['crr_programs' => $programs], 200),
+        str_contains($request->url(), '/api/forms/crr/pull') => Http::response(['crrs' => $crrs], 200),
+        str_contains($request->url(), '/api/forms/marketing/programs') => Http::response(['marketing_programs' => []], 200),
+        str_contains($request->url(), '/api/forms/marketing/pull') => Http::response(['marketings' => []], 200),
+        str_contains($request->url(), '/api/forms/trade-check/pull') => Http::response(['trade_checks' => $tradeChecks], 200),
+        str_contains($request->url(), '/api/forms/giveaway/pull') => Http::response(['giveaways' => []], 200),
+        str_contains($request->url(), '/api/forms/repair/pull') => Http::response(['repairs' => []], 200),
+        str_contains($request->url(), '/api/forms/crr-signage/products') => Http::response(['signage_products' => [['id' => 301, 'name' => 'Tarpaulin']]], 200),
+        str_contains($request->url(), '/api/forms/crr-signage/types') => Http::response(['signage_types' => [['id' => 401, 'name' => 'Horizontal']]], 200),
+        str_contains($request->url(), '/api/forms/crr-signage/pull') => Http::response(['signages' => []], 200),
+        str_contains($request->url(), '/api/forms/trade-request/products') => Http::response(['trade_products' => [['id' => 501, 'name' => 'Jacket']]], 200),
+        str_contains($request->url(), '/api/forms/trade-request/types') => Http::response(['trade_types' => [['id' => 601, 'name' => 'Apparel']]], 200),
+        str_contains($request->url(), '/api/forms/trade-request/pull') => Http::response(['trade_requests' => []], 200),
+        str_contains($request->url(), '/api/forms/training/topics') => Http::response(['training_topics' => [['id' => 801, 'name' => 'Product Knowledge']]], 200),
+        str_contains($request->url(), '/api/forms/training/positions') => Http::response(['training_positions' => [['id' => 901, 'name' => 'Driver']]], 200),
+        str_contains($request->url(), '/api/forms/training/pull') => Http::response(['trainings' => []], 200),
         default => Http::response([], 200),
     });
 }
@@ -624,8 +624,8 @@ test('the Forms page Sync action pushes pending CRRs to the server', function ()
     config(['sync.server_url' => 'http://portal.test']);
 
     Http::fake(fn ($request) => match (true) {
-        str_contains($request->url(), '/api/sync/forms/crr/programs') => Http::response(['crr_programs' => []], 200),
-        str_contains($request->url(), '/api/sync/forms/crr/pull') => Http::response(['crrs' => [[
+        str_contains($request->url(), '/api/forms/crr/programs') => Http::response(['crr_programs' => []], 200),
+        str_contains($request->url(), '/api/forms/crr/pull') => Http::response(['crrs' => [[
             'id' => 77,
             'crr_program_id' => 55,
             'amount' => '100.00',
@@ -634,7 +634,7 @@ test('the Forms page Sync action pushes pending CRRs to the server', function ()
             'spm_status' => 1,
             'attachments' => [],
         ]]], 200),
-        str_contains($request->url(), '/api/sync/forms/crr/push') => Http::response(['server_id' => 77], 200),
+        str_contains($request->url(), '/api/forms/crr/push') => Http::response(['server_id' => 77], 200),
         str_contains($request->url(), '/api/ping') => Http::response(['status' => 'ok'], 200),
         default => Http::response([], 200),
     });

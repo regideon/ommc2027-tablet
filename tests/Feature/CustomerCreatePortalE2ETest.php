@@ -57,7 +57,7 @@ test('Tablet Add Customer submits and round-trips through an isolated Portal API
         ->and($slAccessId)->not->toBe(104);
 
     $readPortal = fn (): array => Http::withToken('tablet-contract-e2e-token')
-        ->get(rtrim($portalUrl, '/').'/api/sync/pull/customers?limit=1000')
+        ->get(rtrim($portalUrl, '/').'/api/customers/pull?limit=1000')
         ->throw()
         ->json();
     $localAccessEmails = fn (int $customerId): array => DB::table('customer_user')

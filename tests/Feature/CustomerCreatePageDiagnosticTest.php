@@ -263,7 +263,7 @@ test('Fleet annual category bindings require every available year on Add and pre
     $this->actingAs($user);
 
     Http::fake(function ($request) {
-        if (str_ends_with($request->url(), '/api/sync/reserve-customer-code')) {
+        if (str_ends_with($request->url(), '/api/customers/reserve-code')) {
             return Http::response(['token' => 'fleet-reservation-token', 'code' => 'FLEET90001']);
         }
 
@@ -306,7 +306,7 @@ test('Fleet annual category bindings require every available year on Add and pre
     expect($customer->server_id)->toBe(99001)
         ->and($customer->sync_status)->toBe('synced');
 
-    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/customers/sync')
         && collect($request['category_histories'])->pluck('stream')->unique()->all() === ['fleet']);
 
     $edit = Livewire::test(CustomerEditPage::class, ['customerId' => (string) $customer->id])
@@ -323,7 +323,7 @@ test('Fleet annual category bindings require every available year on Add and pre
     $localId = (int) $customer->id;
     app(SyncService::class)->pushCustomer($localId);
 
-    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/customers/sync')
         && $request['sync_intent'] === 'update'
         && collect($request['category_histories'])->contains(fn (array $row): bool => (int) $row['category_year'] === 2018 && $row['category'] === 'Motolite Only')
         && collect($request['category_histories'])->contains(fn (array $row): bool => (int) $row['category_year'] === 2026 && $row['category'] === 'Competitor'));
@@ -349,7 +349,7 @@ test('customer add page saves the complete aggregate locally and records a later
     $user = seedCustomerCreateFixtures();
     $user->forceFill(['api_token' => 'tablet-token'])->save();
     $this->actingAs($user);
-    Http::fake(['*api/sync/push/customer' => Http::response(['message' => 'Unavailable'], 503)]);
+    Http::fake(['*api/customers/sync' => Http::response(['message' => 'Unavailable'], 503)]);
 
     $component = Livewire::test(CustomerCreatePage::class)->set(validCustomerCreateState());
 
@@ -390,10 +390,10 @@ test('customer add page saves the complete aggregate locally and records a later
     expect($customer->sync_status)->toBe('failed')
         ->and($customer->sync_attempts)->toBe(1);
 
-    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/customers/sync')
         && $request['customers'][0]['landmass_code'] === 'LUZON');
 
-    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/customers/sync')
         && $request['general_category_id'] === 1
         && $request['region_specific_id'] === 52
         && $request['province_id'] === 1
@@ -615,7 +615,7 @@ test('legacy Specific Region 1 is labeled unresolved and remains saved after Edi
     $user = seedCustomerCreateFixtures();
     $user->forceFill(['api_token' => 'tablet-token'])->save();
     $this->actingAs($user);
-    Http::fake(['*api/sync/push/customer' => Http::response(['message' => 'Offline'], 503)]);
+    Http::fake(['*api/customers/sync' => Http::response(['message' => 'Offline'], 503)]);
     $customerId = DB::table('customers')->insertGetId([
         'name' => 'Legacy NCR Customer',
         'company_id' => 1,
@@ -660,7 +660,7 @@ test('customer add page pushes Access and PIC using user emails instead of local
     $pic = User::factory()->create(['email' => 'pic@example.test']);
     $user->forceFill(['api_token' => 'tablet-token'])->save();
     $this->actingAs($user);
-    Http::fake(['*api/sync/push/customer' => function ($request) {
+    Http::fake(['*api/customers/sync' => function ($request) {
         return Http::response(['server_id' => 100, 'local_uuid' => $request['local_uuid'], 'updated_at' => now()->toISOString()], 200);
     }]);
 
@@ -673,7 +673,7 @@ test('customer add page pushes Access and PIC using user emails instead of local
 
     app(SyncService::class)->pushCustomer((int) DB::table('customers')->where('name', 'Diagnostic Customer')->value('id'));
 
-    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/customers/sync')
         && $request['person_in_charge_email'] === 'pic@example.test'
         && $request['access_user_emails'] === [$user->email, 'pic@example.test']
         && ! array_key_exists('person_in_charge_id', $request->data())
@@ -1239,7 +1239,7 @@ test('customer add page still rejects an invalid access user id', function () {
         ->assertHasErrors(['access_user_ids.0']);
 
     expect(DB::table('customers')->where('name', 'Diagnostic Customer')->exists())->toBeFalse();
-    Http::assertNotSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer'));
+    Http::assertNotSent(fn ($request): bool => str_ends_with($request->url(), '/api/customers/sync'));
 });
 
 test('customer add requires Warehouse Code when MOTIV User is enabled and displays its field error', function () {
@@ -1280,7 +1280,7 @@ test('customer add validates supplied Warehouse Code and Delivery Detail values 
     $user->forceFill(['api_token' => 'tablet-token'])->save();
     $this->actingAs($user);
     Http::fake(function ($request) {
-        if (str_ends_with($request->url(), '/api/sync/push/customer')) {
+        if (str_ends_with($request->url(), '/api/customers/sync')) {
             return Http::response(['server_id' => 100, 'local_uuid' => $request['local_uuid'], 'updated_at' => now()->toISOString()], 200);
         }
 
@@ -1305,7 +1305,7 @@ test('customer add validates supplied Warehouse Code and Delivery Detail values 
 
     app(SyncService::class)->pushCustomer((int) $customer->id);
 
-    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer')
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/customers/sync')
         && data_get($request->data(), 'profile_data.active.warehouse_code') === 'WH-123'
         && data_get($request->data(), 'profile_data.active.delivery_detail') === 'own_delivery');
 });

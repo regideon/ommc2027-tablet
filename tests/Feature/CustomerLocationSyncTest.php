@@ -16,7 +16,7 @@ test('pull stores location reference tables and customer location foreign keys',
     $this->actingAs($user);
 
     Http::fake([
-        'portal.test/api/sync/pull/*' => Http::response([
+        'portal.test/api/*/pull*' => Http::response([
             'reference_contract_version' => 2,
             'customer_access_mappings' => [],
             'companies' => [],

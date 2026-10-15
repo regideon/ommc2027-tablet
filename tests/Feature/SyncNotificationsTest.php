@@ -35,7 +35,7 @@ test('pull notifications stores rows for the logged-in user with mapped data', f
     $createdAt = now()->subMinutes(5)->toIso8601String();
 
     Http::fake([
-        'portal.test/api/sync/pull/notifications*' => Http::response([
+        'portal.test/api/notifications/pull*' => Http::response([
             'notifications' => [syncNotificationsRow($id, 'CRR approved', $createdAt)],
             'has_more' => false,
         ], 200),
@@ -69,7 +69,7 @@ test('pull notifications is idempotent and preserves local read state', function
     $id = (string) Str::uuid();
 
     Http::fake([
-        'portal.test/api/sync/pull/notifications*' => Http::response([
+        'portal.test/api/notifications/pull*' => Http::response([
             'notifications' => [syncNotificationsRow($id, 'CRR approved', now()->subMinute()->toIso8601String())],
             'has_more' => false,
         ], 200),
@@ -95,7 +95,7 @@ test('pull notifications sends the watermark as since on the next pull', functio
     $createdAt = now()->subMinutes(3)->toIso8601String();
 
     Http::fake([
-        'portal.test/api/sync/pull/notifications*' => Http::response([
+        'portal.test/api/notifications/pull*' => Http::response([
             'notifications' => [syncNotificationsRow((string) Str::uuid(), 'CRR approved', $createdAt)],
             'has_more' => false,
         ], 200),
@@ -137,7 +137,7 @@ test('pull notifications fails with a token error on 401', function () {
     $this->actingAs($user);
 
     Http::fake([
-        'portal.test/api/sync/pull/notifications*' => Http::response(['error' => 'Unauthorized'], 401),
+        'portal.test/api/notifications/pull*' => Http::response(['error' => 'Unauthorized'], 401),
     ]);
 
     $result = app(SyncService::class)->pullNotifications();
@@ -153,19 +153,19 @@ test('the schedule pull does not pull notifications', function () {
     $this->actingAs($user);
 
     Http::fake([
-        'portal.test/api/sync/pull/locations' => Http::response(emptyLocationReferenceSnapshot(), 200),
-        'portal.test/api/sync/pull/schedule' => Http::response([
+        'portal.test/api/locations/pull' => Http::response(emptyLocationReferenceSnapshot(), 200),
+        'portal.test/api/schedule/pull' => Http::response([
             'customers' => [],
             'users' => [],
             'itineraries' => [],
             'customer_notes' => [],
         ], 200),
-        'portal.test/api/sync/pull/notifications*' => Http::response(['notifications' => [], 'has_more' => false], 200),
+        'portal.test/api/notifications/pull*' => Http::response(['notifications' => [], 'has_more' => false], 200),
     ]);
 
     $result = app(SyncService::class)->pull();
 
     expect($result->success)->toBeTrue($result->message);
 
-    Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/api/sync/pull/notifications'));
+    Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/api/notifications/pull'));
 });

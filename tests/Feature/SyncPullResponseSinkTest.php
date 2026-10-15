@@ -18,7 +18,7 @@ test('pull streams the response to a file sink instead of the PHP temp dir', fun
     Http::fake(function ($request, $options) use (&$capturedSink) {
         $capturedSink = $options['sink'] ?? null;
 
-        if (str_ends_with($request->url(), '/api/sync/pull/locations')) {
+        if (str_ends_with($request->url(), '/api/locations/pull')) {
             return Http::response(emptyLocationReferenceSnapshot(), 200);
         }
 
@@ -47,11 +47,11 @@ test('pull decodes a response larger than the php://temp memory threshold', func
     ]);
 
     Http::fake(function ($request) use ($body) {
-        if (str_ends_with($request->url(), '/api/sync/pull/locations')) {
+        if (str_ends_with($request->url(), '/api/locations/pull')) {
             return Http::response(emptyLocationReferenceSnapshot(), 200);
         }
 
-        if (str_contains($request->url(), '/api/sync/pull/notifications')) {
+        if (str_contains($request->url(), '/api/notifications/pull')) {
             return Http::response(['notifications' => [], 'has_more' => false], 200, ['Content-Type' => 'application/json']);
         }
 

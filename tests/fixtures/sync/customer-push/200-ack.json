@@ -1,0 +1,15 @@
+{
+  "server_id": 1,
+  "local_uuid": "0f6e0f06-6a02-4f5b-9c5a-3f0d2a1b7c40",
+  "unique_id": "OMMC00001",
+  "updated_at": "2026-10-15T00:00:00.000000Z",
+  "category_event_keys": [],
+  "customer_snapshot": {
+    "contract_version": 1,
+    "capabilities": ["customer.aggregate.snapshot.v1"],
+    "complete_collections": ["customers", "customer_users", "customer_brands", "customer_categories", "customer_trade_profiles", "customer_category_histories", "customer_category_events"],
+    "customers": [], "customer_users": [], "customer_brands": [], "customer_categories": [],
+    "customer_trade_profiles": [], "customer_category_histories": [], "customer_category_events": []
+  },
+  "status": "synced"
+}

@@ -49,8 +49,8 @@ test('pull refreshes the rep base location from the users payload', function () 
     $this->actingAs($user);
 
     Http::fake([
-        'portal.test/api/sync/pull/locations' => Http::response(emptyLocationReferenceSnapshot(), 200),
-        'portal.test/api/sync/pull/*' => Http::response([
+        'portal.test/api/locations/pull' => Http::response(emptyLocationReferenceSnapshot(), 200),
+        'portal.test/api/*/pull*' => Http::response([
             'users' => [
                 [
                     'id' => 99,

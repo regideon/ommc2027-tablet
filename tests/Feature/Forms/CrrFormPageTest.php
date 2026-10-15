@@ -17,7 +17,7 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     config(['sync.server_url' => 'http://portal.test']);
-    Http::fake(['*/api/sync/forms/crr/programs' => Http::response(['crr_programs' => []], 200)]);
+    Http::fake(['*/api/forms/crr/programs' => Http::response(['crr_programs' => []], 200)]);
 });
 
 function crrFormPageUser(): User
@@ -148,7 +148,7 @@ test('the CRR form surfaces a warning when programs cannot be loaded', function 
     $user = crrFormPageUser();
     $this->actingAs($user);
     config(['sync.server_url' => 'http://portal.test']);
-    Http::fake(['*/api/sync/forms/crr/programs' => Http::response([], 500)]);
+    Http::fake(['*/api/forms/crr/programs' => Http::response([], 500)]);
 
     Livewire::test(CrrFormPage::class)
         ->assertSee('CRR programs could not be loaded');
