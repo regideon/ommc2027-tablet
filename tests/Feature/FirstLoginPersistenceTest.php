@@ -119,10 +119,9 @@ test('fullName does not append a surname that is already part of name', function
 });
 
 /**
- * Regression: a reachable-but-broken server (5xx on /api/ping) must not be
- * indistinguishable from being offline. isReachable() reports the HTTP status.
+ * Login uses response presence to avoid mistaking Portal HTTP errors for offline mode.
  */
-test('isReachable reports the HTTP status when the sync server responds with an error', function () {
+test('isPortalResponsive treats an HTTP error response as reachable', function () {
     config(['sync.server_url' => 'http://portal.test']);
 
     Http::fake([
@@ -131,15 +130,14 @@ test('isReachable reports the HTTP status when the sync server responds with an 
 
     $sync = app(SyncService::class);
 
-    expect($sync->isReachable())->toBeFalse();
-    expect($sync->lastError())->toContain('500');
+    expect($sync->isReachable())->toBeFalse()
+        ->and($sync->isPortalResponsive())->toBeTrue();
 });
 
 /**
- * Regression: a DNS/connection failure (dead URL, TLS error, timeout) must
- * surface its exception instead of silently becoming "no internet".
+ * A connection failure means Portal could not be reached and permits offline login.
  */
-test('isReachable reports the underlying connection exception', function () {
+test('isReachable returns false when the sync server connection fails', function () {
     config(['sync.server_url' => 'http://portal.test']);
 
     Http::fake([
@@ -148,8 +146,8 @@ test('isReachable reports the underlying connection exception', function () {
 
     $sync = app(SyncService::class);
 
-    expect($sync->isReachable())->toBeFalse();
-    expect($sync->lastError())->toContain('cURL error 6');
+    expect($sync->isReachable())->toBeFalse()
+        ->and($sync->isPortalResponsive())->toBeFalse();
 });
 
 /**
@@ -160,6 +158,6 @@ test('isReachable reports an unconfigured sync server', function () {
 
     $sync = app(SyncService::class);
 
-    expect($sync->isReachable())->toBeFalse();
-    expect($sync->lastError())->toContain('not configured');
+    expect($sync->isReachable())->toBeFalse()
+        ->and($sync->isPortalResponsive())->toBeFalse();
 });

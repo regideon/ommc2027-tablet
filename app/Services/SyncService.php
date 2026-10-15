@@ -33,6 +33,7 @@ use App\Support\ExpensePaymentType;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Carbon;
@@ -194,9 +195,30 @@ class SyncService
 
         try {
             return Http::timeout(3)->get("{$this->serverUrl}/api/ping")->successful();
-        } catch (\Exception) {
+        } catch (Throwable) {
             return false;
         }
+    }
+
+    public function isPortalResponsive(): bool
+    {
+        if (! $this->isConfigured()) {
+            return false;
+        }
+
+        try {
+            // Any HTTP response proves that Portal was reached, regardless of status.
+            Http::timeout(3)->get("{$this->serverUrl}/api/ping");
+
+            return true;
+        } catch (ConnectionException) {
+            return false;
+        }
+    }
+
+    public function isConfigured(): bool
+    {
+        return filled($this->serverUrl);
     }
 
     /** @return array{token: string, code: string}|null */
@@ -234,44 +256,61 @@ class SyncService
         try {
             $response = Http::timeout($this->timeout)
                 ->post("{$this->serverUrl}/api/auth/tablet-login", compact('email', 'password'));
+        } catch (ConnectionException) {
+            return SyncResult::fail('Could not reach Portal.', 'connection_error');
+        } catch (Throwable) {
+            return SyncResult::fail('Could not complete Portal authentication.', 'request_error');
+        }
 
-            if ($response->status() === 401) {
-                return SyncResult::fail('Invalid email or password.', 'invalid_credentials');
-            }
+        if ($response->status() === 401) {
+            return SyncResult::fail('Invalid email or password.', 'invalid_credentials', httpStatus: 401);
+        }
 
-            if ($response->failed()) {
-                return SyncResult::fail("Server error ({$response->status()}).", 'server_error');
-            }
+        if ($response->failed()) {
+            return SyncResult::fail("Portal authentication failed ({$response->status()}).", 'server_error', httpStatus: $response->status());
+        }
 
-            $data = $response->json();
+        $data = $response->json();
 
-            $attributes = [
-                'name' => $data['name'],
-                'password' => $data['password'],
-                'api_token' => $data['api_token'],
-                'server_id' => $data['id'] ?? null,
-                'rsm_id' => $data['rsm_id'] ?? null,
-                'region_type_id' => $data['region_type_id'] ?? null,
-                'base_start_latitude' => $data['base_start_latitude'] ?? null,
-                'base_start_longitude' => $data['base_start_longitude'] ?? null,
-                'base_end_latitude' => $data['base_end_latitude'] ?? null,
-                'base_end_longitude' => $data['base_end_longitude'] ?? null,
-            ];
-            if (Schema::hasColumn('users', 'last_name') && array_key_exists('last_name', $data)) {
-                $attributes['last_name'] = $data['last_name'];
-            }
-            $user = User::updateOrCreate(['email' => $data['email']], $attributes);
+        if (! is_array($data)
+            || ! is_string($data['email'] ?? null)
+            || ! is_string($data['name'] ?? null)
+            || ! is_string($data['password'] ?? null)
+            || ! is_string($data['api_token'] ?? null)
+            || ! is_array($data['roles'] ?? null)) {
+            return SyncResult::fail('Portal returned an incomplete authentication response.', 'invalid_response');
+        }
 
-            if (! empty($data['roles'])) {
-                foreach ($data['roles'] as $roleName) {
-                    Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
+        try {
+            DB::transaction(function () use ($data): void {
+                $attributes = [
+                    'name' => $data['name'],
+                    'password' => $data['password'],
+                    'api_token' => $data['api_token'],
+                    'server_id' => $data['id'] ?? null,
+                    'rsm_id' => $data['rsm_id'] ?? null,
+                    'region_type_id' => $data['region_type_id'] ?? null,
+                    'base_start_latitude' => $data['base_start_latitude'] ?? null,
+                    'base_start_longitude' => $data['base_start_longitude'] ?? null,
+                    'base_end_latitude' => $data['base_end_latitude'] ?? null,
+                    'base_end_longitude' => $data['base_end_longitude'] ?? null,
+                ];
+                if (Schema::hasColumn('users', 'last_name') && array_key_exists('last_name', $data)) {
+                    $attributes['last_name'] = $data['last_name'];
                 }
-                $user->syncRoles($data['roles']);
-            }
+                $user = User::updateOrCreate(['email' => $data['email']], $attributes);
+
+                if (! empty($data['roles'])) {
+                    foreach ($data['roles'] as $roleName) {
+                        Role::firstOrCreate(['name' => $roleName, 'guard_name' => 'web']);
+                    }
+                    $user->syncRoles($data['roles']);
+                }
+            });
 
             return SyncResult::ok('Token refreshed.');
-        } catch (\Exception $e) {
-            return SyncResult::fail('Could not reach server: '.$e->getMessage(), 'connection_error');
+        } catch (Throwable) {
+            return SyncResult::fail('Could not persist the Portal identity locally.', 'persistence_error');
         }
     }
 
