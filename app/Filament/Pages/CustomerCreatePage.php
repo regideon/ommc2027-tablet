@@ -16,6 +16,7 @@ use App\Models\User;
 use App\Services\CustomerAccessMappingResolver;
 use App\Services\CustomerProfileFormService;
 use App\Services\LocationAreaClusterMappingResolver;
+use App\Services\MetroManilaAreaClusterResolver;
 use App\Services\PhilippineAddressResolver;
 use App\Services\SyncService;
 use BackedEnum;
@@ -204,7 +205,7 @@ class CustomerCreatePage extends Page
             'legacySpecificRegionUnresolved' => $legacySpecificRegionUnresolved,
             'regionSpecificReferenceUnavailable' => $this->region_specific_id !== null && ! RegionSpecific::whereKey($this->region_specific_id)->exists(),
             'areaClusters' => $this->region_specific_id
-                ? AreaCluster::where('region_specific_id', $this->region_specific_id)
+                ? AreaCluster::whereIn('id', $this->areaClusterSelectionIds((int) $this->region_specific_id))
                     ->where(fn ($query) => $query->where('enabled', true)->orWhere('id', $this->area_cluster_id))
                     ->orderBy('name')->get()
                 : collect(),
@@ -498,7 +499,8 @@ class CustomerCreatePage extends Page
 
         $resolvedCommercialMappingIsValid = $result['area_cluster_id'] !== null && $result['region_specific_id'] !== null
             && self::customerRegionTypeIdForSpecificRegion($result['region_specific_id']) !== null
-            && RegionSpecific::whereKey($result['region_specific_id'])->where('region_id', $finalRegionId)->exists()
+            && (RegionSpecific::whereKey($result['region_specific_id'])->where('region_id', $finalRegionId)->exists()
+                || ($municipalityId !== null && app(MetroManilaAreaClusterResolver::class)->isApprovedLocationMapping('municipality', (int) $municipalityId, (int) $result['area_cluster_id'])))
             && AreaCluster::whereKey($result['area_cluster_id'])->where('region_specific_id', $result['region_specific_id'])->exists();
 
         if ($resolvedCommercialMappingIsValid) {
@@ -532,6 +534,11 @@ class CustomerCreatePage extends Page
             }
         }
 
+        if ($municipalityId !== null && ! $preserveLegacySpecificRegion
+            && app(MetroManilaAreaClusterResolver::class)->eligibleClusterIds((int) $municipalityId) !== null) {
+            $this->applyLocationAreaClusterMapping();
+        }
+
         // A map result with no physical parent keeps the current parent only when
         // retained children prove that they still belong to it. A changed Region
         // invalidates every unproven locality value above.
@@ -545,6 +552,31 @@ class CustomerCreatePage extends Page
 
     protected function applyLocationAreaClusterMapping(): void
     {
+        if ($this->initialRegionSpecificId === 1) {
+            return;
+        }
+        $eligible = app(MetroManilaAreaClusterResolver::class)->eligibleClusterIds($this->municipality_id ? (int) $this->municipality_id : null);
+        if ($eligible !== null || (int) $this->physical_region_id === (int) config('metro_manila_area_cluster_mapping.physical_region_id')) {
+            $eligible ??= [];
+            $previousSpecificRegionId = $this->region_specific_id;
+            $this->region_specific_id = (int) config('metro_manila_area_cluster_mapping.operational_region_specific_id');
+            $this->customer_region_type_id = self::customerRegionTypeIdForSpecificRegion($this->region_specific_id);
+            if ((int) ($previousSpecificRegionId ?? 0) !== (int) $this->region_specific_id) {
+                $this->applySpecificRegionChange();
+            }
+            $resolution = app(LocationAreaClusterMappingResolver::class)->resolve($this->province_id, $this->municipality_id, $this->barangay_id);
+            if ($resolution['decision'] === 'mapped' && in_array((int) $resolution['area_cluster_id'], $eligible, true)) {
+                $this->area_cluster_id = (int) $resolution['area_cluster_id'];
+
+                return;
+            }
+            if ($this->area_cluster_id && in_array((int) $this->area_cluster_id, $eligible, true)) {
+                return;
+            }
+            $this->area_cluster_id = count($eligible) === 1 ? $eligible[0] : null;
+
+            return;
+        }
         $resolution = app(LocationAreaClusterMappingResolver::class)->resolve($this->province_id, $this->municipality_id, $this->barangay_id);
         $this->applyResolvedLocationAreaClusterMapping($resolution);
     }
@@ -584,6 +616,28 @@ class CustomerCreatePage extends Page
     /** @param array{decision: string, area_cluster_id: ?int, region_specific_id: ?int, source_level: ?string} $resolution */
     protected function applyResolvedLocationAreaClusterMapping(array $resolution): void
     {
+        if ($this->initialRegionSpecificId === 1) {
+            return;
+        }
+        $eligible = app(MetroManilaAreaClusterResolver::class)->eligibleClusterIds($this->municipality_id ? (int) $this->municipality_id : null);
+        if ($eligible !== null || (int) $this->physical_region_id === (int) config('metro_manila_area_cluster_mapping.physical_region_id')) {
+            $eligible ??= [];
+            $previousSpecificRegionId = $this->region_specific_id;
+            $this->region_specific_id = (int) config('metro_manila_area_cluster_mapping.operational_region_specific_id');
+            $this->customer_region_type_id = self::customerRegionTypeIdForSpecificRegion($this->region_specific_id);
+            if ((int) ($previousSpecificRegionId ?? 0) !== (int) $this->region_specific_id) {
+                $this->applySpecificRegionChange();
+            }
+            if ($resolution['decision'] === 'mapped' && $resolution['area_cluster_id'] !== null
+                && in_array((int) $resolution['area_cluster_id'], $eligible, true)) {
+                $this->area_cluster_id = (int) $resolution['area_cluster_id'];
+            } elseif ($this->area_cluster_id !== null && ! in_array((int) $this->area_cluster_id, $eligible, true)) {
+                $this->area_cluster_id = count($eligible) === 1 ? $eligible[0] : null;
+            }
+
+            return;
+        }
+
         if ($resolution['decision'] !== 'mapped'
             || ! $resolution['area_cluster_id']
             || ! $resolution['region_specific_id']
@@ -792,7 +846,13 @@ class CustomerCreatePage extends Page
             throw ValidationException::withMessages(['physical_region_id' => 'Select a Specific Region from the approved options for this Region grouping.']);
         }
         $this->region_specific_id = $specific?->id;
-        $clusterIds = $specific ? AreaCluster::where('region_specific_id', $specific->id)->where('enabled', true)->pluck('id')->all() : [];
+        $metroEligible = app(MetroManilaAreaClusterResolver::class)->eligibleClusterIds($this->municipality_id ? (int) $this->municipality_id : null);
+        if ($metroEligible === [] && (int) $this->physical_region_id === (int) config('metro_manila_area_cluster_mapping.physical_region_id')) {
+            throw ValidationException::withMessages(['area_cluster_id' => 'Approved GMA Area Cluster data is incomplete. Sync the operational GMA lookup data before saving.']);
+        }
+        $clusterIds = $metroEligible !== null
+            ? $metroEligible
+            : ($specific ? AreaCluster::where('region_specific_id', $specific->id)->where('enabled', true)->pluck('id')->all() : []);
         $this->validate([
             'area_cluster_id' => [$clusterIds !== [] ? 'required' : 'nullable', 'nullable', Rule::in($clusterIds)],
         ]);
@@ -1028,7 +1088,11 @@ class CustomerCreatePage extends Page
             return true;
         }
 
-        if (! $this->region_specific_id || ! AreaCluster::whereKey($this->area_cluster_id)->where('region_specific_id', $this->region_specific_id)->exists()) {
+        $eligible = app(MetroManilaAreaClusterResolver::class)->eligibleClusterIds($this->municipality_id ? (int) $this->municipality_id : null);
+        $clusterIsValid = $eligible !== null
+            ? in_array((int) $this->area_cluster_id, $eligible, true)
+            : ($this->region_specific_id && AreaCluster::whereKey($this->area_cluster_id)->where('region_specific_id', $this->region_specific_id)->exists());
+        if (! $clusterIsValid) {
             $this->addError('area_cluster_id', 'The Area Cluster does not belong to the selected Specific Region.');
 
             return false;
@@ -1047,6 +1111,19 @@ class CustomerCreatePage extends Page
         if ($this instanceof CustomerEditPage && ! in_array($this->profileType(), ['oe', 'ib'], true)) {
             $this->applyAccessMappingForChangedController();
         }
+    }
+
+    /** @return array<int, int> */
+    private function areaClusterSelectionIds(int $specificRegionId): array
+    {
+        if ($specificRegionId === (int) config('metro_manila_area_cluster_mapping.operational_region_specific_id')) {
+            $eligible = app(MetroManilaAreaClusterResolver::class)->eligibleClusterIds($this->municipality_id ? (int) $this->municipality_id : null);
+            if ((int) $this->physical_region_id === (int) config('metro_manila_area_cluster_mapping.physical_region_id')) {
+                return $eligible ?? [];
+            }
+        }
+
+        return AreaCluster::where('region_specific_id', $specificRegionId)->where('enabled', true)->pluck('id')->map(fn ($id): int => (int) $id)->all();
     }
 
     protected function initializeCreatorAccessForAdd(): void

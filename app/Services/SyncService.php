@@ -707,8 +707,17 @@ class SyncService
                 'barangay' => $municipalities->get($location['municipality_id'])['region_id'] ?? null,
             };
 
+            $mappingMunicipalityId = $level === 'municipality' ? $locationId : (int) ($location['municipality_id'] ?? 0);
+            $expectedNcrCodes = (array) config('metro_manila_area_cluster_mapping.municipality_area_codes.'.$mappingMunicipalityId, []);
+            $ncrAllowed = $cluster
+                && (int) ($cluster['region_specific_id'] ?? 0) === (int) config('metro_manila_area_cluster_mapping.operational_region_specific_id')
+                && (int) ($specificRegion['id'] ?? 0) === (int) config('metro_manila_area_cluster_mapping.operational_region_specific_id')
+                && (int) ($specificRegion['region_id'] ?? 0) === (int) config('metro_manila_area_cluster_mapping.operational_parent_region_id')
+                && (int) $physicalRegionId === (int) config('metro_manila_area_cluster_mapping.physical_region_id')
+                && in_array($cluster['code'] ?? null, $expectedNcrCodes, true);
+
             if (! $cluster || ! $cluster['enabled'] || ! $specificRegion || ! is_int($physicalRegionId)
-                || (int) $specificRegion['region_id'] !== $physicalRegionId) {
+                || (! $ncrAllowed && (int) $specificRegion['region_id'] !== $physicalRegionId)) {
                 throw new \RuntimeException('Portal returned a location mapping with an invalid Area Cluster or physical Region.');
             }
         }

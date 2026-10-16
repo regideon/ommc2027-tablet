@@ -19,6 +19,11 @@ class LocationAreaClusterMappingResolver
             return ['decision' => 'invalid', 'area_cluster_id' => null, 'region_specific_id' => null, 'source_level' => null];
         }
 
+        $metroManila = app(MetroManilaAreaClusterResolver::class)->resolve($provinceId, $municipalityId, $barangayId);
+        if ($metroManila !== null) {
+            return $metroManila;
+        }
+
         if (! Schema::hasTable('location_area_cluster_mappings')) {
             return $this->unmapped();
         }
