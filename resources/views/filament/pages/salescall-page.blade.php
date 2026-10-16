@@ -462,8 +462,6 @@
         photosComplete: @entangle('photosComplete'),
         photoRequired: @entangle('photoRequired'),
         hasPhoto: @entangle('hasPhoto'),
-        hasSignageForm: @entangle('hasSignageForm'),
-        hasMarketingForm: @entangle('hasMarketingForm'),
         hasTradeRequestForm: @entangle('hasTradeRequestForm'),
         finishing: false,
         showCancelReason: false,
@@ -472,9 +470,9 @@
         partialReason: '',
         get canSubmitSalescall() {
             // Photo is required unless the rep's region type is exempt (IB Team / OE Team).
-            // CRR Signage, Marketing, and Trade Request forms are always required.
+            // Trade Request is the only required form; CRR Signage and Marketing no longer block.
             return this.hasSavedBrands && (!this.photoRequired || this.hasPhoto)
-                && this.hasSignageForm && this.hasMarketingForm && this.hasTradeRequestForm;
+                && this.hasTradeRequestForm;
         },
         finishVisit(outcome, reason = null) {
             if (this.finishing) return;
@@ -2601,14 +2599,6 @@
                                             <span>Photo<span x-show="!hasPhoto"> (missing)</span></span>
                                         </span>
                                         @endif
-                                        <span class="flex items-center gap-1.5 shrink-0" :class="hasSignageForm ? 'text-green-600' : 'text-red-500'">
-                                            <span class="material-symbols-outlined text-sm mat-fill" x-text="hasSignageForm ? 'check_circle' : 'radio_button_unchecked'"></span>
-                                            <span>CRR Signage<span x-show="!hasSignageForm"> (missing)</span></span>
-                                        </span>
-                                        <span class="flex items-center gap-1.5 shrink-0" :class="hasMarketingForm ? 'text-green-600' : 'text-red-500'">
-                                            <span class="material-symbols-outlined text-sm mat-fill" x-text="hasMarketingForm ? 'check_circle' : 'radio_button_unchecked'"></span>
-                                            <span>Marketing<span x-show="!hasMarketingForm"> (missing)</span></span>
-                                        </span>
                                         <span class="flex items-center gap-1.5 shrink-0" :class="hasTradeRequestForm ? 'text-green-600' : 'text-red-500'">
                                             <span class="material-symbols-outlined text-sm mat-fill" x-text="hasTradeRequestForm ? 'check_circle' : 'radio_button_unchecked'"></span>
                                             <span>Trade Request<span x-show="!hasTradeRequestForm"> (missing)</span></span>
