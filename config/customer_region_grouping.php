@@ -15,5 +15,8 @@ return [
         'VIS' => [66, 67, 68],
         'MIN' => [55, 56, 57, 58, 59, 60],
     ],
+    'physical_region_ids' => [
+        'GMA' => [1, 2],
+    ],
     'legacy_specific_region_ids' => [1],
 ];

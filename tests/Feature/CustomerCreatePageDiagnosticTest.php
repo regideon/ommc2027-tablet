@@ -546,7 +546,7 @@ test('Customer Region lists only the five geographic types and filters offline S
     }
 
     foreach ([
-        1 => ['Physical Region 7'],
+        1 => ['Metro Manila', 'Physical Region 2', 'Physical Region 7'],
         2 => ['Region III (Central Luzon)', 'Physical Region 3', 'Physical Region 4', 'Physical Region 5'],
         3 => ['Physical Region 7', 'Physical Region 8', 'Physical Region 9'],
         4 => ['Physical Region 10', 'Physical Region 12', 'Physical Region 13'],
@@ -556,7 +556,9 @@ test('Customer Region lists only the five geographic types and filters offline S
         foreach ($expectedRegions as $expectedRegion) {
             $component->assertSee($expectedRegion);
         }
-        $component->assertDontSee('Physical Region 2');
+        if ($typeId !== 1) {
+            $component->assertDontSee('Physical Region 2');
+        }
     }
 
     $component->set('customer_region_type_id', 2)
@@ -611,15 +613,151 @@ test('Tablet map applies provider display addresses, preserves geography, replac
         ->assertSet('address', 'Manually edited address');
 });
 
+test('NCR map selection hydrates authoritative Quezon City geography and preserves its valid GMA cluster', function (): void {
+    $user = seedCustomerCreateFixtures();
+    DB::table('regions')->where('id', 1)->update(['psgc_code' => null]);
+    DB::table('regions')->insert([
+        ['id' => 2, 'code' => 'PSGC-1300000000', 'psgc_code' => '1300000000', 'name' => 'National Capital Region (NCR)', 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 7, 'code' => 'R4A', 'psgc_code' => '0400000000', 'name' => 'Region IV-A', 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    DB::table('region_specifics')->insert(['id' => 52, 'region_id' => 7, 'name' => 'GMA', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('area_clusters')->insert([
+        ['id' => 16, 'region_specific_id' => 52, 'code' => 'gmaarea6', 'name' => 'GMA - Area 6', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 17, 'region_specific_id' => 52, 'code' => 'gmaarea12', 'name' => 'GMA - Area 12', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 20, 'region_specific_id' => 52, 'code' => 'gmaarea2', 'name' => 'GMA - Area 2', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 21, 'region_specific_id' => 52, 'code' => 'gmaarea3', 'name' => 'GMA - Area 3', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    DB::table('municipalities')->insert([
+        'id' => 14, 'psgc_code' => '1381300000', 'region_id' => 2, 'province_id' => null,
+        'name' => 'Quezon City', 'sort' => 14, 'enabled' => true, 'created_at' => now(), 'updated_at' => now(),
+    ]);
+    DB::table('barangays')->insert([
+        'id' => 1491, 'municipality_id' => 14, 'psgc_code' => '1381300020', 'code' => '1381300020',
+        'name' => 'Central', 'enabled' => true, 'created_at' => now(), 'updated_at' => now(),
+    ]);
+    DB::table('barangays')->insert([
+        'id' => 1542, 'municipality_id' => 14, 'psgc_code' => '1381300071', 'code' => '1381300071',
+        'name' => 'Obrero', 'enabled' => true, 'created_at' => now(), 'updated_at' => now(),
+    ]);
+    Http::fake(['nominatim.openstreetmap.org/*' => Http::response([
+        'display_name' => 'KFC, Don Alejandro Roces Avenue, Obrero, Diliman, 4th District, Quezon City, Eastern Manila District, Metro Manila, 1103, Philippines',
+        'address' => [
+            'amenity' => 'KFC', 'road' => 'Don Alejandro Roces Avenue', 'quarter' => 'Obrero',
+            'suburb' => 'Diliman', 'city_district' => '4th District', 'city' => 'Quezon City',
+            'state_district' => 'Eastern Manila District', 'region' => 'Metro Manila', 'postcode' => '1103',
+            'country' => 'Philippines', 'country_code' => 'ph',
+        ],
+    ], 200)]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('customer_region_type_id', 1)
+        ->set('area_cluster_id', 20)
+        ->assertSee('GMA - Area 6')
+        ->assertSee('GMA - Area 12')
+        ->call('resolveLocation', 14.6296507, 121.0284317)
+        ->assertSet('physical_region_id', 2)
+        ->assertSet('province_id', null)
+        ->assertSet('municipality_id', 14)
+        ->assertSet('barangay_id', 1542)
+        ->assertSet('customer_region_type_id', 1)
+        ->assertSet('region_specific_id', 52)
+        ->assertSet('area_cluster_id', 20)
+        ->assertSet('address', 'KFC, Don Alejandro Roces Avenue, Obrero, Diliman, 4th District, Quezon City, Eastern Manila District, Metro Manila, 1103, Philippines');
+});
+
+test('NCR map matching selects a uniquely named barangay and leaves ambiguous or incomplete locations unguessed', function (): void {
+    $user = seedCustomerCreateFixtures();
+    DB::table('regions')->where('id', 1)->update(['psgc_code' => null]);
+    DB::table('regions')->insert([
+        ['id' => 2, 'code' => 'PSGC-1300000000', 'psgc_code' => '1300000000', 'name' => 'National Capital Region (NCR)', 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 7, 'code' => 'R4A', 'psgc_code' => '0400000000', 'name' => 'Region IV-A', 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    DB::table('region_specifics')->insert(['id' => 52, 'region_id' => 7, 'name' => 'GMA', 'sort' => 2, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('area_clusters')->insert([
+        ['id' => 16, 'region_specific_id' => 52, 'code' => 'gmaarea6', 'name' => 'GMA - Area 6', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 20, 'region_specific_id' => 52, 'code' => 'gmaarea2', 'name' => 'GMA - Area 2', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 21, 'region_specific_id' => 52, 'code' => 'gmaarea3', 'name' => 'GMA - Area 3', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    DB::table('municipalities')->insert(['id' => 14, 'psgc_code' => '1381300000', 'region_id' => 2, 'province_id' => null, 'name' => 'Quezon City', 'sort' => 14, 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('barangays')->insert(['id' => 1491, 'municipality_id' => 14, 'psgc_code' => '1381300020', 'code' => '1381300020', 'name' => 'Central', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    Http::fakeSequence('nominatim.openstreetmap.org/*')
+        ->push(['display_name' => 'Central, Quezon City, Metro Manila, Philippines', 'address' => ['suburb' => 'Central', 'city' => 'Quezon City', 'region' => 'Metro Manila', 'country' => 'Philippines']], 200)
+        ->push(['display_name' => 'Unknown locality, Quezon City, Metro Manila, Philippines', 'address' => ['suburb' => 'Unknown locality', 'city' => 'Quezon City', 'region' => 'Metro Manila', 'country' => 'Philippines']], 200);
+    $this->actingAs($user);
+
+    $page = Livewire::test(CustomerCreatePage::class)
+        ->set('customer_region_type_id', 1)
+        ->set('area_cluster_id', 20)
+        ->call('resolveLocation', 14.63, 121.02)
+        ->assertSet('physical_region_id', 2)
+        ->assertSet('municipality_id', 14)
+        ->assertSet('barangay_id', 1491)
+        ->assertSet('region_specific_id', 52)
+        ->assertSet('area_cluster_id', 20);
+
+    DB::table('municipalities')->insert(['id' => 15, 'psgc_code' => '1381300001', 'region_id' => 2, 'province_id' => null, 'name' => 'Quezon City', 'sort' => 15, 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+
+    $page
+        ->assertSet('municipality_id', 14)
+        ->assertSet('barangay_id', 1491);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('customer_region_type_id', 1)
+        ->set('area_cluster_id', 20)
+        ->call('resolveLocation', 14.64, 121.03)
+        ->assertSet('province_id', null)
+        ->assertSet('municipality_id', null)
+        ->assertSet('barangay_id', null)
+        ->assertSet('region_specific_id', 52)
+        ->assertSet('area_cluster_id', 20);
+});
+
+test('manual NCR municipality changes restrict Quezon City and select singleton operational clusters', function (): void {
+    $user = seedCustomerCreateFixtures();
+    $now = now();
+    DB::table('regions')->insert([
+        ['id' => 2, 'code' => 'NCR', 'psgc_code' => '1300000000', 'name' => 'National Capital Region (NCR)', 'created_at' => $now, 'updated_at' => $now],
+        ['id' => 7, 'code' => 'R4A', 'psgc_code' => '0400000000', 'name' => 'Region IV-A', 'created_at' => $now, 'updated_at' => $now],
+    ]);
+    DB::table('region_specifics')->insert(['id' => 52, 'region_id' => 7, 'name' => 'GMA', 'sort' => 2, 'created_at' => $now, 'updated_at' => $now]);
+    DB::table('area_clusters')->insert([
+        ['id' => 20, 'region_specific_id' => 52, 'code' => 'gmaarea1', 'name' => 'GMA - Area 1', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now],
+        ['id' => 21, 'region_specific_id' => 52, 'code' => 'gmaarea2', 'name' => 'GMA - Area 2', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now],
+        ['id' => 22, 'region_specific_id' => 52, 'code' => 'gmaarea3', 'name' => 'GMA - Area 3', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now],
+    ]);
+    DB::table('municipalities')->insert([
+        ['id' => 2, 'psgc_code' => 'NCR-CALOOCAN', 'region_id' => 2, 'province_id' => null, 'name' => 'Caloocan City', 'sort' => 2, 'enabled' => true, 'created_at' => $now, 'updated_at' => $now],
+        ['id' => 14, 'psgc_code' => 'NCR-QUEZON-CITY', 'region_id' => 2, 'province_id' => null, 'name' => 'Quezon City', 'sort' => 14, 'enabled' => true, 'created_at' => $now, 'updated_at' => $now],
+    ]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('customer_region_type_id', 1)
+        ->set('physical_region_id', 2)
+        ->set('municipality_id', 14)
+        ->assertSet('region_specific_id', 52)
+        ->assertSet('area_cluster_id', null)
+        ->assertSee('GMA - Area 2')
+        ->assertSee('GMA - Area 3')
+        ->set('area_cluster_id', 21)
+        ->set('municipality_id', 2)
+        ->assertSet('area_cluster_id', 20);
+});
+
 test('legacy Specific Region 1 is labeled unresolved and remains saved after Edit', function () {
     $user = seedCustomerCreateFixtures();
     $user->forceFill(['api_token' => 'tablet-token'])->save();
     $this->actingAs($user);
     Http::fake(['*api/customers/sync' => Http::response(['message' => 'Offline'], 503)]);
+    DB::table('barangays')->insert(['id' => 301, 'municipality_id' => 1, 'code' => 'central', 'name' => 'Central', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
     $customerId = DB::table('customers')->insertGetId([
         'name' => 'Legacy NCR Customer',
         'company_id' => 1,
         'region_specific_id' => 1,
+        'province_id' => 1,
+        'municipality_id' => 1,
+        'barangay_id' => 301,
         'is_active' => true,
         'sync_status' => 'synced',
         'created_at' => now(),
@@ -629,11 +767,53 @@ test('legacy Specific Region 1 is labeled unresolved and remains saved after Edi
     $edit = Livewire::test(CustomerEditPage::class, ['customerId' => $customerId])
         ->assertSet('region_specific_id', 1)
         ->assertSet('customer_region_type_id', null)
+        ->assertSet('physical_region_id', 1)
+        ->assertSet('province_id', 1)
+        ->assertSet('municipality_id', 1)
+        ->assertSet('barangay_id', 301)
         ->assertSee('Legacy / unresolved Specific Region ID 1 is preserved on this Customer.');
 
-    $edit->call('saveCustomer')->assertRedirect(CustomerPage::getUrl());
+    $saved = DB::table('customers')->where('id', $customerId)->first();
+    expect($saved->region_specific_id)->toBe(1)
+        ->and($saved->province_id)->toBe(1)
+        ->and($saved->municipality_id)->toBe(1)
+        ->and($saved->barangay_id)->toBe(301);
+});
 
-    expect(DB::table('customers')->where('id', $customerId)->value('region_specific_id'))->toBe(1);
+test('Metro Manila separates NCR physical geography from GMA operational clusters and preserves locality dependents', function (): void {
+    $user = seedCustomerCreateFixtures();
+    DB::table('regions')->insert(['id' => 2, 'code' => 'PSGC-1300000000', 'psgc_code' => '1300000000', 'name' => 'National Capital Region (NCR)', 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('regions')->insert(['id' => 7, 'code' => 'R4A', 'psgc_code' => '0400000000', 'name' => 'Region IV-A', 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('region_specifics')->insert(['id' => 52, 'region_id' => 7, 'name' => 'Region IV-A (Cavite, Rizal)', 'sort' => 1, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('area_clusters')->insert([
+        ['id' => 16, 'region_specific_id' => 52, 'code' => 'GMA-1', 'name' => 'GMA Cluster One', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+        ['id' => 17, 'region_specific_id' => 52, 'code' => 'GMA-2', 'name' => 'GMA Cluster Two', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()],
+    ]);
+    DB::table('municipalities')->insert(['id' => 14, 'psgc_code' => '1381300000', 'region_id' => 2, 'province_id' => null, 'name' => 'Quezon City', 'sort' => 14, 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('barangays')->insert(['id' => 1491, 'municipality_id' => 14, 'psgc_code' => '1381300020', 'code' => '1381300020', 'name' => 'Central', 'enabled' => true, 'created_at' => now(), 'updated_at' => now()]);
+    $this->actingAs($user);
+
+    Livewire::test(CustomerCreatePage::class)
+        ->set('customer_region_type_id', 1)
+        ->assertSet('region_specific_id', 52)
+        ->assertSet('area_cluster_id', null)
+        ->assertSee('GMA Cluster One')
+        ->assertSee('GMA Cluster Two')
+        ->set('physical_region_id', 2)
+        ->assertSee('National Capital Region (NCR)')
+        ->set('municipality_id', 14)
+        ->assertSet('barangay_id', null)
+        ->assertSet('region_specific_id', 52)
+        ->assertSee('Quezon City')
+        ->set('barangay_id', 1491)
+        ->assertSet('customer_region_type_id', 1)
+        ->assertSet('region_specific_id', 52)
+        ->assertSet('municipality_id', 14)
+        ->assertSet('barangay_id', 1491)
+        ->set('physical_region_id', 7)
+        ->assertSet('municipality_id', null)
+        ->assertSet('barangay_id', null)
+        ->assertSet('region_specific_id', 52);
 });
 
 test('customer add page preserves the default current user when adding another access user', function () {

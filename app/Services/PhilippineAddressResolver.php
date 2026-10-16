@@ -66,12 +66,19 @@ class PhilippineAddressResolver
         // take the physical region/province from it rather than trusting
         // Nominatim's county/state naming.
         if ($municipalityId && ($municipality = Municipality::query()->find($municipalityId, ['id', 'region_id', 'province_id']))) {
-            $regionId ??= $municipality->region_id;
-            $provinceId ??= $municipality->province_id;
+            if ((int) $municipality->region_id === (int) config('metro_manila_area_cluster_mapping.physical_region_id')) {
+                $regionId = $municipality->region_id;
+                $provinceId = $municipality->province_id;
+            } else {
+                $regionId ??= $municipality->region_id;
+                $provinceId ??= $municipality->province_id;
+            }
         }
 
         $locationMapping = app(LocationAreaClusterMappingResolver::class)->resolve($provinceId, $municipalityId, $barangayId);
-        $regionSpecificId = $locationMapping['decision'] === 'mapped' ? $locationMapping['region_specific_id'] : null;
+        $regionSpecificId = in_array($locationMapping['decision'], ['mapped', 'requires_finer_location', 'unresolved'], true)
+            ? $locationMapping['region_specific_id']
+            : null;
         $areaClusterId = $locationMapping['decision'] === 'mapped' ? $locationMapping['area_cluster_id'] : null;
 
         $street = trim(implode(' ', array_filter([
