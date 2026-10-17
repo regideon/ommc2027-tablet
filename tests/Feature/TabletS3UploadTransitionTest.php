@@ -87,7 +87,7 @@ test('sync service uploads to s3 before preserving salescall image portal compat
     ]);
 
     Http::fake([
-        'https://portal.test/api/sync/push/salescall-image' => Http::response(['server_id' => 9001], 200),
+        'https://portal.test/api/salescalls/push-image' => Http::response(['server_id' => 9001], 200),
     ]);
 
     $result = app(SyncService::class)->push();
@@ -101,7 +101,7 @@ test('sync service uploads to s3 before preserving salescall image portal compat
         ->and($image->sync_status)->toBe('synced')
         ->and(is_file($image->local_path))->toBeTrue();
 
-    Http::assertSent(fn ($request) => $request->url() === 'https://portal.test/api/sync/push/salescall-image');
+    Http::assertSent(fn ($request) => $request->url() === 'https://portal.test/api/salescalls/push-image');
 });
 
 test('sync service uploads signatures to s3 before preserving customer profile portal compatibility sync', function () {
@@ -141,7 +141,7 @@ test('sync service uploads signatures to s3 before preserving customer profile p
     ]);
 
     Http::fake([
-        'https://portal.test/api/sync/push/customer-profile' => Http::response(['server_id' => 9101], 200),
+        'https://portal.test/api/customer-profiles/push' => Http::response(['server_id' => 9101], 200),
     ]);
 
     $result = app(SyncService::class)->push();
@@ -155,5 +155,5 @@ test('sync service uploads signatures to s3 before preserving customer profile p
         ->and($profile->sync_status)->toBe('synced')
         ->and(is_file($profile->signature_path))->toBeTrue();
 
-    Http::assertSent(fn ($request) => $request->url() === 'https://portal.test/api/sync/push/customer-profile');
+    Http::assertSent(fn ($request) => $request->url() === 'https://portal.test/api/customer-profiles/push');
 });

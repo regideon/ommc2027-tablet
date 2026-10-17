@@ -23,8 +23,8 @@ beforeEach(function () {
     config(['sync.server_url' => 'http://portal.test']);
 
     Http::fake([
-        '*/api/sync/forms/training/topics' => Http::response(['training_topics' => [['id' => 801, 'name' => 'Product Knowledge']]], 200),
-        '*/api/sync/forms/training/positions' => Http::response(['training_positions' => [['id' => 901, 'name' => 'Driver']]], 200),
+        '*/api/forms/training/topics' => Http::response(['training_topics' => [['id' => 801, 'name' => 'Product Knowledge']]], 200),
+        '*/api/forms/training/positions' => Http::response(['training_positions' => [['id' => 901, 'name' => 'Driver']]], 200),
     ]);
 });
 

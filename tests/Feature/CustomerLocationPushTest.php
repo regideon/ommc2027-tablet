@@ -33,13 +33,13 @@ test('push sends the customer location foreign keys', function () {
     ]);
 
     Http::fake([
-        'portal.test/api/sync/push/customer' => Http::response(['server_id' => 501, 'updated_at' => now()->toISOString()], 200),
+        'portal.test/api/customers/sync' => Http::response(['server_id' => 501, 'updated_at' => now()->toISOString()], 200),
     ]);
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) {
-        return str_ends_with($request->url(), '/api/sync/push/customer')
+        return str_ends_with($request->url(), '/api/customers/sync')
             && $request['province_id'] === 7
             && $request['municipality_id'] === 9
             && $request['barangay_id'] === 55
@@ -70,7 +70,7 @@ test('push omits unknown location foreign keys instead of sending null', functio
     ]);
 
     Http::fake([
-        'portal.test/api/sync/push/customer' => Http::response(['server_id' => 501, 'updated_at' => now()->toISOString()], 200),
+        'portal.test/api/customers/sync' => Http::response(['server_id' => 501, 'updated_at' => now()->toISOString()], 200),
     ]);
 
     app(SyncService::class)->push();
@@ -78,7 +78,7 @@ test('push omits unknown location foreign keys instead of sending null', functio
     Http::assertSent(function ($request) {
         $data = $request->data();
 
-        return str_ends_with($request->url(), '/api/sync/push/customer')
+        return str_ends_with($request->url(), '/api/customers/sync')
             && ! array_key_exists('province_id', $data)
             && ! array_key_exists('barangay_id', $data)
             && ! array_key_exists('area_cluster_id', $data);

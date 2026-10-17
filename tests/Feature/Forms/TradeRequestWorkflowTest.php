@@ -53,9 +53,9 @@ function tradeRequestPullRows(): array
 function tradeRequestFakePortal(array $tradeRequests = []): void
 {
     Http::fake([
-        '*/api/sync/forms/trade-request/products' => Http::response(['trade_products' => [['id' => 501, 'name' => 'Jacket']]], 200),
-        '*/api/sync/forms/trade-request/types' => Http::response(['trade_types' => [['id' => 601, 'name' => 'Apparel']]], 200),
-        '*/api/sync/forms/trade-request/pull' => Http::response(['trade_requests' => $tradeRequests], 200),
+        '*/api/forms/trade-request/products' => Http::response(['trade_products' => [['id' => 501, 'name' => 'Jacket']]], 200),
+        '*/api/forms/trade-request/types' => Http::response(['trade_types' => [['id' => 601, 'name' => 'Apparel']]], 200),
+        '*/api/forms/trade-request/pull' => Http::response(['trade_requests' => $tradeRequests], 200),
     ]);
 }
 
@@ -498,15 +498,15 @@ test('pushing a Trade Request posts the header and item snapshot with master ser
     ]));
 
     Http::fake([
-        '*/api/sync/forms/trade-request/push' => Http::response(['server_id' => 1001], 200),
-        '*/api/sync/forms/trade-request/attach' => Http::response(['server_id' => 1050, 'uploaded_file_id' => 1050], 200),
+        '*/api/forms/trade-request/push' => Http::response(['server_id' => 1001], 200),
+        '*/api/forms/trade-request/attach' => Http::response(['server_id' => 1050, 'uploaded_file_id' => 1050], 200),
         '*' => Http::response([], 200),
     ]);
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) {
-        return str_ends_with($request->url(), '/api/sync/forms/trade-request/push')
+        return str_ends_with($request->url(), '/api/forms/trade-request/push')
             && $request['product_id'] === 501
             && $request['items'][0]['trade_type_id'] === 601
             && $request['items'][0]['quantity'] === 3
@@ -545,15 +545,15 @@ test('Trade Request attachments push after the parent with their type', function
         ->firstOrFail();
 
     Http::fake([
-        '*/api/sync/forms/trade-request/push' => Http::response(['server_id' => 1001], 200),
-        '*/api/sync/forms/trade-request/attach' => Http::response(['server_id' => 88, 'uploaded_file_id' => 77], 200),
+        '*/api/forms/trade-request/push' => Http::response(['server_id' => 1001], 200),
+        '*/api/forms/trade-request/attach' => Http::response(['server_id' => 88, 'uploaded_file_id' => 77], 200),
         '*' => Http::response([], 200),
     ]);
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) {
-        if (! str_ends_with($request->url(), '/api/sync/forms/trade-request/attach')) {
+        if (! str_ends_with($request->url(), '/api/forms/trade-request/attach')) {
             return false;
         }
 

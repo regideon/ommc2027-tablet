@@ -365,11 +365,11 @@ test('pending historical Petty Cash syncs as PCV while retaining its old remarks
         'payment_type' => 'Petty Cash',
         'payment_remarks' => 'Legacy pending remarks',
     ]);
-    Http::fake(['portal.example.test/api/sync/push/expense' => Http::response(['server_id' => 701])]);
+    Http::fake(['portal.example.test/api/expenses/push' => Http::response(['server_id' => 701])]);
 
     app(SyncService::class)->push();
 
-    Http::assertSent(fn ($request): bool => $request->url() === 'https://portal.example.test/api/sync/push/expense'
+    Http::assertSent(fn ($request): bool => $request->url() === 'https://portal.example.test/api/expenses/push'
         && $request['payment_type'] === 'Petty Cash Voucher (PCV)'
         && $request['attachment_count'] === 0
         && $request['payment_remarks'] === 'Legacy pending remarks');
@@ -380,7 +380,7 @@ test('pending historical Petty Cash syncs as PCV while retaining its old remarks
 test('server expense replaces its synced local copy by server identity', function () {
     config(['sync.server_url' => 'https://portal.example.test']);
     Http::fake([
-        'portal.example.test/api/sync/salescalls/900/expenses' => Http::response([
+        'portal.example.test/api/expenses/salescalls/900' => Http::response([
             'salescall_id' => 900,
             'expenses' => [[
                 'id' => 700,
@@ -435,8 +435,8 @@ test('exhausted Expense attachment retries can be manually recovered through the
     Storage::fake('local');
     Storage::disk('local')->put('expense-receipts/receipt.png', 'receipt-bytes');
     Http::fake([
-        'portal.example.test/api/sync/salescalls/900/expenses' => Http::response(['expenses' => []]),
-        'portal.example.test/api/sync/push/expense-attachment' => Http::response([
+        'portal.example.test/api/expenses/salescalls/900' => Http::response(['expenses' => []]),
+        'portal.example.test/api/expenses/push-attachment' => Http::response([
             'server_id' => 880,
             'storage_key' => 'expenses/880/receipt.png',
             'mime_type' => 'image/png',
@@ -471,7 +471,7 @@ test('exhausted Expense attachment retries can be manually recovered through the
         ->and($attachment->fresh()->server_id)->toBe(880)
         ->and($attachment->fresh()->sync_attempts)->toBe(3)
         ->and($attachment->fresh()->sync_error)->toBeNull();
-    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/api/sync/push/expense-attachment')
+    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/api/expenses/push-attachment')
         && $request->isMultipart());
 });
 
@@ -480,7 +480,7 @@ test('failed and missing-file Expense attachment retries remain failed and repor
     Storage::fake('local');
     Storage::disk('local')->put('expense-receipts/receipt.png', 'receipt-bytes');
     Http::fake([
-        'portal.example.test/api/sync/push/expense-attachment' => Http::sequence()
+        'portal.example.test/api/expenses/push-attachment' => Http::sequence()
             ->push(['message' => 'temporary outage'], 503)
             ->push(['server_id' => 881], 200),
     ]);
@@ -553,7 +553,7 @@ test('Expense attachment retry is blocked while another sync owns its lock', fun
 test('Expense navigation opens a shared global list scoped to the RSM team', function () {
     config(['sync.server_url' => 'https://portal.example.test']);
     Http::fake([
-        'portal.example.test/api/sync/expenses' => Http::response([
+        'portal.example.test/api/expenses/list' => Http::response([
             'expenses' => [[
                 'id' => 700,
                 'server_id' => 700,
@@ -631,7 +631,7 @@ test('compiled Expense reader styles provide the wide master detail grid', funct
 test('global Expense route renders its page lifecycle and populated reader', function () {
     config(['app.env' => 'local', 'sync.server_url' => 'https://portal.example.test']);
     Http::fake([
-        'portal.example.test/api/sync/expenses' => Http::response([
+        'portal.example.test/api/expenses/list' => Http::response([
             'expenses' => [[
                 'id' => 702,
                 'server_id' => 702,
@@ -661,7 +661,7 @@ test('global Expense route renders its page lifecycle and populated reader', fun
 test('global Expense route renders an explicit empty state', function () {
     config(['app.env' => 'local', 'sync.server_url' => 'https://portal.example.test']);
     Http::fake([
-        'portal.example.test/api/sync/expenses' => Http::response(['expenses' => []]),
+        'portal.example.test/api/expenses/list' => Http::response(['expenses' => []]),
     ]);
 
     $this->get('/app/expense-page')->assertOk()
@@ -673,7 +673,7 @@ test('global Expense route renders an explicit empty state', function () {
 test('global Expense route retains its shell and shows an error when the server read fails', function () {
     config(['app.env' => 'local', 'sync.server_url' => 'https://portal.example.test']);
     Http::fake([
-        'portal.example.test/api/sync/expenses' => Http::response([], 503),
+        'portal.example.test/api/expenses/list' => Http::response([], 503),
     ]);
 
     $this->get('/app/expense-page')->assertOk()

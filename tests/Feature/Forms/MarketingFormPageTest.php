@@ -26,7 +26,7 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     config(['sync.server_url' => 'http://portal.test']);
-    Http::fake(['*/api/sync/forms/marketing/programs' => Http::response(['marketing_programs' => []], 200)]);
+    Http::fake(['*/api/forms/marketing/programs' => Http::response(['marketing_programs' => []], 200)]);
 });
 
 function marketingFormPageUser(): User

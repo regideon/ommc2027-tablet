@@ -44,7 +44,7 @@ function giveawayPullPayload(): array
 
 function giveawayFakePull(?array $payload = null): void
 {
-    Http::fake(['*/api/sync/forms/giveaway/pull' => Http::response($payload ?? giveawayPullPayload(), 200)]);
+    Http::fake(['*/api/forms/giveaway/pull' => Http::response($payload ?? giveawayPullPayload(), 200)]);
 }
 
 function giveawayPngDataUri(): string
@@ -351,7 +351,7 @@ test('server status changes for the mapped user are cached on pull', function ()
         ['id' => 2, 'giveaway_id' => 30, 'item_id' => 202, 'submitted_by' => 2, 'rsm_status' => RSMStatus::APPROVED->value, 'answerItem' => ['answer' => '1']],
     ];
 
-    Http::fake(['*/api/sync/forms/giveaway/pull' => Http::response($payload, 200)]);
+    Http::fake(['*/api/forms/giveaway/pull' => Http::response($payload, 200)]);
 
     Storage::fake('local');
     $user = giveawayWorkflowUser();
@@ -401,7 +401,7 @@ test('an unsynced local Giveaway is not overwritten by the pull', function () {
     $payload['giveaways'][0]['name'] = 'Server Renamed';
     $payload['giveaways'][0]['items'][0]['name'] = 'Server Item';
 
-    Http::fake(['*/api/sync/forms/giveaway/pull' => Http::response($payload, 200)]);
+    Http::fake(['*/api/forms/giveaway/pull' => Http::response($payload, 200)]);
 
     $rows = $service->submissions();
 
@@ -477,15 +477,15 @@ test('pushing a Giveaway posts its items and stores the server id', function () 
     ]);
 
     Http::fake([
-        '*/api/sync/forms/giveaway/push' => Http::response(['server_id' => 601], 200),
-        '*/api/sync/forms/giveaway/attach' => Http::response(['server_id' => 700, 'uploaded_file_id' => 700], 200),
+        '*/api/forms/giveaway/push' => Http::response(['server_id' => 601], 200),
+        '*/api/forms/giveaway/attach' => Http::response(['server_id' => 700, 'uploaded_file_id' => 700], 200),
         '*' => Http::response([], 200),
     ]);
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) {
-        return str_ends_with($request->url(), '/api/sync/forms/giveaway/push')
+        return str_ends_with($request->url(), '/api/forms/giveaway/push')
             && $request['name'] === 'Store Giveaway'
             && count($request['items']) === 2
             && $request['items'][0]['category'] === GiveawayCategory::GC->value
@@ -517,15 +517,15 @@ test('Giveaway signatures push after the parent with the item reference', functi
     $signature = GiveawaySignature::query()->firstOrFail();
 
     Http::fake([
-        '*/api/sync/forms/giveaway/push' => Http::response(['server_id' => 601], 200),
-        '*/api/sync/forms/giveaway/attach' => Http::response(['server_id' => 88, 'uploaded_file_id' => 77], 200),
+        '*/api/forms/giveaway/push' => Http::response(['server_id' => 601], 200),
+        '*/api/forms/giveaway/attach' => Http::response(['server_id' => 88, 'uploaded_file_id' => 77], 200),
         '*' => Http::response([], 200),
     ]);
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) {
-        if (! str_ends_with($request->url(), '/api/sync/forms/giveaway/attach')) {
+        if (! str_ends_with($request->url(), '/api/forms/giveaway/attach')) {
             return false;
         }
 

@@ -29,13 +29,13 @@ use App\Models\SalescallBrand;
 use App\Models\SalescallCategory;
 use App\Models\SalescallImage;
 use App\Models\User;
+use App\Services\Sync\Push\CustomerPushService;
+use App\Services\Sync\SyncFailureRecorder;
 use App\Support\ExpensePaymentType;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
-use Illuminate\Http\Client\Response;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
@@ -173,7 +173,7 @@ class SyncService
 
             $response = $this->client($user->api_token)
                 ->withBody($payload, 'application/octet-stream')
-                ->post("{$this->serverUrl}/api/sync/speedtest");
+                ->post("{$this->serverUrl}/api/speedtest");
 
             $elapsed = microtime(true) - $start;
 
@@ -232,7 +232,7 @@ class SyncService
 
         try {
             $response = $this->client($user->api_token)->post(
-                "{$this->serverUrl}/api/sync/reserve-customer-code",
+                "{$this->serverUrl}/api/customers/reserve-code",
                 ['company_id' => $companyId],
             );
 
@@ -335,7 +335,7 @@ class SyncService
             }
         }
 
-        $data = $this->fetchPullPayload($user, '/api/sync/pull/schedule');
+        $data = $this->fetchPullPayload($user, '/api/schedule/pull');
 
         if ($data instanceof SyncResult) {
             return $data;
@@ -366,7 +366,7 @@ class SyncService
             return SyncResult::fail('No API token found. Please log in first.', 'no_token');
         }
 
-        $data = $this->fetchPullPayload($user, '/api/sync/pull/locations');
+        $data = $this->fetchPullPayload($user, '/api/locations/pull');
 
         if ($data instanceof SyncResult) {
             return $data;
@@ -418,7 +418,7 @@ class SyncService
                 $query['since'] = $since;
             }
 
-            $data = $this->fetchPullPayload($user, '/api/sync/pull/notifications', $query);
+            $data = $this->fetchPullPayload($user, '/api/notifications/pull', $query);
 
             if ($data instanceof SyncResult) {
                 return $data;
@@ -814,7 +814,7 @@ class SyncService
                     'updated_since' => $run['since'],
                 ], fn ($value) => $value !== null);
 
-            $data = $this->fetchPullPayload($user, '/api/sync/pull/customers', $query);
+            $data = $this->fetchPullPayload($user, '/api/customers/pull', $query);
 
             if ($data instanceof SyncResult) {
                 $this->putSyncState($runKey, $run);
@@ -1782,7 +1782,7 @@ class SyncService
     /** @return array<int, array<string, mixed>> */
     public function readExpensesForSalescall(int $serverSalescallId): array
     {
-        return $this->readExpenseRows("/api/sync/salescalls/{$serverSalescallId}/expenses");
+        return $this->readExpenseRows("/api/expenses/salescalls/{$serverSalescallId}");
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -1794,7 +1794,7 @@ class SyncService
     /** @return array{expenses: array<int, array<string, mixed>>, failed: bool} */
     public function readExpensesWithStatus(): array
     {
-        return $this->requestExpenseRows('/api/sync/expenses');
+        return $this->requestExpenseRows('/api/expenses/list');
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -1842,7 +1842,7 @@ class SyncService
     /** @return array{programs: array<int, array<string, mixed>>, failed: bool} */
     public function readCrrProgramsWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/crr/programs', 'crr_programs');
+        $result = $this->requestFormRows('/api/forms/crr/programs', 'crr_programs');
 
         return ['programs' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -1856,7 +1856,7 @@ class SyncService
     /** @return array{crrs: array<int, array<string, mixed>>, failed: bool} */
     public function readCrrsWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/crr/pull', 'crrs');
+        $result = $this->requestFormRows('/api/forms/crr/pull', 'crrs');
 
         return ['crrs' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -1870,7 +1870,7 @@ class SyncService
     /** @return array{programs: array<int, array<string, mixed>>, failed: bool} */
     public function readMarketingProgramsWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/marketing/programs', 'marketing_programs');
+        $result = $this->requestFormRows('/api/forms/marketing/programs', 'marketing_programs');
 
         return ['programs' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -1884,7 +1884,7 @@ class SyncService
     /** @return array{marketings: array<int, array<string, mixed>>, failed: bool} */
     public function readMarketingsWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/marketing/pull', 'marketings');
+        $result = $this->requestFormRows('/api/forms/marketing/pull', 'marketings');
 
         return ['marketings' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -1898,7 +1898,7 @@ class SyncService
     /** @return array{trade_checks: array<int, array<string, mixed>>, failed: bool} */
     public function readTradeChecksWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/trade-check/pull', 'trade_checks');
+        $result = $this->requestFormRows('/api/forms/trade-check/pull', 'trade_checks');
 
         return ['trade_checks' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -1912,7 +1912,7 @@ class SyncService
     /** @return array{giveaways: array<int, array<string, mixed>>, failed: bool} */
     public function readGiveawaysWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/giveaway/pull', 'giveaways');
+        $result = $this->requestFormRows('/api/forms/giveaway/pull', 'giveaways');
 
         return ['giveaways' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -1926,7 +1926,7 @@ class SyncService
     /** @return array{repairs: array<int, array<string, mixed>>, failed: bool} */
     public function readRepairsWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/repair/pull', 'repairs');
+        $result = $this->requestFormRows('/api/forms/repair/pull', 'repairs');
 
         return ['repairs' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -1940,7 +1940,7 @@ class SyncService
     /** @return array{products: array<int, array<string, mixed>>, failed: bool} */
     public function readSignageProductsWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/crr-signage/products', 'signage_products');
+        $result = $this->requestFormRows('/api/forms/crr-signage/products', 'signage_products');
 
         return ['products' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -1948,7 +1948,7 @@ class SyncService
     /** @return array{types: array<int, array<string, mixed>>, failed: bool} */
     public function readSignageTypesWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/crr-signage/types', 'signage_types');
+        $result = $this->requestFormRows('/api/forms/crr-signage/types', 'signage_types');
 
         return ['types' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -1956,7 +1956,7 @@ class SyncService
     /** @return array{signages: array<int, array<string, mixed>>, failed: bool} */
     public function readSignagesWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/crr-signage/pull', 'signages');
+        $result = $this->requestFormRows('/api/forms/crr-signage/pull', 'signages');
 
         return ['signages' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -1970,7 +1970,7 @@ class SyncService
     /** @return array{products: array<int, array<string, mixed>>, failed: bool} */
     public function readTradeRequestProductsWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/trade-request/products', 'trade_products');
+        $result = $this->requestFormRows('/api/forms/trade-request/products', 'trade_products');
 
         return ['products' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -1978,7 +1978,7 @@ class SyncService
     /** @return array{types: array<int, array<string, mixed>>, failed: bool} */
     public function readTradeRequestTypesWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/trade-request/types', 'trade_types');
+        $result = $this->requestFormRows('/api/forms/trade-request/types', 'trade_types');
 
         return ['types' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -1986,7 +1986,7 @@ class SyncService
     /** @return array{trade_requests: array<int, array<string, mixed>>, failed: bool} */
     public function readTradeRequestsWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/trade-request/pull', 'trade_requests');
+        $result = $this->requestFormRows('/api/forms/trade-request/pull', 'trade_requests');
 
         return ['trade_requests' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -2000,7 +2000,7 @@ class SyncService
     /** @return array{topics: array<int, array<string, mixed>>, failed: bool} */
     public function readTrainingTopicsWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/training/topics', 'training_topics');
+        $result = $this->requestFormRows('/api/forms/training/topics', 'training_topics');
 
         return ['topics' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -2008,7 +2008,7 @@ class SyncService
     /** @return array{positions: array<int, array<string, mixed>>, failed: bool} */
     public function readTrainingPositionsWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/training/positions', 'training_positions');
+        $result = $this->requestFormRows('/api/forms/training/positions', 'training_positions');
 
         return ['positions' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -2016,7 +2016,7 @@ class SyncService
     /** @return array{trainings: array<int, array<string, mixed>>, failed: bool} */
     public function readTrainingsWithStatus(): array
     {
-        $result = $this->requestFormRows('/api/sync/forms/training/pull', 'trainings');
+        $result = $this->requestFormRows('/api/forms/training/pull', 'trainings');
 
         return ['trainings' => $result['rows'], 'failed' => $result['failed']];
     }
@@ -2061,7 +2061,6 @@ class SyncService
 
     public function push(): SyncResult
     {
-        $this->releaseStaleCustomerPushClaims();
         $user = auth()->user() ?? User::whereNotNull('api_token')->first();
 
         if (! $user || blank($user->api_token)) {
@@ -2075,9 +2074,7 @@ class SyncService
         $failureReasons = [];
 
         try {
-            $pendingCustomers = $this->pendingCustomerPushQuery()->get();
-
-            $customerResult = $this->pushCustomerRecords($client, $pendingCustomers);
+            $customerResult = $this->pushPendingCustomers();
             $pushed += $customerResult->syncedCount;
             $failed += $customerResult->failedCount;
             $retryable += $customerResult->retryableCount;
@@ -2093,7 +2090,7 @@ class SyncService
 
             foreach ($pendingItineraries as $itinerary) {
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/push/itinerary", [
+                    $response = $client->post("{$this->serverUrl}/api/itineraries/push", [
                         'local_uuid' => $itinerary->local_uuid,
                         'date_month' => $itinerary->date_month,
                         'date_year' => $itinerary->date_year,
@@ -2113,7 +2110,7 @@ class SyncService
                     } else {
                         $this->recordItemFailure($itinerary, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
                             'stage' => 'itinerary:portal',
-                            'endpoint' => '/api/sync/push/itinerary',
+                            'endpoint' => '/api/itineraries/push',
                             'http_status' => $response->status(),
                         ]);
                         $failed++;
@@ -2144,7 +2141,7 @@ class SyncService
                 }
 
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/push/salescall", [
+                    $response = $client->post("{$this->serverUrl}/api/salescalls/push", [
                         'local_uuid' => $salescall->local_uuid,
                         'itinerary_uuid' => $salescall->itinerary->local_uuid,
                         'itinerary_server_id' => $salescall->itinerary->server_id,
@@ -2190,7 +2187,7 @@ class SyncService
                     } else {
                         $this->recordItemFailure($salescall, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
                             'stage' => 'salescall:portal',
-                            'endpoint' => '/api/sync/push/salescall',
+                            'endpoint' => '/api/salescalls/push',
                             'http_status' => $response->status(),
                         ]);
                         $failed++;
@@ -2218,7 +2215,7 @@ class SyncService
                 }
 
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/push/expense", [
+                    $response = $client->post("{$this->serverUrl}/api/expenses/push", [
                         'local_uuid' => $expense->local_uuid,
                         'salescall_server_id' => $expense->salescall->server_id,
                         'expense_type_code' => $expense->expenseType?->code,
@@ -2253,7 +2250,7 @@ class SyncService
                     } else {
                         $this->recordItemFailure($expense, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
                             'stage' => 'expense:portal',
-                            'endpoint' => '/api/sync/push/expense',
+                            'endpoint' => '/api/expenses/push',
                             'http_status' => $response->status(),
                         ]);
                         $failed++;
@@ -2312,7 +2309,7 @@ class SyncService
                 }
 
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/forms/crr/push", [
+                    $response = $client->post("{$this->serverUrl}/api/forms/crr/push", [
                         'server_id' => $crr->server_id,
                         'salescall_uuid' => $crr->salescall?->local_uuid,
                         'crr_program_id' => $crr->program->server_id,
@@ -2336,7 +2333,7 @@ class SyncService
                     } else {
                         $this->recordItemFailure($crr, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
                             'stage' => 'crr:portal',
-                            'endpoint' => '/api/sync/forms/crr/push',
+                            'endpoint' => '/api/forms/crr/push',
                             'http_status' => $response->status(),
                         ]);
                         $failed++;
@@ -2391,7 +2388,7 @@ class SyncService
                 }
 
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/forms/marketing/push", [
+                    $response = $client->post("{$this->serverUrl}/api/forms/marketing/push", [
                         'server_id' => $marketing->server_id,
                         'salescall_uuid' => $marketing->salescall?->local_uuid,
                         'program_id' => $marketing->program->server_id,
@@ -2434,7 +2431,7 @@ class SyncService
                     } else {
                         $this->recordItemFailure($marketing, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
                             'stage' => 'marketing:portal',
-                            'endpoint' => '/api/sync/forms/marketing/push',
+                            'endpoint' => '/api/forms/marketing/push',
                             'http_status' => $response->status(),
                         ]);
                         $failed++;
@@ -2458,7 +2455,7 @@ class SyncService
 
             foreach ($pendingTradeChecks as $tradeCheck) {
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/forms/trade-check/push", [
+                    $response = $client->post("{$this->serverUrl}/api/forms/trade-check/push", [
                         'server_id' => $tradeCheck->server_id,
                         'salescall_uuid' => $tradeCheck->salescall?->local_uuid,
                         'name' => $tradeCheck->name,
@@ -2502,7 +2499,7 @@ class SyncService
                     } else {
                         $this->recordItemFailure($tradeCheck, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
                             'stage' => 'trade-check:portal',
-                            'endpoint' => '/api/sync/forms/trade-check/push',
+                            'endpoint' => '/api/forms/trade-check/push',
                             'http_status' => $response->status(),
                         ]);
                         $failed++;
@@ -2553,7 +2550,7 @@ class SyncService
 
             foreach ($pendingGiveaways as $giveaway) {
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/forms/giveaway/push", [
+                    $response = $client->post("{$this->serverUrl}/api/forms/giveaway/push", [
                         'server_id' => $giveaway->server_id,
                         'salescall_uuid' => $giveaway->salescall?->local_uuid,
                         'name' => $giveaway->name,
@@ -2582,7 +2579,7 @@ class SyncService
                     } else {
                         $this->recordItemFailure($giveaway, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
                             'stage' => 'giveaway:portal',
-                            'endpoint' => '/api/sync/forms/giveaway/push',
+                            'endpoint' => '/api/forms/giveaway/push',
                             'http_status' => $response->status(),
                         ]);
                         $failed++;
@@ -2633,7 +2630,7 @@ class SyncService
 
             foreach ($pendingRepairs as $repair) {
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/forms/repair/push", [
+                    $response = $client->post("{$this->serverUrl}/api/forms/repair/push", [
                         'server_id' => $repair->server_id,
                         'salescall_uuid' => $repair->salescall?->local_uuid,
                         'plate_number' => $repair->plate_number,
@@ -2657,7 +2654,7 @@ class SyncService
                     } else {
                         $this->recordItemFailure($repair, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
                             'stage' => 'repair:portal',
-                            'endpoint' => '/api/sync/forms/repair/push',
+                            'endpoint' => '/api/forms/repair/push',
                             'http_status' => $response->status(),
                         ]);
                         $failed++;
@@ -2708,7 +2705,7 @@ class SyncService
 
             foreach ($pendingSignages as $signage) {
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/forms/crr-signage/push", [
+                    $response = $client->post("{$this->serverUrl}/api/forms/crr-signage/push", [
                         'server_id' => $signage->server_id,
                         'salescall_uuid' => $signage->salescall?->local_uuid,
                         'product_id' => $signage->product?->server_id,
@@ -2731,7 +2728,7 @@ class SyncService
                     } else {
                         $this->recordItemFailure($signage, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
                             'stage' => 'signage:portal',
-                            'endpoint' => '/api/sync/forms/crr-signage/push',
+                            'endpoint' => '/api/forms/crr-signage/push',
                             'http_status' => $response->status(),
                         ]);
                         $failed++;
@@ -2782,7 +2779,7 @@ class SyncService
 
             foreach ($pendingTradeRequests as $tradeRequest) {
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/forms/trade-request/push", [
+                    $response = $client->post("{$this->serverUrl}/api/forms/trade-request/push", [
                         'server_id' => $tradeRequest->server_id,
                         'salescall_uuid' => $tradeRequest->salescall?->local_uuid,
                         'product_id' => $tradeRequest->product?->server_id,
@@ -2812,7 +2809,7 @@ class SyncService
                     } else {
                         $this->recordItemFailure($tradeRequest, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
                             'stage' => 'trade-request:portal',
-                            'endpoint' => '/api/sync/forms/trade-request/push',
+                            'endpoint' => '/api/forms/trade-request/push',
                             'http_status' => $response->status(),
                         ]);
                         $failed++;
@@ -2863,7 +2860,7 @@ class SyncService
 
             foreach ($pendingTrainings as $training) {
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/forms/training/push", [
+                    $response = $client->post("{$this->serverUrl}/api/forms/training/push", [
                         'server_id' => $training->server_id,
                         'salescall_uuid' => $training->salescall?->local_uuid,
                         'topic_id' => $training->topic?->server_id,
@@ -2895,7 +2892,7 @@ class SyncService
                     } else {
                         $this->recordItemFailure($training, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
                             'stage' => 'training:portal',
-                            'endpoint' => '/api/sync/forms/training/push',
+                            'endpoint' => '/api/forms/training/push',
                             'http_status' => $response->status(),
                         ]);
                         $failed++;
@@ -2952,7 +2949,7 @@ class SyncService
                 $rows = SalescallBrand::where('salescall_id', $salescallId)->get();
 
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/push/salescall-brands", [
+                    $response = $client->post("{$this->serverUrl}/api/salescalls/push-brands", [
                         'salescall_server_id' => $salescall->server_id,
                         'brands' => $rows->map(fn ($r) => [
                             'material_group_id' => $r->material_group_id,
@@ -2976,7 +2973,7 @@ class SyncService
                             $response->status().': '.$this->trimRemoteError($response->body()),
                             [
                                 'stage' => 'salescall-brands:portal',
-                                'endpoint' => '/api/sync/push/salescall-brands',
+                                'endpoint' => '/api/salescalls/push-brands',
                                 'http_status' => $response->status(),
                                 'salescall_id' => $salescallId,
                             ]
@@ -3007,7 +3004,7 @@ class SyncService
                 }
 
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/push/salescall-category", [
+                    $response = $client->post("{$this->serverUrl}/api/salescalls/push-category", [
                         'salescall_server_id' => $salescall->server_id,
                         'category_id' => $categoryRecord->category_id,
                         'sub_category_id' => $categoryRecord->sub_category_id,
@@ -3023,7 +3020,7 @@ class SyncService
                     } else {
                         $this->recordItemFailure($categoryRecord, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
                             'stage' => 'salescall-category:portal',
-                            'endpoint' => '/api/sync/push/salescall-category',
+                            'endpoint' => '/api/salescalls/push-category',
                             'http_status' => $response->status(),
                         ]);
                         $failed++;
@@ -3126,7 +3123,7 @@ class SyncService
 
             foreach ($pendingNotes as $note) {
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/push/customer-note", [
+                    $response = $client->post("{$this->serverUrl}/api/customer-notes/push", [
                         'local_uuid' => $note->local_uuid,
                         'customer_id' => $note->customer_id,
                         'title' => $note->title,
@@ -3146,7 +3143,7 @@ class SyncService
                     } else {
                         $this->recordItemFailure($note, 'portal_rejected', $response->status().': '.$this->trimRemoteError($response->body()), [
                             'stage' => 'customer-note:portal',
-                            'endpoint' => '/api/sync/push/customer-note',
+                            'endpoint' => '/api/customer-notes/push',
                             'http_status' => $response->status(),
                         ]);
                         $failed++;
@@ -3165,7 +3162,7 @@ class SyncService
 
             if ($user->base_location_pending) {
                 try {
-                    $response = $client->post("{$this->serverUrl}/api/sync/push/base-location", [
+                    $response = $client->post("{$this->serverUrl}/api/base-locations/push", [
                         'base_start_latitude' => $user->base_start_latitude,
                         'base_start_longitude' => $user->base_start_longitude,
                         'base_end_latitude' => $user->base_end_latitude,
@@ -3210,385 +3207,32 @@ class SyncService
             );
         }
 
-        return $this->buildPushResult($pushed, $failed, $retryable, array_keys($failureReasons));
+        return SyncResult::aggregate($pushed, $failed, $retryable, array_keys($failureReasons));
     }
 
     public function pushCustomer(int $customerId): SyncResult
     {
-        $this->releaseStaleCustomerPushClaims();
-        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
-
-        if (! $user || blank($user->api_token)) {
-            return SyncResult::fail('No API token found. Please log in first.', 'no_token');
-        }
-
-        $customer = $this->pendingCustomerPushQuery()->whereKey($customerId)->first();
-
-        if (! $customer) {
-            return SyncResult::ok('Customer has no pending changes.');
-        }
-
-        return $this->pushCustomerRecords($this->client($user->api_token), collect([$customer]));
+        return app(CustomerPushService::class)->pushCustomer($customerId);
     }
 
     public function pushPendingCustomers(): SyncResult
     {
-        $this->releaseStaleCustomerPushClaims();
-        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
-
-        if (! $user || blank($user->api_token)) {
-            return SyncResult::fail('No API token found. Please log in first.', 'no_token');
-        }
-
-        $customers = $this->pendingCustomerPushQuery()->get();
-
-        return $this->pushCustomerRecords($this->client($user->api_token), $customers);
+        return app(CustomerPushService::class)->pushPendingCustomers();
     }
 
     public function retryExhaustedCustomer(int $customerId): SyncResult
     {
-        $this->releaseStaleCustomerPushClaims();
-        $user = auth()->user() ?? User::whereNotNull('api_token')->first();
-        if (! $user || blank($user->api_token)) {
-            return SyncResult::fail('No API token found. Please log in first.', 'no_token');
-        }
-
-        $customer = Customer::with(['tradeProfile', 'categoryHistories', 'categoryEvents', 'users', 'personInCharge'])->find($customerId);
-        if (! $customer || $customer->sync_status !== 'failed' || (int) $customer->sync_attempts < 3) {
-            return SyncResult::fail('Only an exhausted failed Customer can be retried here.', 'not_retryable');
-        }
-
-        $readyKey = 'customer.manual_retry_ready.'.$customer->id;
-        $readyHash = json_decode((string) DB::table('sync_states')->where('key', $readyKey)->value('value'), true);
-        $payload = $this->customerPushPayload($customer);
-        $fingerprint = hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR));
-        if (! is_string($readyHash) || ! hash_equals($readyHash, $fingerprint)) {
-            return SyncResult::fail('Open this Customer, correct and save at least one value, then retry.', 'correction_required');
-        }
-
-        return $this->pushCustomerRecords($this->client($user->api_token), collect([$customer]), true);
+        return app(CustomerPushService::class)->retryExhaustedCustomer($customerId);
     }
 
     public function customerPayloadFingerprint(Customer $customer): string
     {
-        $customer->loadMissing(['tradeProfile', 'categoryHistories', 'categoryEvents', 'users', 'personInCharge']);
-
-        return hash('sha256', json_encode($this->customerPushPayload($customer), JSON_THROW_ON_ERROR));
+        return app(CustomerPushService::class)->customerPayloadFingerprint($customer);
     }
 
     public function hasPendingCustomerPushWork(): bool
     {
-        return $this->pendingCustomerPushQuery()->exists();
-    }
-
-    private function pendingCustomerPushQuery(): Builder
-    {
-        return Customer::with(['tradeProfile', 'categoryHistories', 'categoryEvents'])
-            ->where(function (Builder $query): void {
-                $query->where('sync_status', 'pending')
-                    ->orWhere(fn ($retry) => $retry->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
-            });
-    }
-
-    private function releaseStaleCustomerPushClaims(): void
-    {
-        $cutoff = now()->subSeconds(max($this->timeout * 4, 120));
-        $staleClaims = Customer::query()->where('sync_status', 'syncing')->where('updated_at', '<', $cutoff)->get(['id', 'sync_attempts']);
-
-        foreach ($staleClaims as $claim) {
-            Customer::query()->whereKey($claim->id)
-                ->where('sync_status', 'syncing')
-                ->where('updated_at', '<', $cutoff)
-                ->update([
-                    'sync_status' => 'failed',
-                    'sync_attempts' => min((int) $claim->sync_attempts + 1, 255),
-                    'sync_error' => 'A previous push ended without a recorded response. Review Portal by Customer Code before retrying.',
-                    'updated_at' => now(),
-                ]);
-        }
-    }
-
-    /**
-     * @param  Collection<int, Customer>  $customers
-     */
-    private function pushCustomerRecords(PendingRequest $client, Collection $customers, bool $allowExhausted = false): SyncResult
-    {
-        $pushed = 0;
-        $failed = 0;
-        $retryable = 0;
-        $failureReasons = [];
-
-        foreach ($customers as $customer) {
-            $result = $this->pushCustomerRecord($client, $customer, $allowExhausted);
-
-            if ($result->errorCode === 'token_expired') {
-                return SyncResult::fail(
-                    $result->message,
-                    'token_expired',
-                    $pushed + $result->syncedCount,
-                    $failed + $result->failedCount,
-                    $retryable + $result->retryableCount,
-                    array_values(array_unique([...$failureReasons, ...$result->failureReasons])),
-                );
-            }
-
-            $pushed += $result->syncedCount;
-            $failed += $result->failedCount;
-            $retryable += $result->retryableCount;
-            $failureReasons = array_values(array_unique([...$failureReasons, ...$result->failureReasons]));
-
-            // A single-Customer action can show the exact Portal response in its UI.
-            if ($customers->count() === 1 && $result->failedCount > 0) {
-                return $result;
-            }
-        }
-
-        return $this->buildPushResult($pushed, $failed, $retryable, $failureReasons);
-    }
-
-    private function pushCustomerRecord(PendingRequest $client, Customer $customer, bool $allowExhausted = false): SyncResult
-    {
-        $originalStatus = $customer->sync_status;
-        $claim = Customer::query()->whereKey($customer->id)
-            ->where('sync_status', $customer->sync_status)
-            ->where('sync_attempts', $customer->sync_attempts)
-            ->where(fn (Builder $query) => $query->where('sync_status', 'pending')
-                ->orWhere(fn (Builder $retry) => $retry->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
-                ->when($allowExhausted, fn (Builder $retry) => $retry->orWhere(fn (Builder $exhausted) => $exhausted->where('sync_status', 'failed')->where('sync_attempts', '>=', 3))))
-            ->update(['sync_status' => 'syncing', 'updated_at' => now()]);
-
-        if ($claim !== 1) {
-            return SyncResult::ok('Customer push was already claimed or is no longer eligible.');
-        }
-        $customer->sync_status = 'syncing';
-        // The claim was written with a query builder, so keep Eloquent's
-        // original value aligned with the database before later transitions.
-        $customer->syncOriginalAttribute('sync_status');
-
-        try {
-            $payload = $this->customerPushPayload($customer);
-            $fingerprint = hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR));
-            $aggregateFingerprint = app(CustomerAggregateReconciler::class)->fingerprint((int) $customer->id);
-
-            $response = $client->post("{$this->serverUrl}/api/sync/push/customer", $payload);
-
-            if ($response->status() === 401) {
-                $customer->update(['sync_status' => $originalStatus]);
-
-                return SyncResult::fail('Session expired. Please log out and log back in.', 'token_expired');
-            }
-
-            if ($response->successful() && filter_var($response->json('server_id'), FILTER_VALIDATE_INT) && (int) $response->json('server_id') > 0) {
-                $acknowledgment = $response->json();
-                $acknowledgedIdentity = [
-                    'id' => $acknowledgment['server_id'],
-                    'local_uuid' => $acknowledgment['local_uuid'] ?? null,
-                    'unique_id' => $acknowledgment['unique_id'] ?? null,
-                    'company_id' => $customer->company_id,
-                    'updated_at' => $acknowledgment['updated_at'] ?? null,
-                ];
-                $identity = app(CustomerIdentityResolver::class)->resolve($acknowledgedIdentity, (int) $customer->id);
-
-                if ($identity->isConflict()) {
-                    $customer->update([
-                        'sync_status' => 'conflict',
-                        'sync_error' => 'Portal acknowledged a Customer identity that conflicts with this Tablet row ('.$identity->reason.'). Review is required.',
-                    ]);
-
-                    return SyncResult::fail('Customer identity conflict requires review.', 'customer_identity_conflict', 0, 1, 0, ['customer_identity_conflict']);
-                }
-
-                $reconciler = app(CustomerAggregateReconciler::class);
-                $snapshotProvided = array_key_exists('customer_snapshot', $acknowledgment);
-                $snapshot = $acknowledgment['customer_snapshot'] ?? null;
-                $snapshotCapabilityAvailable = is_array($snapshot)
-                    && $reconciler->supportsCompleteSnapshot($snapshot);
-
-                if (! $snapshotProvided) {
-                    Log::notice('sync:customer:acknowledged_without_snapshot_capability', [
-                        'local_customer_id' => $customer->id,
-                        'portal_customer_id' => (int) $acknowledgment['server_id'],
-                    ]);
-                }
-
-                if (! $snapshotProvided) {
-                    $outcome = $reconciler->acknowledgeWithoutSnapshot($acknowledgedIdentity, (int) $customer->id, $aggregateFingerprint);
-                } elseif (! $snapshotCapabilityAvailable
-                    || ! isset($snapshot['customers'][0]['id'])
-                    || (int) $snapshot['customers'][0]['id'] !== (int) $acknowledgment['server_id']
-                    || ($snapshot['customers'][0]['local_uuid'] ?? null) !== ($acknowledgment['local_uuid'] ?? null)) {
-                    $outcome = $reconciler->rejectAcknowledgmentSnapshot(
-                        $acknowledgedIdentity,
-                        (int) $customer->id,
-                        'Portal acknowledged this Customer with an invalid or incomplete aggregate snapshot. Local data was preserved for review.',
-                    );
-                } else {
-                    $outcome = $reconciler->reconcile(
-                        $snapshot,
-                        [],
-                        (int) $customer->id,
-                        $aggregateFingerprint,
-                        requireCompleteContract: true,
-                    );
-                }
-
-                if (! in_array($outcome['status'], ['applied', 'acknowledged_without_snapshot'], true)) {
-                    return SyncResult::fail(
-                        'Customer delivery was acknowledged, but local changes were preserved and require conflict review.',
-                        'customer_conflict',
-                        0,
-                        1,
-                        0,
-                        ['customer_conflict'],
-                    );
-                }
-
-                DB::table('customers')->where('id', $customer->id)->update([
-                    'customer_code_reservation_token' => null,
-                    'sync_attempts' => $allowExhausted ? $customer->sync_attempts : 0,
-                    'sync_error' => $allowExhausted ? $customer->sync_error : null,
-                ]);
-                DB::table('sync_states')->whereIn('key', [
-                    'customer.manual_retry_ready.'.$customer->id,
-                    'customer.last_failed_payload.'.$customer->id,
-                ])->delete();
-
-                $snapshotOutcome = $snapshotCapabilityAvailable
-                    ? 'customer_snapshot_reconciled'
-                    : 'customer_snapshot_unsupported';
-
-                return SyncResult::ok(
-                    $snapshotCapabilityAvailable
-                        ? 'Customer delivery acknowledged and authoritative aggregate reconciled.'
-                        : 'Customer delivery acknowledged; Portal does not support the authoritative aggregate snapshot contract, so aggregate refresh is not claimed.',
-                    1,
-                    0,
-                    0,
-                    [$snapshotOutcome],
-                );
-            }
-
-            if ($response->status() === 409 && $response->json('code') === 'customer_conflict') {
-                $customer->update(['sync_status' => 'conflict', 'sync_error' => $response->json('message', 'Customer changed on Portal.')]);
-
-                return SyncResult::fail('Customer changed on the server and needs review.', 'customer_conflict', 0, 1, 0, ['customer_conflict']);
-            }
-
-            $portalError = $this->customerPortalError($response);
-            $previousError = $customer->sync_error;
-            $this->recordItemFailure($customer, 'portal_rejected', $portalError, [
-                'stage' => 'customer:portal',
-                'endpoint' => '/api/sync/push/customer',
-                'http_status' => $response->status(),
-            ]);
-            $this->recordCustomerPushErrorHistory($customer, $previousError);
-            $this->rememberFailedCustomerPayload($customer, $fingerprint);
-
-            $retryable = (int) $customer->sync_attempts < 3 ? 1 : 0;
-
-            return SyncResult::fail($portalError, 'push_failed', 0, 1, $retryable, ['portal_rejected']);
-        } catch (Throwable $exception) {
-            $previousError = $customer->sync_error;
-            $this->recordUnexpectedItemFailure($customer, $exception, 'customer:unexpected');
-            $this->recordCustomerPushErrorHistory($customer, $previousError);
-            if (isset($fingerprint)) {
-                $this->rememberFailedCustomerPayload($customer, $fingerprint);
-            }
-
-            $retryable = (int) $customer->sync_attempts < 3 ? 1 : 0;
-
-            return SyncResult::fail($retryable ? 'Customer push failed and will retry on the next sync.' : 'Customer push failed and reached the automatic retry limit. Correct and save the Customer before using Retry Customer.', 'push_failed', 0, 1, $retryable, ['unexpected_sync_error']);
-        }
-    }
-
-    private function customerPushPayload(Customer $customer): array
-    {
-        $customer->loadMissing(['tradeProfile', 'categoryHistories', 'categoryEvents', 'users', 'personInCharge']);
-        $payload = [
-            'local_uuid' => $customer->local_uuid,
-            'server_id' => $customer->server_id,
-            'base_updated_at' => $customer->server_updated_at,
-            'sync_intent' => $customer->server_id ? 'update' : 'create',
-            'name' => $customer->name,
-            'unique_id' => $customer->unique_id,
-            'customer_code_reservation_token' => $customer->customer_code_reservation_token,
-            'company_id' => $customer->company_id,
-            'landmass_code' => $customer->landmass_code,
-            'general_category_id' => $customer->general_category_id,
-            'competitor_volume' => $customer->competitor_volume,
-            'region_specific_id' => $customer->region_specific_id,
-            'municipality_id' => $customer->municipality_id,
-            'address' => $customer->address,
-            'latitude' => $customer->latitude,
-            'longitude' => $customer->longitude,
-            'contact_person' => $customer->contact_person,
-            'contact_number' => $customer->contact_number,
-            'business_landline_number' => $customer->business_landline_number,
-            'business_mobile_number' => $customer->business_mobile_number,
-            'date_established' => optional($customer->date_established)->format('Y-m-d'),
-            'is_active' => $customer->is_active,
-            'profile_type' => $customer->tradeProfile?->profile_type,
-            'person_in_charge_email' => $customer->personInCharge?->email,
-            'access_user_emails' => $customer->users->pluck('email')->values()->all(),
-            'trade_profile' => $customer->tradeProfile?->toArray() ?? [],
-            'profile_data' => $customer->tradeProfile?->profile_data ?? [],
-            'category_histories' => $customer->categoryHistories->map(fn ($history) => [
-                'profile_type' => $history->profile_type ?: $customer->tradeProfile?->profile_type,
-                'stream' => $history->stream ?: (($customer->tradeProfile?->profile_type === 'outlet') ? match ($customer->tradeProfile?->entry_detail) {
-                    'AB' => 'ab', 'MCB' => 'mcb', default => (str_starts_with((string) $history->category, 'AB ') ? 'ab' : (str_starts_with((string) $history->category, 'MCB ') ? 'mcb' : null)),
-                } : $customer->tradeProfile?->profile_type),
-                'category_year' => $history->category_year,
-                'category' => $history->category,
-            ])->values()->all(),
-            'category_events' => $customer->categoryEvents->map(fn ($event) => [
-                'event_key' => $event->event_key,
-                'profile_type' => $event->profile_type,
-                'stream' => $event->stream,
-                'category' => $event->category,
-                'effective_at' => $event->effective_at?->toISOString(),
-                'source' => $event->source,
-                'supersedes_event_key' => $event->supersedes_event_key,
-            ])->values()->all(),
-        ];
-
-        foreach (['province_id', 'barangay_id', 'area_cluster_id'] as $locationId) {
-            if ($customer->{$locationId} !== null) {
-                $payload[$locationId] = $customer->{$locationId};
-            }
-        }
-
-        return $payload;
-    }
-
-    private function rememberFailedCustomerPayload(Customer $customer, string $fingerprint): void
-    {
-        DB::table('sync_states')->updateOrInsert(
-            ['key' => 'customer.last_failed_payload.'.$customer->id],
-            ['value' => json_encode($fingerprint), 'created_at' => now(), 'updated_at' => now()],
-        );
-        DB::table('sync_states')->where('key', 'customer.manual_retry_ready.'.$customer->id)->delete();
-    }
-
-    private function recordCustomerPushErrorHistory(Customer $customer, ?string $previousError): void
-    {
-        $key = 'customer.push_error_history.'.$customer->id;
-        $history = json_decode((string) DB::table('sync_states')->where('key', $key)->value('value'), true);
-        $history = is_array($history) ? $history : [];
-
-        foreach ([
-            ['attempt' => max(0, (int) $customer->sync_attempts - 1), 'message' => $previousError],
-            ['attempt' => (int) $customer->sync_attempts, 'message' => $customer->sync_error],
-        ] as $entry) {
-            if (is_string($entry['message']) && $entry['message'] !== '' && ($history === [] || ($history[array_key_last($history)]['message'] ?? null) !== $entry['message'])) {
-                $history[] = $entry;
-            }
-        }
-
-        $history = array_slice($history, -10);
-        DB::table('sync_states')->updateOrInsert(
-            ['key' => $key],
-            ['value' => json_encode($history), 'created_at' => now(), 'updated_at' => now()],
-        );
+        return app(CustomerPushService::class)->hasPendingCustomerPushWork();
     }
 
     /**
@@ -3607,7 +3251,7 @@ class SyncService
 
         try {
             $this->client($user->api_token)
-                ->post("{$this->serverUrl}/api/sync/push/customer-note/delete", ['local_uuid' => $localUuid]);
+                ->post("{$this->serverUrl}/api/customer-notes/delete", ['local_uuid' => $localUuid]);
         } catch (Throwable) {
             // best-effort — nothing local left to mark as failed
         }
@@ -3685,15 +3329,6 @@ class SyncService
         }
     }
 
-    private function markFailed(Model $model, string $error): void
-    {
-        $model->update([
-            'sync_status' => 'failed',
-            'sync_attempts' => ($model->sync_attempts ?? 0) + 1,
-            'sync_error' => $error,
-        ]);
-    }
-
     private function markSynced(Model $model, array $attributes = [], bool $clearError = true): void
     {
         $model->update([
@@ -3734,7 +3369,7 @@ class SyncService
             try {
                 $response = $client
                     ->attach('image', $stream, basename($image->local_path))
-                    ->post("{$this->serverUrl}/api/sync/push/salescall-image", [
+                    ->post("{$this->serverUrl}/api/salescalls/push-image", [
                         'local_uuid' => $image->local_uuid,
                         'salescall_server_id' => $image->salescall->server_id,
                         'salescall_image_type_id' => $image->salescall_image_type_id,
@@ -3757,7 +3392,7 @@ class SyncService
 
                 $this->recordItemFailure($image, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
                     'stage' => 'salescall-image:portal',
-                    'endpoint' => '/api/sync/push/salescall-image',
+                    'endpoint' => '/api/salescalls/push-image',
                     'http_status' => $response->status(),
                     's3_key' => $s3Key,
                 ]);
@@ -3774,7 +3409,7 @@ class SyncService
             $classification = $this->classifyBinaryThrowable($e);
             $this->recordThrowableFailure($image, $classification, $e, [
                 'stage' => 'salescall-image:unexpected',
-                'endpoint' => '/api/sync/push/salescall-image',
+                'endpoint' => '/api/salescalls/push-image',
                 'local_path' => $image->local_path,
                 's3_key' => $image->s3_key,
             ]);
@@ -3814,7 +3449,7 @@ class SyncService
             try {
                 $response = $client
                     ->attach('file', $stream, basename($attachment->local_path))
-                    ->post("{$this->serverUrl}/api/sync/push/customer-profile-attachment", [
+                    ->post("{$this->serverUrl}/api/customer-profiles/push-attachment", [
                         'local_uuid' => $attachment->local_uuid,
                         'salescall_server_id' => $attachment->salescall->server_id,
                         'original_name' => $attachment->original_name,
@@ -3834,7 +3469,7 @@ class SyncService
 
                 $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
                     'stage' => 'profile-attachment:portal',
-                    'endpoint' => '/api/sync/push/customer-profile-attachment',
+                    'endpoint' => '/api/customer-profiles/push-attachment',
                     'http_status' => $response->status(),
                     's3_key' => $s3Key,
                 ]);
@@ -3851,7 +3486,7 @@ class SyncService
             $classification = $this->classifyBinaryThrowable($e);
             $this->recordThrowableFailure($attachment, $classification, $e, [
                 'stage' => 'profile-attachment:unexpected',
-                'endpoint' => '/api/sync/push/customer-profile-attachment',
+                'endpoint' => '/api/customer-profiles/push-attachment',
                 'local_path' => $attachment->local_path,
                 's3_key' => $attachment->s3_key,
             ]);
@@ -3893,7 +3528,7 @@ class SyncService
             if (! $attachment->expense || ! $attachment->expense->server_id) {
                 $this->recordItemFailure($attachment, 'expense_not_synced', 'The associated Expense is not available on Portal yet.', [
                     'stage' => 'expense-attachment:expense',
-                    'endpoint' => '/api/sync/push/expense-attachment',
+                    'endpoint' => '/api/expenses/push-attachment',
                 ]);
 
                 return ['success' => false, 'reason' => 'expense_not_synced'];
@@ -3922,7 +3557,7 @@ class SyncService
             try {
                 $response = $client
                     ->attach('file', $stream, basename($attachment->local_path))
-                    ->post("{$this->serverUrl}/api/sync/push/expense-attachment", [
+                    ->post("{$this->serverUrl}/api/expenses/push-attachment", [
                         'local_uuid' => $attachment->local_uuid,
                         'expense_server_id' => $attachment->expense->server_id,
                         'original_name' => $attachment->original_name,
@@ -3943,7 +3578,7 @@ class SyncService
 
                 $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
                     'stage' => 'expense-attachment:portal',
-                    'endpoint' => '/api/sync/push/expense-attachment',
+                    'endpoint' => '/api/expenses/push-attachment',
                     'http_status' => $response->status(),
                 ]);
 
@@ -3964,7 +3599,7 @@ class SyncService
             $classification = $this->classifyBinaryThrowable($e);
             $this->recordThrowableFailure($attachment, $classification, $e, [
                 'stage' => 'expense-attachment:unexpected',
-                'endpoint' => '/api/sync/push/expense-attachment',
+                'endpoint' => '/api/expenses/push-attachment',
                 'local_path' => $attachment->local_path,
             ]);
 
@@ -4001,7 +3636,7 @@ class SyncService
             try {
                 $response = $client
                     ->attach('file', $stream, basename($attachment->local_path))
-                    ->post("{$this->serverUrl}/api/sync/forms/crr/attach", [
+                    ->post("{$this->serverUrl}/api/forms/crr/attach", [
                         'server_id' => $attachment->crr->server_id,
                     ]);
             } finally {
@@ -4020,7 +3655,7 @@ class SyncService
 
                 $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
                     'stage' => 'crr-attachment:portal',
-                    'endpoint' => '/api/sync/forms/crr/attach',
+                    'endpoint' => '/api/forms/crr/attach',
                     'http_status' => $response->status(),
                 ]);
 
@@ -4037,7 +3672,7 @@ class SyncService
             $classification = $this->classifyBinaryThrowable($e);
             $this->recordThrowableFailure($attachment, $classification, $e, [
                 'stage' => 'crr-attachment:unexpected',
-                'endpoint' => '/api/sync/forms/crr/attach',
+                'endpoint' => '/api/forms/crr/attach',
                 'local_path' => $attachment->local_path,
             ]);
 
@@ -4074,7 +3709,7 @@ class SyncService
             try {
                 $response = $client
                     ->attach('file', $stream, basename($attachment->local_path))
-                    ->post("{$this->serverUrl}/api/sync/forms/trade-check/attach", [
+                    ->post("{$this->serverUrl}/api/forms/trade-check/attach", [
                         'server_id' => $attachment->tradeCheck->server_id,
                         'item_ref' => $attachment->item?->name,
                     ]);
@@ -4094,7 +3729,7 @@ class SyncService
 
                 $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
                     'stage' => 'trade-check-attachment:portal',
-                    'endpoint' => '/api/sync/forms/trade-check/attach',
+                    'endpoint' => '/api/forms/trade-check/attach',
                     'http_status' => $response->status(),
                 ]);
 
@@ -4111,7 +3746,7 @@ class SyncService
             $classification = $this->classifyBinaryThrowable($e);
             $this->recordThrowableFailure($attachment, $classification, $e, [
                 'stage' => 'trade-check-attachment:unexpected',
-                'endpoint' => '/api/sync/forms/trade-check/attach',
+                'endpoint' => '/api/forms/trade-check/attach',
                 'local_path' => $attachment->local_path,
             ]);
 
@@ -4148,7 +3783,7 @@ class SyncService
             try {
                 $response = $client
                     ->attach('file', $stream, basename($signature->local_path))
-                    ->post("{$this->serverUrl}/api/sync/forms/giveaway/attach", [
+                    ->post("{$this->serverUrl}/api/forms/giveaway/attach", [
                         'server_id' => $signature->giveaway->server_id,
                         'item_ref' => $signature->answer?->item?->name,
                     ]);
@@ -4168,7 +3803,7 @@ class SyncService
 
                 $this->recordItemFailure($signature, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
                     'stage' => 'giveaway-signature:portal',
-                    'endpoint' => '/api/sync/forms/giveaway/attach',
+                    'endpoint' => '/api/forms/giveaway/attach',
                     'http_status' => $response->status(),
                 ]);
 
@@ -4185,7 +3820,7 @@ class SyncService
             $classification = $this->classifyBinaryThrowable($e);
             $this->recordThrowableFailure($signature, $classification, $e, [
                 'stage' => 'giveaway-signature:unexpected',
-                'endpoint' => '/api/sync/forms/giveaway/attach',
+                'endpoint' => '/api/forms/giveaway/attach',
                 'local_path' => $signature->local_path,
             ]);
 
@@ -4222,7 +3857,7 @@ class SyncService
             try {
                 $response = $client
                     ->attach('file', $stream, basename($attachment->local_path))
-                    ->post("{$this->serverUrl}/api/sync/forms/repair/attach", [
+                    ->post("{$this->serverUrl}/api/forms/repair/attach", [
                         'server_id' => $attachment->repair->server_id,
                         'type' => $attachment->type->value,
                     ]);
@@ -4242,7 +3877,7 @@ class SyncService
 
                 $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
                     'stage' => 'repair-attachment:portal',
-                    'endpoint' => '/api/sync/forms/repair/attach',
+                    'endpoint' => '/api/forms/repair/attach',
                     'http_status' => $response->status(),
                 ]);
 
@@ -4259,7 +3894,7 @@ class SyncService
             $classification = $this->classifyBinaryThrowable($e);
             $this->recordThrowableFailure($attachment, $classification, $e, [
                 'stage' => 'repair-attachment:unexpected',
-                'endpoint' => '/api/sync/forms/repair/attach',
+                'endpoint' => '/api/forms/repair/attach',
                 'local_path' => $attachment->local_path,
             ]);
 
@@ -4296,7 +3931,7 @@ class SyncService
             try {
                 $response = $client
                     ->attach('file', $stream, basename($attachment->local_path))
-                    ->post("{$this->serverUrl}/api/sync/forms/crr-signage/attach", [
+                    ->post("{$this->serverUrl}/api/forms/crr-signage/attach", [
                         'server_id' => $attachment->signage->server_id,
                         'type' => $attachment->type->value,
                     ]);
@@ -4316,7 +3951,7 @@ class SyncService
 
                 $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
                     'stage' => 'signage-attachment:portal',
-                    'endpoint' => '/api/sync/forms/crr-signage/attach',
+                    'endpoint' => '/api/forms/crr-signage/attach',
                     'http_status' => $response->status(),
                 ]);
 
@@ -4333,7 +3968,7 @@ class SyncService
             $classification = $this->classifyBinaryThrowable($e);
             $this->recordThrowableFailure($attachment, $classification, $e, [
                 'stage' => 'signage-attachment:unexpected',
-                'endpoint' => '/api/sync/forms/crr-signage/attach',
+                'endpoint' => '/api/forms/crr-signage/attach',
                 'local_path' => $attachment->local_path,
             ]);
 
@@ -4370,7 +4005,7 @@ class SyncService
             try {
                 $response = $client
                     ->attach('file', $stream, basename($attachment->local_path))
-                    ->post("{$this->serverUrl}/api/sync/forms/trade-request/attach", [
+                    ->post("{$this->serverUrl}/api/forms/trade-request/attach", [
                         'server_id' => $attachment->tradeRequest->server_id,
                         'type' => $attachment->type->value,
                     ]);
@@ -4390,7 +4025,7 @@ class SyncService
 
                 $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
                     'stage' => 'trade-request-attachment:portal',
-                    'endpoint' => '/api/sync/forms/trade-request/attach',
+                    'endpoint' => '/api/forms/trade-request/attach',
                     'http_status' => $response->status(),
                 ]);
 
@@ -4407,7 +4042,7 @@ class SyncService
             $classification = $this->classifyBinaryThrowable($e);
             $this->recordThrowableFailure($attachment, $classification, $e, [
                 'stage' => 'trade-request-attachment:unexpected',
-                'endpoint' => '/api/sync/forms/trade-request/attach',
+                'endpoint' => '/api/forms/trade-request/attach',
                 'local_path' => $attachment->local_path,
             ]);
 
@@ -4444,7 +4079,7 @@ class SyncService
             try {
                 $response = $client
                     ->attach('file', $stream, basename($attachment->local_path))
-                    ->post("{$this->serverUrl}/api/sync/forms/training/attach", [
+                    ->post("{$this->serverUrl}/api/forms/training/attach", [
                         'server_id' => $attachment->training->server_id,
                         'type' => $attachment->type->value,
                     ]);
@@ -4464,7 +4099,7 @@ class SyncService
 
                 $this->recordItemFailure($attachment, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
                     'stage' => 'training-attachment:portal',
-                    'endpoint' => '/api/sync/forms/training/attach',
+                    'endpoint' => '/api/forms/training/attach',
                     'http_status' => $response->status(),
                 ]);
 
@@ -4481,7 +4116,7 @@ class SyncService
             $classification = $this->classifyBinaryThrowable($e);
             $this->recordThrowableFailure($attachment, $classification, $e, [
                 'stage' => 'training-attachment:unexpected',
-                'endpoint' => '/api/sync/forms/training/attach',
+                'endpoint' => '/api/forms/training/attach',
                 'local_path' => $attachment->local_path,
             ]);
 
@@ -4523,7 +4158,7 @@ class SyncService
                 $signature = 'data:image/png;base64,'.base64_encode($signatureBytes);
             }
 
-            $response = $client->post("{$this->serverUrl}/api/sync/push/customer-profile", [
+            $response = $client->post("{$this->serverUrl}/api/customer-profiles/push", [
                 'local_uuid' => $profile->local_uuid,
                 'salescall_server_id' => $profile->salescall->server_id,
                 'sub_category_id' => $profile->sub_category_id,
@@ -4553,7 +4188,7 @@ class SyncService
 
                 $this->recordItemFailure($profile, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
                     'stage' => 'customer-profile:portal',
-                    'endpoint' => '/api/sync/push/customer-profile',
+                    'endpoint' => '/api/customer-profiles/push',
                     'http_status' => $response->status(),
                     's3_key' => $profile->signature_s3_key,
                 ]);
@@ -4570,7 +4205,7 @@ class SyncService
             $classification = $this->classifyBinaryThrowable($e);
             $this->recordThrowableFailure($profile, $classification, $e, [
                 'stage' => 'customer-profile:unexpected',
-                'endpoint' => '/api/sync/push/customer-profile',
+                'endpoint' => '/api/customer-profiles/push',
                 'local_path' => $profile->signature_path,
                 's3_key' => $profile->signature_s3_key,
             ]);
@@ -4668,47 +4303,17 @@ class SyncService
 
     private function recordUnexpectedItemFailure(Model $model, Throwable $e, string $stage): void
     {
-        $this->recordThrowableFailure($model, 'unexpected_sync_error', $e, [
-            'stage' => $stage,
-        ]);
+        app(SyncFailureRecorder::class)->recordUnexpectedItemFailure($model, $e, $stage);
     }
 
     private function recordThrowableFailure(Model $model, string $classification, Throwable $e, array $context = []): void
     {
-        $message = $this->formatSyncError($classification, $e->getMessage());
-
-        $this->recordItemFailure($model, $classification, $message, [
-            ...$context,
-            'exception_class' => $e::class,
-            'exception_message' => $e->getMessage(),
-        ]);
+        app(SyncFailureRecorder::class)->recordThrowableFailure($model, $classification, $e, $context);
     }
 
     private function recordItemFailure(Model $model, string $classification, string $error, array $context = []): void
     {
-        $formattedError = $this->formatSyncError($classification, $error);
-
-        try {
-            $this->markFailed($model, $formattedError);
-        } catch (Throwable $markFailedError) {
-            Log::error('sync:item:mark-failed-error', [
-                'classification' => $classification,
-                'model' => $model::class,
-                'model_id' => $model->getKey(),
-                'original_error' => $formattedError,
-                'mark_failed_exception_class' => $markFailedError::class,
-                'mark_failed_exception_message' => $markFailedError->getMessage(),
-            ]);
-        }
-
-        Log::warning('sync:item:failed', [
-            'classification' => $classification,
-            'model' => $model::class,
-            'model_id' => $model->getKey(),
-            'local_uuid' => $model->local_uuid ?? null,
-            'error' => $formattedError,
-            ...$context,
-        ]);
+        app(SyncFailureRecorder::class)->recordItemFailure($model, $classification, $error, $context);
     }
 
     /**
@@ -4716,7 +4321,7 @@ class SyncService
      */
     private function recordCollectionFailure(Collection $models, string $classification, string $error, array $context = []): void
     {
-        $models->each(fn (Model $model) => $this->recordItemFailure($model, $classification, $error, $context));
+        app(SyncFailureRecorder::class)->recordCollectionFailure($models, $classification, $error, $context);
     }
 
     /**
@@ -4724,57 +4329,7 @@ class SyncService
      */
     private function recordCollectionUnexpectedFailure(Collection $models, Throwable $e, string $stage, array $context = []): void
     {
-        $models->each(fn (Model $model) => $this->recordThrowableFailure($model, 'unexpected_sync_error', $e, [
-            'stage' => $stage,
-            ...$context,
-        ]));
-    }
-
-    /**
-     * @param  list<string>  $failureReasons
-     */
-    private function buildPushResult(int $pushed, int $failed, int $retryable, array $failureReasons): SyncResult
-    {
-        if ($pushed === 0 && $failed === 0) {
-            return SyncResult::ok('Nothing to push.', 0, 0, 0, []);
-        }
-
-        if ($failed > 0 && $pushed === 0) {
-            return SyncResult::fail(
-                $retryable > 0
-                    ? ($failed === 1 ? '1 item could not be uploaded and will retry later.' : "{$failed} items could not be uploaded and will retry later.")
-                    : ($failed === 1 ? '1 item failed and reached its automatic retry limit. Review the item and use its available recovery action.' : "{$failed} items failed and reached their automatic retry limit. Review each item and use its available recovery action."),
-                'push_failed',
-                0,
-                $failed,
-                $retryable,
-                $failureReasons,
-            );
-        }
-
-        if ($failed > 0) {
-            return SyncResult::ok(
-                "{$pushed} item".($pushed === 1 ? '' : 's')." synced. {$failed} item".($failed === 1 ? '' : 's').($retryable > 0 ? ' could not be uploaded and will retry later.' : ' failed and reached their automatic retry limit.'),
-                $pushed,
-                $failed,
-                $retryable,
-                $failureReasons,
-            );
-        }
-
-        $snapshotNotice = in_array('customer_snapshot_unsupported', $failureReasons, true)
-            ? ' Portal lacks the authoritative aggregate snapshot contract; aggregate refresh is not claimed.'
-            : (in_array('customer_snapshot_not_reconciled', $failureReasons, true)
-                ? ' The Portal snapshot has not been applied by this Tablet build.'
-                : '');
-
-        return SyncResult::ok(
-            "{$pushed} item".($pushed === 1 ? '' : 's').' delivery acknowledged successfully.'.$snapshotNotice,
-            $pushed,
-            0,
-            0,
-            $failureReasons,
-        );
+        app(SyncFailureRecorder::class)->recordCollectionUnexpectedFailure($models, $e, $stage, $context);
     }
 
     private function trimRemoteError(string $body): string
@@ -4786,49 +4341,6 @@ class SyncService
         }
 
         return mb_substr($trimmed, 0, 300);
-    }
-
-    /** Return a concise, human-readable Portal response for the Create Customer notification. */
-    private function customerPortalError(Response $response): string
-    {
-        $status = $response->status();
-        $payload = $response->json();
-        $details = [];
-
-        if (is_array($payload)) {
-            if (is_string($payload['message'] ?? null) && trim($payload['message']) !== '') {
-                $details[] = trim(strip_tags($payload['message']));
-            }
-
-            foreach (($payload['errors'] ?? []) as $field => $messages) {
-                foreach ((array) $messages as $message) {
-                    if (is_string($message) && trim($message) !== '') {
-                        $details[] = trim((string) $field).': '.trim(strip_tags($message));
-                    }
-                }
-            }
-        }
-
-        $detail = implode(' ', array_unique($details));
-        if ($detail === '') {
-            $detail = 'The Portal did not provide a readable error message.';
-        }
-
-        return mb_substr("Portal returned HTTP {$status}: {$detail}", 0, 300);
-    }
-
-    private function trimSyncError(string $error): string
-    {
-        return mb_substr(trim($error), 0, 300);
-    }
-
-    private function formatSyncError(string $classification, string $detail): string
-    {
-        if (str_starts_with($detail, $classification.'|')) {
-            $detail = substr($detail, strlen($classification) + 1) ?: $detail;
-        }
-
-        return $classification.': '.$this->trimSyncError($detail);
     }
 
     private function displayPath(?string $path): string

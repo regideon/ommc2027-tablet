@@ -48,7 +48,7 @@ function repairPullPayload(): array
 
 function repairFakePull(?array $payload = null): void
 {
-    Http::fake(['*/api/sync/forms/repair/pull' => Http::response($payload ?? repairPullPayload(), 200)]);
+    Http::fake(['*/api/forms/repair/pull' => Http::response($payload ?? repairPullPayload(), 200)]);
 }
 
 function repairPngDataUri(): string
@@ -283,7 +283,7 @@ test('pulled status changes are cached for synced local repairs', function () {
     $payload['repairs'][0]['sps_status'] = SPSStatus::ENDORSED->value;
     $payload['repairs'][0]['spm_status'] = SPMStatus::ENDORSED->value;
 
-    Http::fake(['*/api/sync/forms/repair/pull' => Http::response($payload, 200)]);
+    Http::fake(['*/api/forms/repair/pull' => Http::response($payload, 200)]);
 
     $rows = $service->submissions();
 
@@ -309,7 +309,7 @@ test('an unsynced local Repair is not overwritten by the pull', function () {
     $payload = repairPullPayload();
     $payload['repairs'][0]['plate_number'] = 'SERVER 9999';
 
-    Http::fake(['*/api/sync/forms/repair/pull' => Http::response($payload, 200)]);
+    Http::fake(['*/api/forms/repair/pull' => Http::response($payload, 200)]);
 
     $rows = $service->submissions();
 
@@ -367,15 +367,15 @@ test('pushing a Repair posts the header and stores the server id', function () {
     $repair = $service->create($user, repairCreatePayload($invoice, RepairAttachmentType::INVOICE->value));
 
     Http::fake([
-        '*/api/sync/forms/repair/push' => Http::response(['server_id' => 701], 200),
-        '*/api/sync/forms/repair/attach' => Http::response(['server_id' => 800, 'uploaded_file_id' => 800], 200),
+        '*/api/forms/repair/push' => Http::response(['server_id' => 701], 200),
+        '*/api/forms/repair/attach' => Http::response(['server_id' => 800, 'uploaded_file_id' => 800], 200),
         '*' => Http::response([], 200),
     ]);
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) {
-        return str_ends_with($request->url(), '/api/sync/forms/repair/push')
+        return str_ends_with($request->url(), '/api/forms/repair/push')
             && $request['plate_number'] === 'ABC 1234'
             && $request['invoice_number'] === 'INV-1001'
             && $request['details'] === 'Replace brake pads'
@@ -400,15 +400,15 @@ test('Repair attachments push after the parent with their type', function () {
     $attachment = RepairAttachment::query()->firstOrFail();
 
     Http::fake([
-        '*/api/sync/forms/repair/push' => Http::response(['server_id' => 701], 200),
-        '*/api/sync/forms/repair/attach' => Http::response(['server_id' => 88, 'uploaded_file_id' => 77], 200),
+        '*/api/forms/repair/push' => Http::response(['server_id' => 701], 200),
+        '*/api/forms/repair/attach' => Http::response(['server_id' => 88, 'uploaded_file_id' => 77], 200),
         '*' => Http::response([], 200),
     ]);
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) {
-        if (! str_ends_with($request->url(), '/api/sync/forms/repair/attach')) {
+        if (! str_ends_with($request->url(), '/api/forms/repair/attach')) {
             return false;
         }
 

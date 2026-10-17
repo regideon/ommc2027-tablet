@@ -88,7 +88,7 @@ test('image portal failure after s3 success remains retryable and retains s3 key
     ]);
 
     Http::fake([
-        'https://portal.test/api/sync/push/salescall-image' => Http::response(['message' => 'temporary upstream failure'], 500),
+        'https://portal.test/api/salescalls/push-image' => Http::response(['message' => 'temporary upstream failure'], 500),
     ]);
 
     $result = app(SyncService::class)->push();
@@ -158,7 +158,7 @@ test('signature portal failure after s3 success remains retryable and retains s3
     ]);
 
     Http::fake([
-        'https://portal.test/api/sync/push/customer-profile' => Http::response(['message' => 'validation failed'], 422),
+        'https://portal.test/api/customer-profiles/push' => Http::response(['message' => 'validation failed'], 422),
     ]);
 
     $result = app(SyncService::class)->push();
@@ -197,7 +197,7 @@ test('one failed binary item does not block another successful item and reports 
     ]);
 
     Http::fake([
-        'https://portal.test/api/sync/push/salescall-image' => Http::response(['server_id' => 9002], 200),
+        'https://portal.test/api/salescalls/push-image' => Http::response(['server_id' => 9002], 200),
     ]);
 
     $result = app(SyncService::class)->push();

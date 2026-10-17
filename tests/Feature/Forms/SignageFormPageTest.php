@@ -27,8 +27,8 @@ beforeEach(function () {
     config(['sync.server_url' => 'http://portal.test']);
 
     Http::fake([
-        '*/api/sync/forms/crr-signage/products' => Http::response(['signage_products' => [['id' => 301, 'name' => 'Tarpaulin']]], 200),
-        '*/api/sync/forms/crr-signage/types' => Http::response(['signage_types' => [['id' => 401, 'name' => 'Horizontal']]], 200),
+        '*/api/forms/crr-signage/products' => Http::response(['signage_products' => [['id' => 301, 'name' => 'Tarpaulin']]], 200),
+        '*/api/forms/crr-signage/types' => Http::response(['signage_types' => [['id' => 401, 'name' => 'Horizontal']]], 200),
     ]);
 });
 

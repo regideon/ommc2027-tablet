@@ -152,7 +152,7 @@ test('the Marketing read service merges local and server rows with the server wi
     ]);
 
     Http::fake([
-        '*/api/sync/forms/marketing/pull' => Http::response([
+        '*/api/forms/marketing/pull' => Http::response([
             'marketings' => [[
                 'id' => 900,
                 'name' => 'Server name',
@@ -186,7 +186,7 @@ test('the Marketing read service keeps local rows when the pull fails', function
 
     $service->create($user, marketingValidInput($program, $region));
 
-    Http::fake(['*/api/sync/forms/marketing/pull' => Http::response([], 500)]);
+    Http::fake(['*/api/forms/marketing/pull' => Http::response([], 500)]);
     $this->actingAs($user);
 
     $read = app(MarketingService::class);
@@ -221,7 +221,7 @@ test('a Marketing recommendation deleted on the server is purged locally', funct
 
     MarketingVolume::create(['marketing_id' => $marketing->id, 'before_program' => 1, 'during_program' => 2, 'volume' => 1]);
 
-    Http::fake(['*/api/sync/forms/marketing/pull' => Http::response(['marketings' => []], 200)]);
+    Http::fake(['*/api/forms/marketing/pull' => Http::response(['marketings' => []], 200)]);
     $this->actingAs($user);
 
     $rows = app(MarketingService::class)->submissions();
@@ -235,7 +235,7 @@ test('the Marketing read service upserts programs from the server', function () 
     $user = marketingWorkflowUser();
 
     Http::fake([
-        '*/api/sync/forms/marketing/programs' => Http::response([
+        '*/api/forms/marketing/programs' => Http::response([
             'marketing_programs' => [
                 ['id' => 10, 'name' => 'Price Support'],
                 ['id' => 11, 'name' => 'MCB Volume Growth Incentive'],
@@ -257,14 +257,14 @@ test('pushing a Marketing recommendation posts the mapped payload and stores the
 
     $marketing = app(MarketingService::class)->create($user, marketingValidInput($program, $region));
 
-    Http::fake(fn ($request) => str_contains($request->url(), '/api/sync/forms/marketing/push')
+    Http::fake(fn ($request) => str_contains($request->url(), '/api/forms/marketing/push')
         ? Http::response(['server_id' => 777], 200)
         : Http::response([], 200));
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) use ($program) {
-        return str_ends_with($request->url(), '/api/sync/forms/marketing/push')
+        return str_ends_with($request->url(), '/api/forms/marketing/push')
             && $request['program_id'] === $program->server_id
             && $request['name'] === 'Branch Expansion Support'
             && count($request['volumes']) === 1
@@ -281,7 +281,7 @@ test('a pulled server Marketing row can be adopted locally for editing', functio
     $program = marketingWorkflowProgram(serverId: 55);
     $region = marketingWorkflowRegion();
 
-    Http::fake(['*/api/sync/forms/marketing/pull' => Http::response([
+    Http::fake(['*/api/forms/marketing/pull' => Http::response([
         'marketings' => [[
             'id' => 901,
             'name' => 'Server Marketing',

@@ -21,7 +21,7 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     config(['sync.server_url' => 'http://portal.test']);
-    Http::fake(['*/api/sync/forms/trade-check/pull' => Http::response(tradeCheckFormPagePullPayload(), 200)]);
+    Http::fake(['*/api/forms/trade-check/pull' => Http::response(tradeCheckFormPagePullPayload(), 200)]);
 });
 
 function tradeCheckFormPageUser(): User

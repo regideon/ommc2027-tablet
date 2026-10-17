@@ -12,8 +12,6 @@ use App\Models\CustomerNote;
 use App\Models\CustomerProfile;
 use App\Models\CustomerProfileAttachment;
 use App\Models\ExpenseType;
-use App\Models\Forms\CRRSignage\Signage;
-use App\Models\Forms\Marketing\Marketing;
 use App\Models\Forms\TradeRequest\TradeRequest;
 use App\Models\Itinerary;
 use App\Models\MaterialGroup;
@@ -106,15 +104,11 @@ class SalescallPage extends Page
     public bool $hasPhoto = false;
 
     /**
-     * Whether the currently selected visit already has each required form
-     * submission from the logged-in rep: CRR Signage, Marketing, and Trade
-     * Request. Mirrors hasAllRequiredForms() so the Submit button and the
-     * requirements checklist can reflect them up front.
+     * Whether the currently selected visit already has the required Trade
+     * Request submission from the logged-in rep. Mirrors
+     * hasAllRequiredForms() so the Submit button and the requirements
+     * checklist can reflect it up front.
      */
-    public bool $hasSignageForm = false;
-
-    public bool $hasMarketingForm = false;
-
     public bool $hasTradeRequestForm = false;
 
     public ?int $pendingPhotoSalescallId = null;
@@ -170,31 +164,19 @@ class SalescallPage extends Page
     }
 
     /**
-     * Refresh the required-form flags for the selected visit. Each flag is
-     * scoped to the logged-in rep, so another rep's submissions never satisfy
-     * the visit's requirements.
+     * Refresh the required-form flag for the selected visit — only the Trade
+     * Request remains required. Scoped to the logged-in rep, so another rep's
+     * submission never satisfies the visit's requirement.
      */
     public function loadFormRequirements(?int $salescallId): void
     {
         if (! $salescallId) {
-            $this->hasSignageForm = false;
-            $this->hasMarketingForm = false;
             $this->hasTradeRequestForm = false;
 
             return;
         }
 
         $submittedBy = auth()->id();
-
-        $this->hasSignageForm = Signage::query()
-            ->where('salescall_id', $salescallId)
-            ->where('submitted_by', $submittedBy)
-            ->exists();
-
-        $this->hasMarketingForm = Marketing::query()
-            ->where('salescall_id', $salescallId)
-            ->where('submitted_by', $submittedBy)
-            ->exists();
 
         $this->hasTradeRequestForm = TradeRequest::query()
             ->where('salescall_id', $salescallId)
@@ -1384,7 +1366,7 @@ class SalescallPage extends Page
                 Notification::make()
                     ->title(match ($blocker) {
                         'image' => 'Add at least one photo before completing this visit.',
-                        'forms' => 'Create the CRR Signage, Marketing, and Trade Request forms for this sales call before completing.',
+                        'forms' => 'Create the Trade Request form for this sales call before completing.',
                         default => 'Save brands before submitting.',
                     })
                     ->danger()
@@ -1556,8 +1538,8 @@ class SalescallPage extends Page
      *
      * Brands are always required. A photo is required unless the rep's region
      * type is exempt (is_image_required false); a rep with no linked region
-     * type is treated as requiring one. A CRR Signage, a Marketing, and a
-     * Trade Request submission for this sales call are always required.
+     * type is treated as requiring one. A Trade Request submission for this
+     * sales call is the only required form.
      */
     private function salescallSubmitBlocker(int $salescallId): ?string
     {
@@ -1580,16 +1562,17 @@ class SalescallPage extends Page
     }
 
     /**
-     * Whether the submitting rep has created a CRR Signage, a Marketing, and
-     * a Trade Request for this sales call. Trade Check is no longer required.
+     * Whether the submitting rep has created a Trade Request for this sales
+     * call — the only form still required to complete a visit. CRR Signage,
+     * Marketing, and Trade Check are no longer required.
      */
     private function hasAllRequiredForms(int $salescallId): bool
     {
         $submittedBy = auth()->id();
 
-        return Signage::where('salescall_id', $salescallId)->where('submitted_by', $submittedBy)->exists()
-            && Marketing::where('salescall_id', $salescallId)->where('submitted_by', $submittedBy)->exists()
-            && TradeRequest::where('salescall_id', $salescallId)->where('submitted_by', $submittedBy)->exists();
+        return TradeRequest::where('salescall_id', $salescallId)
+            ->where('submitted_by', $submittedBy)
+            ->exists();
     }
 
     public function syncNow(): void

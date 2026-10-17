@@ -23,7 +23,7 @@ test('pull persists customer category and competitor volume without affecting se
     $this->actingAs($user);
 
     Http::fake([
-        'portal.test/api/sync/pull/locations' => Http::response((function (): array {
+        'portal.test/api/locations/pull' => Http::response((function (): array {
             $payload = [
                 'regions' => [['id' => 1, 'code' => 'R1', 'name' => 'Region 1']],
                 'region_specifics' => [['id' => 2, 'region_id' => 1, 'name' => 'Region Specific']],
@@ -33,7 +33,7 @@ test('pull persists customer category and competitor volume without affecting se
 
             return ['reference_contract_version' => 2, ...$payload, 'customer_access_mappings' => [], 'reference_counts' => array_map('count', $payload)];
         })(), 200),
-        'portal.test/api/sync/pull/*' => Http::response([
+        'portal.test/api/*/pull*' => Http::response([
             'companies' => [['id' => 7, 'name' => 'OMMC', 'code' => 'OMMC']],
             'general_categories' => [['id' => 1, 'name' => 'Mixed Outlet', 'sort' => 1]],
             'regions' => [['id' => 1, 'code' => 'R1', 'name' => 'Region 1']],

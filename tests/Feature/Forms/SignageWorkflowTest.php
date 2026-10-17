@@ -51,9 +51,9 @@ function signagePullRows(): array
 function signageFakePortal(array $signages = []): void
 {
     Http::fake([
-        '*/api/sync/forms/crr-signage/products' => Http::response(['signage_products' => [['id' => 301, 'name' => 'Tarpaulin']]], 200),
-        '*/api/sync/forms/crr-signage/types' => Http::response(['signage_types' => [['id' => 401, 'name' => 'Horizontal']]], 200),
-        '*/api/sync/forms/crr-signage/pull' => Http::response(['signages' => $signages], 200),
+        '*/api/forms/crr-signage/products' => Http::response(['signage_products' => [['id' => 301, 'name' => 'Tarpaulin']]], 200),
+        '*/api/forms/crr-signage/types' => Http::response(['signage_types' => [['id' => 401, 'name' => 'Horizontal']]], 200),
+        '*/api/forms/crr-signage/pull' => Http::response(['signages' => $signages], 200),
     ]);
 }
 
@@ -450,15 +450,15 @@ test('pushing a Signage posts the master server ids and stores the server id', f
     $signage = $service->create($user, signageCreatePayload($product->id, $type->id, $request));
 
     Http::fake([
-        '*/api/sync/forms/crr-signage/push' => Http::response(['server_id' => 901], 200),
-        '*/api/sync/forms/crr-signage/attach' => Http::response(['server_id' => 950, 'uploaded_file_id' => 950], 200),
+        '*/api/forms/crr-signage/push' => Http::response(['server_id' => 901], 200),
+        '*/api/forms/crr-signage/attach' => Http::response(['server_id' => 950, 'uploaded_file_id' => 950], 200),
         '*' => Http::response([], 200),
     ]);
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) {
-        return str_ends_with($request->url(), '/api/sync/forms/crr-signage/push')
+        return str_ends_with($request->url(), '/api/forms/crr-signage/push')
             && $request['product_id'] === 301
             && $request['type_id'] === 401
             && $request['category'] === SignageCategory::NEW->value
@@ -487,15 +487,15 @@ test('Signage attachments push after the parent with their type', function () {
     $attachment = SignageAttachment::query()->firstOrFail();
 
     Http::fake([
-        '*/api/sync/forms/crr-signage/push' => Http::response(['server_id' => 901], 200),
-        '*/api/sync/forms/crr-signage/attach' => Http::response(['server_id' => 88, 'uploaded_file_id' => 77], 200),
+        '*/api/forms/crr-signage/push' => Http::response(['server_id' => 901], 200),
+        '*/api/forms/crr-signage/attach' => Http::response(['server_id' => 88, 'uploaded_file_id' => 77], 200),
         '*' => Http::response([], 200),
     ]);
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) {
-        if (! str_ends_with($request->url(), '/api/sync/forms/crr-signage/attach')) {
+        if (! str_ends_with($request->url(), '/api/forms/crr-signage/attach')) {
             return false;
         }
 

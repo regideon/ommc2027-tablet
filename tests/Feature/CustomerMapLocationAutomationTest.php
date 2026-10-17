@@ -217,10 +217,10 @@ test('Customer Add persists map-derived location and manual Access through its s
                 'address' => ['suburb' => 'Punta', 'city' => 'Calamba', 'county' => 'Laguna', 'state' => 'CALABARZON'],
             ], 200);
         }
-        if (str_ends_with($request->url(), '/api/sync/reserve-customer-code')) {
+        if (str_ends_with($request->url(), '/api/customers/reserve-code')) {
             return Http::response(['token' => 'map-test-token', 'code' => 'OMMC90001']);
         }
-        if (str_ends_with($request->url(), '/api/sync/push/customer')) {
+        if (str_ends_with($request->url(), '/api/customers/sync')) {
             return Http::response(['server_id' => 99001, 'local_uuid' => $request['local_uuid'], 'unique_id' => 'OMMC90001', 'updated_at' => now()->toISOString()]);
         }
 

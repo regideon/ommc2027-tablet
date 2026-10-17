@@ -71,7 +71,7 @@ test('reservation failure leaves Customer Code blank without local allocation', 
     $user = seedCustomerCodePageFixtures('tablet-token');
     $this->actingAs($user);
     config(['sync.server_url' => 'http://portal.test']);
-    Http::fake(['portal.test/api/sync/reserve-customer-code' => Http::response([], 503)]);
+    Http::fake(['portal.test/api/customers/reserve-code' => Http::response([], 503)]);
 
     Livewire::test(CustomerCreatePage::class)
         ->set('company_id', 1)
@@ -83,7 +83,7 @@ test('creation keeps the reservation token locally and records a later push fail
     $user = seedCustomerCodePageFixtures('tablet-token');
     $this->actingAs($user);
     config(['sync.server_url' => 'http://portal.test']);
-    Http::fake(['portal.test/api/sync/push/customer' => Http::response(['message' => 'Specific Region ID is invalid'], 500)]);
+    Http::fake(['portal.test/api/customers/sync' => Http::response(['message' => 'Specific Region ID is invalid'], 500)]);
 
     Livewire::test(CustomerCreatePage::class)
         ->set('company_id', 1)
@@ -108,7 +108,7 @@ test('creation keeps the reservation token locally and records a later push fail
         ->and($customer->sync_attempts)->toBe(1)
         ->and($result->message)->toContain('Specific Region ID is invalid');
 
-    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/sync/push/customer'));
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/customers/sync'));
 });
 
 test('creation commits locally and a later push reconciles successfully', function () {
@@ -117,7 +117,7 @@ test('creation commits locally and a later push reconciles successfully', functi
     config(['sync.server_url' => 'http://portal.test']);
 
     Http::fake(function ($request) {
-        if (str_ends_with($request->url(), '/api/sync/push/customer')) {
+        if (str_ends_with($request->url(), '/api/customers/sync')) {
             expect(DB::table('customers')->where('name', 'Created Shop')->exists())->toBeTrue();
 
             return Http::response(['server_id' => 881, 'unique_id' => 'OMMC0881', 'updated_at' => now()->toISOString()]);
@@ -155,7 +155,7 @@ test('creation stays locally stored and a later push that throws offline is reco
     config(['sync.server_url' => 'http://portal.test']);
 
     Http::fake(function ($request) {
-        if (str_ends_with($request->url(), '/api/sync/push/customer')) {
+        if (str_ends_with($request->url(), '/api/customers/sync')) {
             throw new ConnectionException('Offline');
         }
 

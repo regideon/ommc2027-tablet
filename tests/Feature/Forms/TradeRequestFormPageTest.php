@@ -28,8 +28,8 @@ beforeEach(function () {
     config(['sync.server_url' => 'http://portal.test']);
 
     Http::fake([
-        '*/api/sync/forms/trade-request/products' => Http::response(['trade_products' => [['id' => 501, 'name' => 'Jacket']]], 200),
-        '*/api/sync/forms/trade-request/types' => Http::response(['trade_types' => [['id' => 601, 'name' => 'Apparel']]], 200),
+        '*/api/forms/trade-request/products' => Http::response(['trade_products' => [['id' => 501, 'name' => 'Jacket']]], 200),
+        '*/api/forms/trade-request/types' => Http::response(['trade_types' => [['id' => 601, 'name' => 'Apparel']]], 200),
     ]);
 });
 

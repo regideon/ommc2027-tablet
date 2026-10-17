@@ -127,7 +127,7 @@ test('the CRR read service merges local and server rows with the server winning'
     ]);
 
     Http::fake([
-        '*/api/sync/forms/crr/pull' => Http::response([
+        '*/api/forms/crr/pull' => Http::response([
             'crrs' => [
                 [
                     'id' => 900,
@@ -177,7 +177,7 @@ test('the CRR read service keeps local rows when the server read fails', functio
         'sync_status' => 'pending',
     ]);
 
-    Http::fake(['*/api/sync/forms/crr/pull' => Http::response([], 500)]);
+    Http::fake(['*/api/forms/crr/pull' => Http::response([], 500)]);
 
     $this->actingAs($user);
     $service = app(CrrService::class);
@@ -191,7 +191,7 @@ test('the CRR read service upserts programs from the server', function () {
     $user = crrWorkflowUser();
 
     Http::fake([
-        '*/api/sync/forms/crr/programs' => Http::response([
+        '*/api/forms/crr/programs' => Http::response([
             'crr_programs' => [
                 ['id' => 10, 'name' => 'Price Support'],
                 ['id' => 11, 'name' => 'Listing Fee'],
@@ -225,13 +225,13 @@ test('pushing a CRR posts the mapped payload and stores the server id', function
     ]);
 
     Http::fake([
-        '*/api/sync/forms/crr/push' => Http::response(['server_id' => 777], 200),
+        '*/api/forms/crr/push' => Http::response(['server_id' => 777], 200),
     ]);
 
     app(SyncService::class)->push();
 
     Http::assertSent(function ($request) use ($program) {
-        return str_ends_with($request->url(), '/api/sync/forms/crr/push')
+        return str_ends_with($request->url(), '/api/forms/crr/push')
             && $request['crr_program_id'] === $program->server_id
             && (float) $request['amount'] === 250.0
             && $request['salescall_uuid'] === null
@@ -260,13 +260,13 @@ test('pushing an already-synced CRR sends its server id', function () {
         'sync_status' => 'pending',
     ]);
 
-    Http::fake(fn ($request) => str_contains($request->url(), '/api/sync/forms/crr/push')
+    Http::fake(fn ($request) => str_contains($request->url(), '/api/forms/crr/push')
         ? Http::response(['server_id' => 321], 200)
         : Http::response([], 200));
 
     app(SyncService::class)->push();
 
-    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/api/sync/forms/crr/push')
+    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/api/forms/crr/push')
         && $request['server_id'] === 321
         && $request['salescall_uuid'] === $salescall->local_uuid);
 });
@@ -300,11 +300,11 @@ test('CRR attachments are only pushed after the parent has a server id', functio
         'sync_status' => 'pending',
     ]);
 
-    Http::fake(['*/api/sync/forms/crr/attach' => Http::response(['server_id' => 88, 'uploaded_file_id' => 88], 200)]);
+    Http::fake(['*/api/forms/crr/attach' => Http::response(['server_id' => 88, 'uploaded_file_id' => 88], 200)]);
 
     app(SyncService::class)->push();
 
-    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/api/sync/forms/crr/attach'));
+    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/api/forms/crr/attach'));
 
     expect($attachment->fresh()->sync_status)->toBe('synced')
         ->and($attachment->fresh()->server_id)->toBe(88);
@@ -351,7 +351,7 @@ test('the CRR read service flags a failed program pull', function () {
     $user = crrWorkflowUser();
     $this->actingAs($user);
     config(['sync.server_url' => 'http://portal.test']);
-    Http::fake(['*/api/sync/forms/crr/programs' => Http::response([], 500)]);
+    Http::fake(['*/api/forms/crr/programs' => Http::response([], 500)]);
 
     $service = app(CrrService::class);
     $service->programs();
@@ -363,7 +363,7 @@ test('the CRR read service clears the program failure flag on a successful pull'
     $user = crrWorkflowUser();
     $this->actingAs($user);
     config(['sync.server_url' => 'http://portal.test']);
-    Http::fake(['*/api/sync/forms/crr/programs' => Http::response([
+    Http::fake(['*/api/forms/crr/programs' => Http::response([
         'crr_programs' => [['id' => 1, 'name' => 'Price Support']],
     ], 200)]);
 
@@ -409,7 +409,7 @@ test('a CRR deleted on the server is purged locally on the next successful pull'
     File::ensureDirectoryExists(dirname($previewPath));
     file_put_contents($previewPath, 'bytes');
 
-    Http::fake(['*/api/sync/forms/crr/pull' => Http::response(['crrs' => []], 200)]);
+    Http::fake(['*/api/forms/crr/pull' => Http::response(['crrs' => []], 200)]);
     $this->actingAs($user);
 
     $rows = app(CrrService::class)->submissions();
@@ -436,7 +436,7 @@ test('a local unsynced CRR survives a successful pull that does not include it',
         'sync_status' => 'pending',
     ]);
 
-    Http::fake(['*/api/sync/forms/crr/pull' => Http::response(['crrs' => []], 200)]);
+    Http::fake(['*/api/forms/crr/pull' => Http::response(['crrs' => []], 200)]);
     $this->actingAs($user);
 
     $rows = app(CrrService::class)->submissions();
@@ -461,7 +461,7 @@ test('a failed pull does not purge local synced CRRs', function () {
         'sync_status' => 'synced',
     ]);
 
-    Http::fake(['*/api/sync/forms/crr/pull' => Http::response([], 500)]);
+    Http::fake(['*/api/forms/crr/pull' => Http::response([], 500)]);
     $this->actingAs($user);
 
     $rows = app(CrrService::class)->submissions();
