@@ -28,16 +28,17 @@ use App\Services\ExpenseReadService;
 use App\Services\SyncResult;
 use App\Services\SyncService;
 use App\Support\NativeMediaPath;
+use App\Support\SalescallBrandDiagnostics;
 use BackedEnum;
 use Carbon\Carbon;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use Livewire\Attributes\On;
 use Native\Mobile\Events\Camera\PermissionDenied;
 use Native\Mobile\Events\Camera\PhotoCancelled;
@@ -88,6 +89,8 @@ class SalescallPage extends Page
     public array $callExpenses = [];
 
     public bool $hasSavedBrands = false;
+
+    public string $salescallBrandDiagnosticsJson = '';
 
     public bool $photosComplete = false;
 
@@ -1199,48 +1202,141 @@ class SalescallPage extends Page
         })->all();
     }
 
-    public function saveBrands(int $salescallId, array $groups): void
+    public function saveBrands(int $salescallId, array $groups): bool
     {
-        $salescall = Salescall::findOrFail($salescallId);
+        $diagnosticReference = (string) \Str::uuid();
 
-        SalescallBrand::where('salescall_id', $salescallId)->delete();
-        CustomerBrand::where('customer_id', $salescall->customer_id)->delete();
+        try {
+            $invalidReference = DB::transaction(function () use ($salescallId, $groups): ?array {
+                $salescall = Salescall::query()->find($salescallId);
 
-        foreach ($groups as $materialGroupId => $rows) {
-            foreach ($rows as $row) {
-                if (empty($row['brand_id'])) {
-                    continue;
+                if (! $salescall) {
+                    return ['reference' => 'salescalls.id', 'id' => $salescallId];
                 }
 
-                $quantity = $row['quantity'] !== '' && $row['quantity'] !== null ? $row['quantity'] : null;
-                $brandOther = $row['brand_other'] ?: null;
+                if (! Customer::query()->whereKey($salescall->customer_id)->exists()) {
+                    return ['reference' => 'customers.id', 'id' => $salescall->customer_id];
+                }
 
-                SalescallBrand::create([
+                foreach ($groups as $materialGroupId => $rows) {
+                    foreach ($rows as $row) {
+                        $selectedBrandId = $row['brand_id'] ?? null;
+
+                        if ($selectedBrandId === null || $selectedBrandId === '') {
+                            continue;
+                        }
+
+                        $validatedMaterialGroupId = filter_var($materialGroupId, FILTER_VALIDATE_INT);
+
+                        if ($validatedMaterialGroupId === false || $validatedMaterialGroupId < 1
+                            || ! MaterialGroup::query()->whereKey($validatedMaterialGroupId)->exists()) {
+                            return ['reference' => 'material_groups.id', 'id' => $materialGroupId];
+                        }
+
+                        $validatedBrandId = filter_var($selectedBrandId, FILTER_VALIDATE_INT);
+                        $brand = $validatedBrandId !== false && $validatedBrandId > 0
+                            ? Brand::query()->find($validatedBrandId)
+                            : null;
+
+                        if (! $brand) {
+                            return ['reference' => 'brands.id', 'id' => $selectedBrandId];
+                        }
+
+                        if ((int) $brand->material_group_id !== $validatedMaterialGroupId) {
+                            return [
+                                'reference' => 'brands.material_group_id',
+                                'id' => $selectedBrandId,
+                                'expected_material_group_id' => $validatedMaterialGroupId,
+                            ];
+                        }
+                    }
+                }
+
+                SalescallBrand::query()->where('salescall_id', $salescallId)->delete();
+                CustomerBrand::query()->where('customer_id', $salescall->customer_id)->delete();
+
+                foreach ($groups as $materialGroupId => $rows) {
+                    foreach ($rows as $row) {
+                        $brandId = $row['brand_id'] ?? null;
+
+                        if ($brandId === null || $brandId === '') {
+                            continue;
+                        }
+
+                        $quantity = ($row['quantity'] ?? null) !== '' ? ($row['quantity'] ?? null) : null;
+                        $brandOther = ($row['brand_other'] ?? '') ?: null;
+
+                        SalescallBrand::create([
+                            'salescall_id' => $salescallId,
+                            'customer_id' => $salescall->customer_id,
+                            'material_group_id' => (int) $materialGroupId,
+                            'brand_id' => (int) $brandId,
+                            'quantity' => $quantity,
+                            'brand_other' => $brandOther,
+                            'local_uuid' => (string) \Str::uuid(),
+                            'sync_status' => 'pending',
+                        ]);
+
+                        CustomerBrand::create([
+                            'customer_id' => $salescall->customer_id,
+                            'material_group_id' => (int) $materialGroupId,
+                            'brand_id' => (int) $brandId,
+                            'quantity' => $quantity,
+                            'brand_other' => $brandOther,
+                            'last_salescall_id' => $salescallId,
+                            'last_updated_by' => auth()->id(),
+                        ]);
+                    }
+                }
+
+                return null;
+            });
+
+            if ($invalidReference !== null) {
+                Log::warning('salescall_brand_save_reference_invalid', [
+                    'diagnostic_reference' => $diagnosticReference,
                     'salescall_id' => $salescallId,
-                    'customer_id' => $salescall->customer_id,
-                    'material_group_id' => (int) $materialGroupId,
-                    'brand_id' => $row['brand_id'],
-                    'quantity' => $quantity,
-                    'brand_other' => $brandOther,
-                    'local_uuid' => (string) Str::uuid(),
-                    'sync_status' => 'pending',
+                    ...$invalidReference,
                 ]);
 
-                CustomerBrand::create([
-                    'customer_id' => $salescall->customer_id,
-                    'material_group_id' => (int) $materialGroupId,
-                    'brand_id' => $row['brand_id'],
-                    'quantity' => $quantity,
-                    'brand_other' => $brandOther,
-                    'last_salescall_id' => $salescallId,
-                    'last_updated_by' => auth()->id(),
-                ]);
+                Notification::make()
+                    ->title('Brands were not saved. A selected Sales Call, Customer, Material Group, or Brand is missing or no longer matches.')
+                    ->body('Your previously saved Brands were kept. Refresh the page and select a current Brand. If the issue continues, share diagnostic reference '.$diagnosticReference.'.')
+                    ->danger()
+                    ->send();
+
+                return false;
             }
+        } catch (\Throwable $exception) {
+            Log::error('salescall_brand_save_failed', [
+                'diagnostic_reference' => $diagnosticReference,
+                'salescall_id' => $salescallId,
+                'exception_class' => $exception::class,
+                'exception_code' => $exception->getCode(),
+            ]);
+
+            Notification::make()
+                ->title('Brands could not be saved. Your previously saved Brands were kept.')
+                ->body('Please try again. If the issue continues, share diagnostic reference '.$diagnosticReference.'.')
+                ->danger()
+                ->send();
+
+            return false;
         }
 
         $this->hasSavedBrands = SalescallBrand::where('salescall_id', $salescallId)->exists();
 
         Notification::make()->title('Brands saved.')->success()->send();
+
+        return true;
+    }
+
+    public function collectSalescallBrandDiagnostics(int $salescallId, array $brandSelections): void
+    {
+        $this->salescallBrandDiagnosticsJson = json_encode(
+            app(SalescallBrandDiagnostics::class)->collect($salescallId, $brandSelections),
+            JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+        ) ?: '{}';
     }
 
     public function loadCategories(int $salescallId): void

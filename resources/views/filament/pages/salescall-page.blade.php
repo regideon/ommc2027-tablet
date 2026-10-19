@@ -190,8 +190,8 @@
 
             this.brandsSaving = true;
             try {
-                await $wire.saveBrands(this.selected, this.brandForm);
-                window.location.reload();
+                const saved = await $wire.saveBrands(this.selected, this.brandForm);
+                if (saved) window.location.reload();
             } finally {
                 this.brandsSaving = false;
             }
@@ -1975,6 +1975,18 @@
                                 Saving...
                             </span>
                         </button>
+
+                        <div class="space-y-2">
+                            <button type="button" @click="$wire.collectSalescallBrandDiagnostics(selected, brandForm)"
+                                class="text-sm font-bold text-[#890f00] underline">
+                                Collect read-only Brand diagnostics
+                            </button>
+                            @if ($salescallBrandDiagnosticsJson !== '')
+                                <p class="text-xs text-gray-600">Copy this bounded report when contacting support. It contains no customer name or contact details.</p>
+                                <textarea readonly rows="16" class="w-full rounded-xl border border-gray-200 bg-white p-3 font-mono text-xs"
+                                    onclick="this.select()">{{ $salescallBrandDiagnosticsJson }}</textarea>
+                            @endif
+                        </div>
                     </div>
 
                     {{--
