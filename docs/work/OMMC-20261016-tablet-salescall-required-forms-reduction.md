@@ -11,7 +11,9 @@
   (superseded for the required set; its CRR-before-Marketing creation gate
   stays in force), `OMMC-20261014-tablet-salescall-image-submit-state` (Photo
   indicator, unchanged), `OMMC-20261013-tablet-salescall-form-redirects`
-  (prior required-forms rule).
+  (prior required-forms rule), and
+  `OMMC-20261019-tablet-salescall-trade-request-requirement-disable` (the
+  Trade Request requirement this Work kept is disabled there for phase 2).
 
 ## Objective
 

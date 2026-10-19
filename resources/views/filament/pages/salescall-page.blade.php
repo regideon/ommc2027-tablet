@@ -470,9 +470,9 @@
         partialReason: '',
         get canSubmitSalescall() {
             // Photo is required unless the rep's region type is exempt (IB Team / OE Team).
-            // Trade Request is the only required form; CRR Signage and Marketing no longer block.
-            return this.hasSavedBrands && (!this.photoRequired || this.hasPhoto)
-                && this.hasTradeRequestForm;
+            // Phase 2: the Trade Request requirement is disabled for now.
+            // Restore: && this.hasTradeRequestForm
+            return this.hasSavedBrands && (!this.photoRequired || this.hasPhoto);
         },
         finishVisit(outcome, reason = null) {
             if (this.finishing) return;
@@ -2599,10 +2599,12 @@
                                             <span>Photo<span x-show="!hasPhoto"> (missing)</span></span>
                                         </span>
                                         @endif
+                                        {{-- Phase 2: Trade Request requirement disabled.
                                         <span class="flex items-center gap-1.5 shrink-0" :class="hasTradeRequestForm ? 'text-green-600' : 'text-red-500'">
                                             <span class="material-symbols-outlined text-sm mat-fill" x-text="hasTradeRequestForm ? 'check_circle' : 'radio_button_unchecked'"></span>
                                             <span>Trade Request<span x-show="!hasTradeRequestForm"> (missing)</span></span>
                                         </span>
+                                        --}}
                                     </p>
                                 </div>
                                 <div class="grid grid-cols-2 gap-2">
