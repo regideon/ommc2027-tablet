@@ -104,10 +104,9 @@ class SalescallPage extends Page
     public bool $hasPhoto = false;
 
     /**
-     * Whether the currently selected visit already has the required Trade
-     * Request submission from the logged-in rep. Mirrors
-     * hasAllRequiredForms() so the Submit button and the requirements
-     * checklist can reflect it up front.
+     * Whether the currently selected visit already has a Trade Request
+     * submission from the logged-in rep. Tracking is retained for the phase 2
+     * requirement; it no longer blocks completion.
      */
     public bool $hasTradeRequestForm = false;
 
@@ -164,9 +163,9 @@ class SalescallPage extends Page
     }
 
     /**
-     * Refresh the required-form flag for the selected visit — only the Trade
-     * Request remains required. Scoped to the logged-in rep, so another rep's
-     * submission never satisfies the visit's requirement.
+     * Refresh the Trade Request flag for the selected visit. Scoped to the
+     * logged-in rep so another rep's submission is never counted. The flag is
+     * kept for the phase 2 requirement and no longer blocks completion.
      */
     public function loadFormRequirements(?int $salescallId): void
     {
@@ -1538,8 +1537,8 @@ class SalescallPage extends Page
      *
      * Brands are always required. A photo is required unless the rep's region
      * type is exempt (is_image_required false); a rep with no linked region
-     * type is treated as requiring one. A Trade Request submission for this
-     * sales call is the only required form.
+     * type is treated as requiring one. Form requirements are deferred to
+     * phase 2, so no submitted form blocks completion for now.
      */
     private function salescallSubmitBlocker(int $salescallId): ?string
     {
@@ -1562,17 +1561,21 @@ class SalescallPage extends Page
     }
 
     /**
-     * Whether the submitting rep has created a Trade Request for this sales
-     * call — the only form still required to complete a visit. CRR Signage,
-     * Marketing, and Trade Check are no longer required.
+     * Whether all required forms exist for this sales call.
+     *
+     * Phase 2: the Trade Request requirement is intentionally disabled;
+     * Brands and Photo are the only completion requirements for now. Restore
+     * the commented query when phase 2 begins.
      */
     private function hasAllRequiredForms(int $salescallId): bool
     {
-        $submittedBy = auth()->id();
+        // $submittedBy = auth()->id();
+        //
+        // return TradeRequest::where('salescall_id', $salescallId)
+        //     ->where('submitted_by', $submittedBy)
+        //     ->exists();
 
-        return TradeRequest::where('salescall_id', $salescallId)
-            ->where('submitted_by', $submittedBy)
-            ->exists();
+        return true;
     }
 
     public function syncNow(): void
