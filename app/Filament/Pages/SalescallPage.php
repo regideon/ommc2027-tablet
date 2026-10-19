@@ -37,6 +37,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Livewire\Attributes\On;
 use Native\Mobile\Events\Camera\PermissionDenied;
 use Native\Mobile\Events\Camera\PhotoCancelled;
@@ -211,13 +212,13 @@ class SalescallPage extends Page
 
     private function allPhotoTypesCovered(Collection $coveredTypeIds): bool
     {
-        $totalTypes = SalescallImageType::count();
+        $requiredTypeIds = SalescallImageType::query()->pluck('id');
 
-        if ($totalTypes === 0) {
+        if ($requiredTypeIds->isEmpty()) {
             return true;
         }
 
-        return $coveredTypeIds->filter()->unique()->count() >= $totalTypes;
+        return $requiredTypeIds->diff($coveredTypeIds->filter()->unique())->isEmpty();
     }
 
     /**
@@ -1221,7 +1222,7 @@ class SalescallPage extends Page
                     'brand_id' => $row['brand_id'],
                     'quantity' => $quantity,
                     'brand_other' => $brandOther,
-                    'local_uuid' => (string) \Str::uuid(),
+                    'local_uuid' => (string) Str::uuid(),
                     'sync_status' => 'pending',
                 ]);
 
@@ -1364,7 +1365,7 @@ class SalescallPage extends Page
             if ($blocker !== null) {
                 Notification::make()
                     ->title(match ($blocker) {
-                        'image' => 'Add at least one photo before completing this visit.',
+                        'image' => 'Capture a photo for every photo category and type before completing this visit.',
                         'forms' => 'Create the Trade Request form for this sales call before completing.',
                         default => 'Save brands before submitting.',
                     })
@@ -1535,10 +1536,11 @@ class SalescallPage extends Page
     /**
      * Reason a Completed visit cannot be submitted yet, or null when it can.
      *
-     * Brands are always required. A photo is required unless the rep's region
-     * type is exempt (is_image_required false); a rep with no linked region
-     * type is treated as requiring one. Form requirements are deferred to
-     * phase 2, so no submitted form blocks completion for now.
+     * Brands are always required. A photo for every configured image type is
+     * required unless the rep's region type is exempt (is_image_required
+     * false); a rep with no linked region type is treated as requiring one.
+     * Form requirements are deferred to phase 2, so no submitted form blocks
+     * completion for now.
      */
     private function salescallSubmitBlocker(int $salescallId): ?string
     {
@@ -1549,7 +1551,9 @@ class SalescallPage extends Page
         $requiresImage = auth()->user()?->regionType?->is_image_required ?? true;
 
         if ($requiresImage
-            && ! SalescallImage::where('salescall_id', $salescallId)->exists()) {
+            && ! $this->allPhotoTypesCovered(
+                SalescallImage::where('salescall_id', $salescallId)->pluck('salescall_image_type_id')
+            )) {
             return 'image';
         }
 

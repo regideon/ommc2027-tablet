@@ -469,10 +469,10 @@
         showPartialReason: false,
         partialReason: '',
         get canSubmitSalescall() {
-            // Photo is required unless the rep's region type is exempt (IB Team / OE Team).
+            // Every photo type is required unless the rep's region type is exempt (IB Team / OE Team).
             // Phase 2: the Trade Request requirement is disabled for now.
             // Restore: && this.hasTradeRequestForm
-            return this.hasSavedBrands && (!this.photoRequired || this.hasPhoto);
+            return this.hasSavedBrands && (!this.photoRequired || this.photosComplete);
         },
         finishVisit(outcome, reason = null) {
             if (this.finishing) return;
@@ -2594,9 +2594,9 @@
                                             <span>Brands<span x-show="!hasSavedBrands"> (missing)</span></span>
                                         </span>
                                         @if($photoRequired)
-                                        <span class="flex items-center gap-1.5 shrink-0" :class="hasPhoto ? 'text-green-600' : 'text-red-500'">
-                                            <span class="material-symbols-outlined text-sm mat-fill" x-text="hasPhoto ? 'check_circle' : 'radio_button_unchecked'"></span>
-                                            <span>Photo<span x-show="!hasPhoto"> (missing)</span></span>
+                                        <span class="flex items-center gap-1.5 shrink-0" :class="photosComplete ? 'text-green-600' : 'text-red-500'">
+                                            <span class="material-symbols-outlined text-sm mat-fill" x-text="photosComplete ? 'check_circle' : 'radio_button_unchecked'"></span>
+                                            <span>Photo<span x-show="!photosComplete"> (missing)</span></span>
                                         </span>
                                         @endif
                                         {{-- Phase 2: Trade Request requirement disabled.

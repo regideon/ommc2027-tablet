@@ -9,6 +9,8 @@ use App\Models\RegionType;
 use App\Models\Salescall;
 use App\Models\SalescallBrand;
 use App\Models\SalescallImage;
+use App\Models\SalescallImageCategory;
+use App\Models\SalescallImageType;
 use App\Models\User;
 use App\Services\SyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -64,6 +66,42 @@ function makeRegionTypeSalescall(User $user): Salescall
     return $salescall;
 }
 
+/**
+ * One photo type in each of two categories, so covering all types also
+ * proves that every category is represented.
+ *
+ * @return array{0: SalescallImageType, 1: SalescallImageType}
+ */
+function seedRegionTypePhotoTypes(): array
+{
+    $exterior = SalescallImageCategory::create([
+        'name' => 'Exterior',
+        'slug' => 'exterior',
+        'sort' => 1,
+    ]);
+
+    $interior = SalescallImageCategory::create([
+        'name' => 'Interior',
+        'slug' => 'interior',
+        'sort' => 2,
+    ]);
+
+    return [
+        SalescallImageType::create([
+            'salescall_image_category_id' => $exterior->id,
+            'name' => 'Store Facade',
+            'slug' => 'store_facade',
+            'sort' => 1,
+        ]),
+        SalescallImageType::create([
+            'salescall_image_category_id' => $interior->id,
+            'name' => 'Battery Displays',
+            'slug' => 'battery_displays',
+            'sort' => 1,
+        ]),
+    ];
+}
+
 test('pull syncs region types and links the logged-in user to their region type', function () {
     config(['sync.server_url' => 'http://portal.test']);
 
@@ -111,7 +149,7 @@ test('tablet login stores the region type id on the user', function () {
         ->and(User::where('email', 'drm@example.com')->value('region_type_id'))->toBe(7);
 });
 
-test('completing a visit requires an image when the region type requires one', function () {
+test('completing a visit requires a photo for every category and type when the region type requires one', function () {
     seedRegionTypeImageStatuses();
 
     $type = RegionType::create(['name' => 'Metro Manila', 'sort' => 1, 'is_image_required' => true]);
@@ -119,6 +157,7 @@ test('completing a visit requires an image when the region type requires one', f
     $this->actingAs($user);
 
     $salescall = makeRegionTypeSalescall($user);
+    [$exteriorType, $interiorType] = seedRegionTypePhotoTypes();
 
     attachRequiredSalescallForms($user, $salescall);
 
@@ -130,7 +169,21 @@ test('completing a visit requires an image when the region type requires one', f
 
     SalescallImage::create([
         'salescall_id' => $salescall->id,
-        'salescall_image_type_id' => 1,
+        'salescall_image_type_id' => $exteriorType->id,
+        'local_path' => '/tmp/photo.jpg',
+        'local_uuid' => (string) Str::uuid(),
+        'sync_status' => 'pending',
+    ]);
+
+    Livewire::test(SalescallPage::class)
+        ->call('initiateFinish', $salescall->id, 'completed')
+        ->assertNotDispatched('finish-done');
+
+    expect($salescall->fresh()->status)->not->toBe('completed');
+
+    SalescallImage::create([
+        'salescall_id' => $salescall->id,
+        'salescall_image_type_id' => $interiorType->id,
         'local_path' => '/tmp/photo.jpg',
         'local_uuid' => (string) Str::uuid(),
         'sync_status' => 'pending',
@@ -143,8 +196,9 @@ test('completing a visit requires an image when the region type requires one', f
     expect($salescall->fresh()->status)->toBe('completed');
 });
 
-test('completing a visit without an image still works when the region type does not require one', function () {
+test('completing a visit without photos still works when the region type does not require one', function () {
     seedRegionTypeImageStatuses();
+    seedRegionTypePhotoTypes();
 
     $type = RegionType::create(['name' => 'IB Team', 'sort' => 1, 'is_image_required' => false]);
     $user = User::factory()->create(['region_type_id' => $type->id]);
@@ -161,13 +215,14 @@ test('completing a visit without an image still works when the region type does 
     expect($salescall->fresh()->status)->toBe('completed');
 });
 
-test('completing a visit requires an image when the rep has no region type', function () {
+test('completing a visit requires every photo type when the rep has no region type', function () {
     seedRegionTypeImageStatuses();
 
     $user = User::factory()->create(['region_type_id' => null]);
     $this->actingAs($user);
 
     $salescall = makeRegionTypeSalescall($user);
+    [$exteriorType, $interiorType] = seedRegionTypePhotoTypes();
 
     attachRequiredSalescallForms($user, $salescall);
 
@@ -177,13 +232,15 @@ test('completing a visit requires an image when the rep has no region type', fun
 
     expect($salescall->fresh()->status)->not->toBe('completed');
 
-    SalescallImage::create([
-        'salescall_id' => $salescall->id,
-        'salescall_image_type_id' => 1,
-        'local_path' => '/tmp/photo.jpg',
-        'local_uuid' => (string) Str::uuid(),
-        'sync_status' => 'pending',
-    ]);
+    foreach ([$exteriorType, $interiorType] as $type) {
+        SalescallImage::create([
+            'salescall_id' => $salescall->id,
+            'salescall_image_type_id' => $type->id,
+            'local_path' => '/tmp/photo.jpg',
+            'local_uuid' => (string) Str::uuid(),
+            'sync_status' => 'pending',
+        ]);
+    }
 
     Livewire::test(SalescallPage::class)
         ->call('initiateFinish', $salescall->id, 'completed')
@@ -211,16 +268,17 @@ test('the photo requirement follows the rep\'s region type flag', function () {
         ->assertSet('photoRequired', true);
 });
 
-test('the page tracks whether the selected sales call has a photo without counting other calls\' photos', function () {
+test('the page tracks whether every photo type is covered without counting other calls\' photos', function () {
     $user = User::factory()->create();
     $this->actingAs($user);
 
     $salescall = makeRegionTypeSalescall($user);
     $otherSalescall = makeRegionTypeSalescall($user);
+    [$exteriorType, $interiorType] = seedRegionTypePhotoTypes();
 
     SalescallImage::create([
         'salescall_id' => $otherSalescall->id,
-        'salescall_image_type_id' => 1,
+        'salescall_image_type_id' => $exteriorType->id,
         'local_path' => '/tmp/photo.jpg',
         'local_uuid' => (string) Str::uuid(),
         'sync_status' => 'pending',
@@ -228,11 +286,12 @@ test('the page tracks whether the selected sales call has a photo without counti
 
     Livewire::test(SalescallPage::class)
         ->call('loadPhotos', $salescall->id)
-        ->assertSet('hasPhoto', false);
+        ->assertSet('hasPhoto', false)
+        ->assertSet('photosComplete', false);
 
     SalescallImage::create([
         'salescall_id' => $salescall->id,
-        'salescall_image_type_id' => 1,
+        'salescall_image_type_id' => $exteriorType->id,
         'local_path' => '/tmp/photo.jpg',
         'local_uuid' => (string) Str::uuid(),
         'sync_status' => 'pending',
@@ -240,11 +299,25 @@ test('the page tracks whether the selected sales call has a photo without counti
 
     Livewire::test(SalescallPage::class)
         ->call('loadPhotos', $salescall->id)
-        ->assertSet('hasPhoto', true);
+        ->assertSet('hasPhoto', true)
+        ->assertSet('photosComplete', false);
+
+    SalescallImage::create([
+        'salescall_id' => $salescall->id,
+        'salescall_image_type_id' => $interiorType->id,
+        'local_path' => '/tmp/photo.jpg',
+        'local_uuid' => (string) Str::uuid(),
+        'sync_status' => 'pending',
+    ]);
+
+    Livewire::test(SalescallPage::class)
+        ->call('loadPhotos', $salescall->id)
+        ->assertSet('photosComplete', true);
 });
 
 test('the submit requirements list shows the photo requirement only when the region type requires an image', function () {
-    $markup = '<span>Photo<span x-show="!hasPhoto"> (missing)</span></span>';
+    $markup = '<span>Photo<span x-show="!photosComplete"> (missing)</span></span>';
+    seedRegionTypePhotoTypes();
 
     $requiredType = RegionType::create(['name' => 'Metro Manila', 'sort' => 1, 'is_image_required' => true]);
     $this->actingAs(User::factory()->create(['region_type_id' => $requiredType->id]));

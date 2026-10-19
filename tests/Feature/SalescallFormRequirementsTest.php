@@ -195,5 +195,5 @@ test('the submit requirements list keeps Photo and drops every form requirement'
         ->assertDontSeeHtml('<span>CRR Signage<span x-show="!hasSignageForm"> (missing)</span></span>')
         ->assertDontSeeHtml('<span>Marketing<span x-show="!hasMarketingForm"> (missing)</span></span>')
         ->assertDontSeeHtml('<span>Trade Request<span x-show="!hasTradeRequestForm"> (missing)</span></span>')
-        ->assertSeeHtml('<span>Photo<span x-show="!hasPhoto"> (missing)</span></span>');
+        ->assertSeeHtml('<span>Photo<span x-show="!photosComplete"> (missing)</span></span>');
 });
