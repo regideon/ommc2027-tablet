@@ -31,8 +31,11 @@ class SalescallBrandDiagnostics
             : null;
         $customerId = $salescall?->customer_id;
         $customer = $customerId !== null && Schema::hasTable('customers')
-            ? DB::table('customers')->where('id', $customerId)->first(['id', 'server_id'])
+            ? DB::table('customers')->where('id', $customerId)->whereNull('deleted_at')->first(['id', 'server_id'])
             : null;
+        $serverIdMatches = $customerId !== null && Schema::hasTable('customers')
+            ? DB::table('customers')->where('server_id', $customerId)->whereNull('deleted_at')->limit(2)->get(['id', 'server_id'])
+            : collect();
 
         $diagnostics = [
             'app' => [
@@ -60,6 +63,14 @@ class SalescallBrandDiagnostics
                     'local_id' => $customerId,
                     'exists' => $customer !== null,
                     'server_id' => $customer?->server_id,
+                    'server_id_match' => [
+                        'count_capped_at_two' => $serverIdMatches->count(),
+                        'unique_local_id' => $serverIdMatches->count() === 1 ? (int) $serverIdMatches->first()->id : null,
+                        'ambiguous' => $serverIdMatches->count() > 1,
+                        'conflicts_with_local_id' => $customer !== null
+                            && $serverIdMatches->count() === 1
+                            && (int) $serverIdMatches->first()->id !== (int) $customer->id,
+                    ],
                 ],
                 'selected_brands' => $this->selectedBrandDiagnostics($brandSelections),
             ],

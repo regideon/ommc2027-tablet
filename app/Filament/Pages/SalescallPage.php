@@ -1214,8 +1214,40 @@ class SalescallPage extends Page
                     return ['reference' => 'salescalls.id', 'id' => $salescallId];
                 }
 
-                if (! Customer::query()->whereKey($salescall->customer_id)->exists()) {
-                    return ['reference' => 'customers.id', 'id' => $salescall->customer_id];
+                $customer = Customer::query()->whereKey($salescall->customer_id)->first();
+                $serverIdMatches = Customer::query()
+                    ->where('server_id', $salescall->customer_id)
+                    ->limit(2)
+                    ->get(['id']);
+                $matchingServerCustomer = $serverIdMatches->first();
+
+                if ($serverIdMatches->count() > 1) {
+                    return [
+                        'reference' => 'customers.server_id',
+                        'id' => $salescall->customer_id,
+                        'reason' => 'ambiguous_server_id',
+                    ];
+                }
+
+                if ($matchingServerCustomer && $customer
+                    && (int) $matchingServerCustomer->id !== (int) $customer->id) {
+                    return [
+                        'reference' => 'customers.id',
+                        'id' => $salescall->customer_id,
+                        'reason' => 'ambiguous_local_and_server_ids',
+                    ];
+                }
+
+                if (! $customer && $serverIdMatches->count() === 1) {
+                    $customer = Customer::query()->find($matchingServerCustomer->id);
+                }
+
+                if (! $customer) {
+                    return [
+                        'reference' => 'customers.id',
+                        'id' => $salescall->customer_id,
+                        'reason' => 'missing_local_and_server_id',
+                    ];
                 }
 
                 foreach ($groups as $materialGroupId => $rows) {
@@ -1253,7 +1285,7 @@ class SalescallPage extends Page
                 }
 
                 SalescallBrand::query()->where('salescall_id', $salescallId)->delete();
-                CustomerBrand::query()->where('customer_id', $salescall->customer_id)->delete();
+                CustomerBrand::query()->where('customer_id', $customer->id)->delete();
 
                 foreach ($groups as $materialGroupId => $rows) {
                     foreach ($rows as $row) {
@@ -1268,7 +1300,7 @@ class SalescallPage extends Page
 
                         SalescallBrand::create([
                             'salescall_id' => $salescallId,
-                            'customer_id' => $salescall->customer_id,
+                            'customer_id' => $customer->id,
                             'material_group_id' => (int) $materialGroupId,
                             'brand_id' => (int) $brandId,
                             'quantity' => $quantity,
@@ -1278,7 +1310,7 @@ class SalescallPage extends Page
                         ]);
 
                         CustomerBrand::create([
-                            'customer_id' => $salescall->customer_id,
+                            'customer_id' => $customer->id,
                             'material_group_id' => (int) $materialGroupId,
                             'brand_id' => (int) $brandId,
                             'quantity' => $quantity,
