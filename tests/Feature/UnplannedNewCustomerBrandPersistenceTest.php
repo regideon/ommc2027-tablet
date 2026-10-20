@@ -125,7 +125,7 @@ test('Customer Push adds server identity without changing local Customer or Sale
         ->assertNotified('Brands saved.');
 });
 
-test('schedule Pull stores a Portal Customer ID while Brand save resolves the matching local Customer', function () {
+test('schedule Pull keeps the local Customer ID for an unsynced Customer Sales Call', function () {
     config(['sync.server_url' => 'http://portal.test']);
     [$user, $customer, $itinerary, $salescall, $group, $brand] = unplannedNewCustomerBrandFixture();
     $this->actingAs($user);
@@ -154,6 +154,7 @@ test('schedule Pull stores a Portal Customer ID while Brand save resolves the ma
         'updated_at' => now(),
     ]);
     Http::fake([
+        'portal.test/api/salescalls/push' => Http::response(['server_id' => 88001, 'ref_number' => 188001]),
         'portal.test/api/schedule/pull' => Http::response([
             'customers' => [[
                 'id' => 55001,
@@ -187,20 +188,21 @@ test('schedule Pull stores a Portal Customer ID while Brand save resolves the ma
     expect($pullResult->success)->toBeTrue()
         ->and((int) $customer->id)->toBe(-94001)
         ->and((int) $customer->server_id)->toBe(55001)
-        ->and((int) $salescall->customer_id)->toBe(55001)
-        ->and(Customer::query()->whereKey($salescall->customer_id)->exists())->toBeFalse()
-        ->and(Customer::query()->where('server_id', $salescall->customer_id)->value('id'))->toBe(-94001);
+        ->and((int) $salescall->customer_id)->toBe(-94001)
+        ->and(Customer::query()->whereKey($salescall->customer_id)->exists())->toBeTrue()
+        ->and(Customer::query()->where('server_id', $salescall->customer_id)->exists())->toBeFalse();
 
     expect(app(SyncService::class)->push()->success)->toBeTrue()
-        ->and((int) $salescall->fresh()->customer_id)->toBe(55001);
+        ->and((int) $salescall->fresh()->customer_id)->toBe(-94001);
 
     $diagnostics = app(SalescallBrandDiagnostics::class)->collect(
         $salescall->id,
         unplannedNewCustomerBrandSelection($group->id, $brand->id),
     );
 
-    expect($diagnostics['references']['customer']['exists'])->toBeFalse()
-        ->and($diagnostics['references']['customer']['server_id_match']['unique_local_id'])->toBe(-94001);
+    expect($diagnostics['references']['customer']['exists'])->toBeTrue()
+        ->and($diagnostics['references']['customer']['server_id'])->toBe(55001)
+        ->and($diagnostics['references']['customer']['server_id_match']['unique_local_id'])->toBeNull();
 
     saveUnplannedNewCustomerBrand($salescall, $group, $brand)
         ->assertReturned(true)
@@ -208,7 +210,7 @@ test('schedule Pull stores a Portal Customer ID while Brand save resolves the ma
 
     expect((int) SalescallBrand::query()->sole()->customer_id)->toBe(-94001)
         ->and((int) CustomerBrand::query()->sole()->customer_id)->toBe(-94001)
-        ->and((int) $salescall->fresh()->customer_id)->toBe(55001);
+        ->and((int) $salescall->fresh()->customer_id)->toBe(-94001);
 });
 
 test('a server-ID collision with another local Customer is rejected without replacing pending associations', function () {
