@@ -171,29 +171,6 @@ struct WebView: UIViewRepresentable {
         print("⚠️ dismantleUIView called - skipping observer removal for reused WebView")
     }
 
-    /// Only the Laravel remember-me cookie may survive an app restart. Removing
-    /// every other cookie (including laravel_session) makes an unchecked
-    /// "Remember me" require credentials on the next launch while a checked
-    /// login is restored from the persistent remember_web_* cookie.
-    static func removeNonRememberCookies(completion: @escaping () -> Void) {
-        let cookieStore = dataStore.httpCookieStore
-
-        cookieStore.getAllCookies { cookies in
-            let group = DispatchGroup()
-
-            for cookie in cookies where !cookie.name.hasPrefix("remember_") {
-                group.enter()
-                cookieStore.delete(cookie) {
-                    group.leave()
-                }
-            }
-
-            group.notify(queue: .main) {
-                completion()
-            }
-        }
-    }
-
     class Coordinator: NSObject, WKNavigationDelegate {
         let logger = ConsoleLogger()
         var webView: WKWebView?
@@ -481,30 +458,25 @@ struct WebView: UIViewRepresentable {
         // Set initial opacity to 0 for smooth fade-in (instead of hiding)
         webView.alpha = 0.0
 
-        // Drop non-remember cookies before the first request so an unchecked
-        // Remember me cannot be restored from the previous app launch. The
-        // remember_web_* cookie has an explicit expiry and is preserved.
-        WebView.removeNonRememberCookies {
-            // Give AppDelegate time to process any launch deep links before deciding what to load
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                DebugLogger.shared.log("🌐 WebView setup after AppDelegate delay")
+        // Give AppDelegate time to process any launch deep links before deciding what to load
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            DebugLogger.shared.log("🌐 WebView setup after AppDelegate delay")
 
-                // Check for pending deep link BEFORE marking ready
-                // (marking ready might process and clear the pending URL immediately)
-                let hasPendingDeepLink = DeepLinkRouter.shared.hasPendingURL()
+            // Check for pending deep link BEFORE marking ready
+            // (marking ready might process and clear the pending URL immediately)
+            let hasPendingDeepLink = DeepLinkRouter.shared.hasPendingURL()
 
-                // Mark WebView as ready (this may trigger pending URL processing)
-                DeepLinkRouter.shared.markWebViewReady()
+            // Mark WebView as ready (this may trigger pending URL processing)
+            DeepLinkRouter.shared.markWebViewReady()
 
-                // Only load default URL if there was no pending deep link
-                if !hasPendingDeepLink {
-                    DebugLogger.shared.log("🌐 No pending deep link, loading default URL")
-                    let startPath = NativePHPApp.getStartURL()
-                    let startPage = URL(string: "php://127.0.0.1\(startPath)")
-                    webView.load(URLRequest(url: startPage ?? fallbackURL))
-                } else {
-                    DebugLogger.shared.log("🌐 Pending deep link detected, skipping default URL load")
-                }
+            // Only load default URL if there was no pending deep link
+            if !hasPendingDeepLink {
+                DebugLogger.shared.log("🌐 No pending deep link, loading default URL")
+                let startPath = NativePHPApp.getStartURL()
+                let startPage = URL(string: "php://127.0.0.1\(startPath)")
+                webView.load(URLRequest(url: startPage ?? fallbackURL))
+            } else {
+                DebugLogger.shared.log("🌐 Pending deep link detected, skipping default URL load")
             }
         }
 

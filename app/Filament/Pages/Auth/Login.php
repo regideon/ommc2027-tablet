@@ -8,20 +8,26 @@ use App\Services\TrustedLoginService;
 use Filament\Auth\Http\Responses\Contracts\LoginResponse;
 use Filament\Facades\Filament;
 use Filament\Notifications\Notification;
-use Illuminate\Auth\SessionGuard;
-use Illuminate\Support\Facades\Cookie;
+use Filament\Schemas\Schema;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 use Native\Mobile\Facades\Geolocation;
 
 class Login extends \Filament\Auth\Pages\Login
 {
+    public function form(Schema $schema): Schema
+    {
+        return $schema->components([
+            $this->getEmailFormComponent(),
+            $this->getPasswordFormComponent(),
+        ]);
+    }
+
     public function authenticate(): ?LoginResponse
     {
         $data = $this->form->getState();
         $email = $data['email'];
         $password = $data['password'];
-        $remember = (bool) ($data['remember'] ?? false);
         $sync = app(SyncService::class);
 
         $user = User::where('email', $email)->first();
@@ -38,7 +44,7 @@ class Login extends \Filament\Auth\Pages\Login
             if ($tokenResult->success) {
                 // refreshToken reconciles the Portal identity, roles, password hash, and token locally.
                 $user = User::where('email', $email)->firstOrFail();
-                Filament::auth()->login($user, $remember);
+                Filament::auth()->login($user);
                 session()->regenerate();
 
                 $pullResult = $sync->pull();
@@ -48,9 +54,9 @@ class Login extends \Filament\Auth\Pages\Login
                 }
 
                 $user = User::where('email', $email)->firstOrFail();
-                Filament::auth()->login($user, $remember);
+                Filament::auth()->login($user);
 
-                $this->finalizeAuthentication($user, $remember);
+                app(TrustedLoginService::class)->mark($user);
 
                 $this->requestDevicePermissions();
 
@@ -73,28 +79,14 @@ class Login extends \Filament\Auth\Pages\Login
             $this->throwFailureValidationException();
         }
 
-        Filament::auth()->login($user, $remember);
+        Filament::auth()->login($user);
         session()->regenerate();
 
-        $this->finalizeAuthentication($user, $remember);
+        app(TrustedLoginService::class)->mark($user);
 
         $this->requestDevicePermissions();
 
         return app(LoginResponse::class);
-    }
-
-    protected function finalizeAuthentication(User $user, bool $remember): void
-    {
-        app(TrustedLoginService::class)->mark($user, $remember);
-
-        if ($remember) {
-            return;
-        }
-
-        /** @var SessionGuard $guard */
-        $guard = Filament::auth();
-
-        Cookie::queue(Cookie::forget($guard->getRecallerName()));
     }
 
     protected function requestDevicePermissions(): void

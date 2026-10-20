@@ -80,7 +80,7 @@ document.addEventListener("DOMContentLoaded", function () {
             )
 
             ->login(Login::class)
-            ->passwordReset()
+            // ->passwordReset() - hidden for now.
 
             ->brandLogo(asset('images/motolite-logo.png'))
             ->renderHook(

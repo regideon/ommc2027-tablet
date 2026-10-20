@@ -137,11 +137,7 @@ test('C: login writes the marker, logout clears it, full lifecycle', function ()
     ]);
 
     Livewire::test(Login::class)
-        ->fillForm([
-            'email' => 'drm@example.com',
-            'password' => 'secret-password',
-            'remember' => true,
-        ])
+        ->fillForm(['email' => 'drm@example.com', 'password' => 'secret-password'])
         ->call('authenticate')
         ->assertHasNoErrors();
 
@@ -243,40 +239,4 @@ test('offline restart restores the trusted user without any network', function (
 
     $this->get('/app')->assertStatus(200);
     expect(auth()->id())->toBe($user->id);
-});
-
-/*
-|--------------------------------------------------------------------------
-| Scenario E — Remember me unchecked
-|--------------------------------------------------------------------------
-| A login without Remember me must not leave a trusted marker behind, and a
-| marker explicitly recorded as not remembered must never restore a session.
-*/
-
-test('E: marking a login without remember clears the marker', function () {
-    $user = User::factory()->create(['api_token' => 'tok_e']);
-
-    app(TrustedLoginService::class)->mark($user, false);
-
-    expect(markerPath())->not->toBeFile();
-
-    $this->get('/app')->assertRedirect('/app/login');
-    expect(auth()->guest())->toBeTrue();
-});
-
-test('E: a marker explicitly recorded without remember is removed and does not restore', function () {
-    $user = User::factory()->create(['api_token' => 'tok_e']);
-
-    File::ensureDirectoryExists(dirname(markerPath()));
-    File::put(markerPath(), (string) json_encode([
-        'user_id' => $user->id,
-        'token_hash' => hash('sha256', 'tok_e'),
-        'created_at' => now()->toIso8601String(),
-        'remember' => false,
-    ], JSON_THROW_ON_ERROR));
-
-    $this->get('/app')->assertRedirect('/app/login');
-
-    expect(auth()->guest())->toBeTrue();
-    expect(markerPath())->not->toBeFile();
 });
