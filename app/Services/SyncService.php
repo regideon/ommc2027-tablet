@@ -1550,11 +1550,14 @@ class SyncService
         // Resolve the whole page before mutating any Customer aggregate. This
         // keeps a duplicate or cross-identity collision atomic at the page boundary.
         $identityResolver = app(CustomerIdentityResolver::class);
+        $localCustomerIdsByPortalId = [];
         foreach ($incomingCustomers as $customer) {
             $identity = $identityResolver->resolve($customer);
             if ($identity->isConflict() || $identity->localId === null) {
                 throw new \RuntimeException('Portal Customer identity conflict: '.($identity->reason ?? 'unresolved').'.');
             }
+
+            $localCustomerIdsByPortalId[(int) $customer['id']] = (int) $identity->localId;
         }
 
         foreach ($incomingCustomers as $customer) {
@@ -1648,6 +1651,7 @@ class SyncService
             foreach ($itinerary['salescalls'] ?? [] as $sc) {
                 $visitDate = $sc['route_start_at'] ?? $sc['actual_in'] ?? null;
                 $localUuid = $sc['local_uuid'] ?? (string) $sc['id'];
+                $localCustomerId = $this->localCustomerIdForPull($sc['customer_id'], $localCustomerIdsByPortalId);
 
                 // A salescall with unsynced local changes (e.g. a check-in or
                 // finish action not yet pushed) must not be clobbered by an
@@ -1659,6 +1663,17 @@ class SyncService
 
                 if ($hasPendingLocalChanges) {
                     $localSalescall = Salescall::where('local_uuid', $localUuid)->first();
+
+                    // Repair a reference written by an older Pull: a pending
+                    // Sales Call can carry the Portal Customer ID while the
+                    // Customer itself kept a negative local primary key. Do not
+                    // overwrite any other pending local changes.
+                    if ($localSalescall
+                        && (int) $localSalescall->customer_id !== $localCustomerId
+                        && ! Customer::query()->whereKey($localSalescall->customer_id)->exists()
+                        && Customer::query()->whereKey($localCustomerId)->exists()) {
+                        $localSalescall->update(['customer_id' => $localCustomerId]);
+                    }
                 } else {
                     $localSalescall = Salescall::updateOrCreate(
                         ['local_uuid' => $localUuid],
@@ -1666,7 +1681,7 @@ class SyncService
                             'server_id' => $sc['id'],
                             'ref_number' => $sc['ref_number'] ?? $sc['id'],
                             'itinerary_id' => $local->id,
-                            'customer_id' => $sc['customer_id'],
+                            'customer_id' => $localCustomerId,
                             'created_by' => $user->id,
                             'visit_date' => $visitDate,
                             'route_start_at' => $sc['route_start_at'] ?? null,
@@ -1700,7 +1715,7 @@ class SyncService
                         try {
                             SalescallBrand::create([
                                 'salescall_id' => $localSalescall->id,
-                                'customer_id' => $localSalescall->customer_id,
+                                'customer_id' => $localCustomerId,
                                 'material_group_id' => $brandRow['material_group_id'],
                                 'brand_id' => $brandRow['brand_id'],
                                 'quantity' => $brandRow['quantity'] ?? null,
@@ -1725,7 +1740,7 @@ class SyncService
                         }
 
                         $categoryRecord->fill([
-                            'customer_id' => $localSalescall->customer_id,
+                            'customer_id' => $localCustomerId,
                             'category_id' => $incomingCategory['category_id'],
                             'sub_category_id' => $incomingCategory['sub_category_id'],
                             'sync_status' => 'synced',
@@ -1752,7 +1767,7 @@ class SyncService
                 ['local_uuid' => $noteRow['local_uuid']],
                 [
                     'server_id' => $noteRow['id'],
-                    'customer_id' => $noteRow['customer_id'],
+                    'customer_id' => $this->localCustomerIdForPull($noteRow['customer_id'], $localCustomerIdsByPortalId),
                     // Portal already scopes the customer_notes payload to created_by = the
                     // syncing user (see SyncController::pull()), so every row here belongs
                     // to $user. Use the tablet's own local user id, not the portal's numeric
@@ -1777,6 +1792,58 @@ class SyncService
         }
 
         return $localUserIdsByEmail[$email];
+    }
+
+    /**
+     * Translate the Portal Customer ID carried by a Sales Call into the local
+     * Customer primary key. A Customer created offline keeps its negative local
+     * key after Push, so writing the Portal ID into salescalls.customer_id
+     * breaks Customer lookups and every child row that holds the same FK.
+     *
+     * @param  array<int, int>  $localCustomerIdsByPortalId
+     */
+    private function localCustomerIdForPull(mixed $portalCustomerId, array $localCustomerIdsByPortalId): int
+    {
+        $portalId = filter_var($portalCustomerId, FILTER_VALIDATE_INT);
+
+        if ($portalId === false || $portalId < 1) {
+            throw new \RuntimeException('Portal pull contains an invalid Customer reference.');
+        }
+
+        if (array_key_exists($portalId, $localCustomerIdsByPortalId)) {
+            return $localCustomerIdsByPortalId[$portalId];
+        }
+
+        $serverMatches = Customer::query()
+            ->where('server_id', $portalId)
+            ->limit(2)
+            ->pluck('id');
+
+        if ($serverMatches->count() > 1) {
+            throw new \RuntimeException('Portal pull Customer reference matches multiple local Customers.');
+        }
+
+        $localIdWithSamePrimaryKey = Customer::query()->whereKey($portalId)->exists();
+
+        if ($serverMatches->count() === 1) {
+            $serverLocalId = (int) $serverMatches->first();
+
+            if ($localIdWithSamePrimaryKey && $serverLocalId !== $portalId) {
+                throw new \RuntimeException('Portal pull Customer reference matches both a local primary key and a different local Customer server ID.');
+            }
+
+            return $serverLocalId;
+        }
+
+        if ($localIdWithSamePrimaryKey) {
+            return $portalId;
+        }
+
+        Log::warning('sync:salescall:customer-reference-unresolved', [
+            'customer_id' => $portalId,
+        ]);
+
+        return $portalId;
     }
 
     /** @return array<int, array<string, mixed>> */
