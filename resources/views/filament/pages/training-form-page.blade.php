@@ -50,7 +50,7 @@
 
         <form x-ref="trainingEntryForm" @submit.prevent="saveTrainingForm()" class="space-y-4">
             <div>
-                <label class="field-label">Topic *</label>
+                <label class="field-label">Topic <span class="text-red-500">*</span></label>
                 <select wire:model="topic_choice" class="field-input bg-white">
                     <option value="">Select a topic</option>
                     @foreach ($topics as $topic)
@@ -63,7 +63,7 @@
 
             @if ($topic_choice === 'other')
                 <div>
-                    <label class="field-label">Other Topic *</label>
+                    <label class="field-label">Other Topic <span class="text-red-500">*</span></label>
                     <input type="text" wire:model="other_topic" class="field-input" placeholder="Specify the training topic">
                     <p class="field-error">{{ $formErrors['other_topic'][0] ?? '' }}</p>
                 </div>
@@ -71,7 +71,7 @@
 
             <div class="grid grid-cols-3 gap-3">
                 <div>
-                    <label class="field-label">Preferred At *</label>
+                    <label class="field-label">Preferred At <span class="text-red-500">*</span></label>
                     <input type="datetime-local" required wire:model="preferred_at" class="field-input">
                     <p class="field-error">{{ $formErrors['preferred_at'][0] ?? '' }}</p>
                 </div>
@@ -101,7 +101,7 @@
             <div class="space-y-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
                 <div class="flex items-center justify-between">
                     <div>
-                        <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Participants *</p>
+                        <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Participants <span class="text-red-500">*</span></p>
                         <p class="text-xs text-[#737685] mt-1">At least one participant is required</p>
                     </div>
                     <button type="button" wire:click="addParticipantRow" class="inline-flex items-center gap-1 rounded-full bg-[#890f00] px-3 py-1.5 text-xs font-semibold text-white">
@@ -123,12 +123,12 @@
 
                         <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label class="field-label">Name *</label>
+                                <label class="field-label">Name <span class="text-red-500">*</span></label>
                                 <input type="text" required wire:model="participants.{{ $index }}.name" class="field-input" placeholder="Full name">
                                 <p class="field-error">{{ $formErrors["participants.{$index}.name"][0] ?? '' }}</p>
                             </div>
                             <div>
-                                <label class="field-label">Position *</label>
+                                <label class="field-label">Position <span class="text-red-500">*</span></label>
                                 <select wire:model="participants.{{ $index }}.position_id" class="field-input bg-white">
                                     <option value="">Select a position</option>
                                     @foreach ($positions as $position)

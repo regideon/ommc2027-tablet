@@ -22,7 +22,7 @@
 
         <form x-ref="giveawayEntryForm" @submit.prevent="saveGiveawayForm()" class="space-y-4">
             <div>
-                <label class="field-label">Name</label>
+                <label class="field-label">Name <span class="text-red-500">*</span></label>
                 <input type="text" wire:model="name" class="field-input" placeholder="Giveaway name">
                 <p class="field-error">{{ $formErrors['name'][0] ?? '' }}</p>
             </div>
@@ -63,7 +63,7 @@
 
                         <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label class="field-label">Category</label>
+                                <label class="field-label">Category <span class="text-red-500">*</span></label>
                                 <select wire:model="items.{{ $index }}.category" class="field-input bg-white">
                                     @foreach ($categories as $value => $label)
                                         <option value="{{ $value }}">{{ $label }}</option>
@@ -79,7 +79,7 @@
                         </div>
 
                         <div>
-                            <label class="field-label">Item Name</label>
+                            <label class="field-label">Item Name <span class="text-red-500">*</span></label>
                             <input type="text" wire:model="items.{{ $index }}.name" class="field-input" placeholder="e.g. Gift Check">
                             <p class="field-error">{{ $formErrors["items.{$index}.name"][0] ?? '' }}</p>
                         </div>
@@ -89,7 +89,7 @@
                         <div x-data="giveawaySignaturePad('{{ $item['key'] }}')" class="space-y-2 p-3 bg-gray-50 border border-gray-200 rounded-xl">
                             <div class="flex items-center justify-between gap-3">
                                 <div>
-                                    <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Signature</p>
+                                    <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Signature <span class="text-red-500">*</span></p>
                                     <p class="text-xs text-[#737685] mt-1">Required · have the recipient sign below</p>
                                 </div>
                                 <button type="button" @click="clearPad()" class="text-xs text-[#890f00] font-medium">Clear</button>

@@ -29,10 +29,15 @@ class TrustedLoginService
 
     /**
      * Persist a trusted-login marker after a real successful authentication.
+     *
+     * A login without Remember me clears any marker from a previous login so
+     * the next app launch requires credentials.
      */
-    public function mark(User $user): void
+    public function mark(User $user, bool $remember = true): void
     {
-        if (blank($user->api_token)) {
+        if (! $remember || blank($user->api_token)) {
+            $this->clear();
+
             return;
         }
 
@@ -42,6 +47,7 @@ class TrustedLoginService
             'user_id' => $user->id,
             'token_hash' => hash('sha256', $user->api_token),
             'created_at' => now()->toIso8601String(),
+            'remember' => true,
         ], JSON_THROW_ON_ERROR));
     }
 
@@ -55,6 +61,12 @@ class TrustedLoginService
         $marker = $this->readMarker();
 
         if ($marker === null) {
+            return false;
+        }
+
+        if (($marker['remember'] ?? true) !== true) {
+            $this->clear();
+
             return false;
         }
 
@@ -89,7 +101,7 @@ class TrustedLoginService
     }
 
     /**
-     * @return array{user_id: int, token_hash: string, created_at: string}|null
+     * @return array{user_id: int, token_hash: string, created_at: string, remember?: bool}|null
      */
     protected function readMarker(): ?array
     {

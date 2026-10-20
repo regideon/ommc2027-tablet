@@ -78,6 +78,7 @@ class BuildDeployCommand extends Command
      */
     private const ANDROID_RUNTIME_FILES = [
         'bridge/LaravelEnvironment.kt',
+        'security/LaravelCookieStore.kt',
     ];
 
     protected string $downloadDir;
@@ -341,6 +342,8 @@ class BuildDeployCommand extends Command
             ],
             base_path('nativephp/ios/NativePHP/ContentView.swift') => [
                 'WKWebsiteDataStore.default()',
+                'removeNonRememberCookies',
+                'hasPrefix("remember_")',
             ],
         ];
 
@@ -385,6 +388,8 @@ class BuildDeployCommand extends Command
             ],
             base_path('nativephp/ios/NativePHP/ContentView.swift') => [
                 'WKWebsiteDataStore.default()',
+                'removeNonRememberCookies',
+                'hasPrefix("remember_")',
             ],
             base_path('nativephp/ios/NativePHP/NativePHPApp.swift') => [
                 'app:startup-migrate --run-id=',
@@ -476,6 +481,7 @@ class BuildDeployCommand extends Command
     private function verifyGeneratedAndroidArtifacts(): bool
     {
         $runtimePath = base_path('nativephp/android/app/src/main/java/com/nativephp/mobile/bridge/LaravelEnvironment.kt');
+        $cookieStorePath = base_path('nativephp/android/app/src/main/java/com/nativephp/mobile/security/LaravelCookieStore.kt');
         $manifestPath = base_path('nativephp/android/app/src/main/AndroidManifest.xml');
 
         $checks = [
@@ -484,6 +490,11 @@ class BuildDeployCommand extends Command
                 'runStartupMigrationGate()',
                 'STARTUP_MIGRATION_STATUS',
                 'Database migration failed for $dbPath.',
+            ],
+            $cookieStorePath => [
+                'REMEMBER_COOKIE_PREFIX',
+                'remember_',
+                'prefs.edit().remove',
             ],
         ];
 

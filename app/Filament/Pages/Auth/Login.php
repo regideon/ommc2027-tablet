@@ -8,6 +8,8 @@ use App\Services\TrustedLoginService;
 use Filament\Auth\Http\Responses\Contracts\LoginResponse;
 use Filament\Facades\Filament;
 use Filament\Notifications\Notification;
+use Illuminate\Auth\SessionGuard;
+use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 use Native\Mobile\Facades\Geolocation;
@@ -19,7 +21,7 @@ class Login extends \Filament\Auth\Pages\Login
         $data = $this->form->getState();
         $email = $data['email'];
         $password = $data['password'];
-        $remember = $data['remember'] ?? false;
+        $remember = (bool) ($data['remember'] ?? false);
         $sync = app(SyncService::class);
 
         $user = User::where('email', $email)->first();
@@ -48,7 +50,7 @@ class Login extends \Filament\Auth\Pages\Login
                 $user = User::where('email', $email)->firstOrFail();
                 Filament::auth()->login($user, $remember);
 
-                app(TrustedLoginService::class)->mark($user);
+                $this->finalizeAuthentication($user, $remember);
 
                 $this->requestDevicePermissions();
 
@@ -74,11 +76,25 @@ class Login extends \Filament\Auth\Pages\Login
         Filament::auth()->login($user, $remember);
         session()->regenerate();
 
-        app(TrustedLoginService::class)->mark($user);
+        $this->finalizeAuthentication($user, $remember);
 
         $this->requestDevicePermissions();
 
         return app(LoginResponse::class);
+    }
+
+    protected function finalizeAuthentication(User $user, bool $remember): void
+    {
+        app(TrustedLoginService::class)->mark($user, $remember);
+
+        if ($remember) {
+            return;
+        }
+
+        /** @var SessionGuard $guard */
+        $guard = Filament::auth();
+
+        Cookie::queue(Cookie::forget($guard->getRecallerName()));
     }
 
     protected function requestDevicePermissions(): void

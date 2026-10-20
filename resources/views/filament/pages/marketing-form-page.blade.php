@@ -39,13 +39,13 @@
             @endif
 
             <div>
-                <label class="field-label">Name *</label>
+                <label class="field-label">Name <span class="text-red-500">*</span></label>
                 <input type="text" wire:model="name" class="field-input">
                 <p class="field-error">{{ $formErrors['name'][0] ?? '' }}</p>
             </div>
 
             <div>
-                <label class="field-label">Program *</label>
+                <label class="field-label">Program <span class="text-red-500">*</span></label>
                 <select wire:model="program_id" class="field-input bg-white">
                     <option value="">Select a program</option>
                     @foreach ($programs as $program)
@@ -56,7 +56,7 @@
             </div>
 
             <div>
-                <label class="field-label">Region Type *</label>
+                <label class="field-label">Region Type <span class="text-red-500">*</span></label>
                 <select wire:model="region_type_id" class="field-input bg-white">
                     <option value="">Select a region type</option>
                     @foreach ($regionTypes as $regionType)
@@ -68,12 +68,12 @@
 
             <div class="grid grid-cols-2 gap-3">
                 <div>
-                    <label class="field-label">Duration Start *</label>
+                    <label class="field-label">Duration Start <span class="text-red-500">*</span></label>
                     <input type="date" wire:model="duration_start_at" class="field-input">
                     <p class="field-error">{{ $formErrors['duration_start_at'][0] ?? '' }}</p>
                 </div>
                 <div>
-                    <label class="field-label">Duration End *</label>
+                    <label class="field-label">Duration End <span class="text-red-500">*</span></label>
                     <input type="date" wire:model="duration_end_at" class="field-input">
                     <p class="field-error">{{ $formErrors['duration_end_at'][0] ?? '' }}</p>
                 </div>
@@ -94,13 +94,13 @@
             </div>
 
             <div>
-                <label class="field-label">Objective *</label>
+                <label class="field-label">Objective <span class="text-red-500">*</span></label>
                 <textarea rows="3" wire:model="objective" class="field-input"></textarea>
                 <p class="field-error">{{ $formErrors['objective'][0] ?? '' }}</p>
             </div>
 
             <div>
-                <label class="field-label">Mechanics Description *</label>
+                <label class="field-label">Mechanics Description <span class="text-red-500">*</span></label>
                 <textarea rows="3" wire:model="mechanics_description" class="field-input"></textarea>
                 <p class="field-error">{{ $formErrors['mechanics_description'][0] ?? '' }}</p>
             </div>
@@ -119,12 +119,12 @@
                         </div>
                         <div class="grid grid-cols-3 gap-3">
                             <div>
-                                <label class="field-label">Before Program</label>
+                                <label class="field-label">Before Program <span class="text-red-500">*</span></label>
                                 <input type="text" inputmode="decimal" wire:model="volumes.{{ $index }}.before_program" class="field-input">
                                 <p class="field-error">{{ $formErrors["volumes.{$index}.before_program"][0] ?? '' }}</p>
                             </div>
                             <div>
-                                <label class="field-label">During Program</label>
+                                <label class="field-label">During Program <span class="text-red-500">*</span></label>
                                 <input type="text" inputmode="decimal" wire:model="volumes.{{ $index }}.during_program" class="field-input">
                                 <p class="field-error">{{ $formErrors["volumes.{$index}.during_program"][0] ?? '' }}</p>
                             </div>
@@ -152,7 +152,7 @@
                         </div>
                         <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label class="field-label">Stage</label>
+                                <label class="field-label">Stage <span class="text-red-500">*</span></label>
                                 <select wire:model="realizations.{{ $index }}.stage" class="field-input bg-white">
                                     <option value="">Select a stage</option>
                                     @foreach (\App\Enums\Marketing\RealizationStage::cases() as $stageCase)
@@ -162,17 +162,17 @@
                                 <p class="field-error">{{ $formErrors["realizations.{$index}.stage"][0] ?? '' }}</p>
                             </div>
                             <div>
-                                <label class="field-label">Volume</label>
+                                <label class="field-label">Volume <span class="text-red-500">*</span></label>
                                 <input type="text" inputmode="decimal" wire:model="realizations.{{ $index }}.volume" class="field-input">
                                 <p class="field-error">{{ $formErrors["realizations.{$index}.volume"][0] ?? '' }}</p>
                             </div>
                             <div>
-                                <label class="field-label">Start</label>
+                                <label class="field-label">Start <span class="text-red-500">*</span></label>
                                 <input type="date" wire:model="realizations.{{ $index }}.start_at" class="field-input">
                                 <p class="field-error">{{ $formErrors["realizations.{$index}.start_at"][0] ?? '' }}</p>
                             </div>
                             <div>
-                                <label class="field-label">End</label>
+                                <label class="field-label">End <span class="text-red-500">*</span></label>
                                 <input type="date" wire:model="realizations.{{ $index }}.end_at" class="field-input">
                                 <p class="field-error">{{ $formErrors["realizations.{$index}.end_at"][0] ?? '' }}</p>
                             </div>
@@ -195,17 +195,17 @@
                         </div>
                         <div class="grid grid-cols-3 gap-3">
                             <div>
-                                <label class="field-label">Period</label>
+                                <label class="field-label">Period <span class="text-red-500">*</span></label>
                                 <input type="date" wire:model="mechanics.{{ $index }}.period" class="field-input">
                                 <p class="field-error">{{ $formErrors["mechanics.{$index}.period"][0] ?? '' }}</p>
                             </div>
                             <div>
-                                <label class="field-label">Unit Price</label>
+                                <label class="field-label">Unit Price <span class="text-red-500">*</span></label>
                                 <input type="text" inputmode="decimal" wire:model="mechanics.{{ $index }}.unit_price" class="field-input">
                                 <p class="field-error">{{ $formErrors["mechanics.{$index}.unit_price"][0] ?? '' }}</p>
                             </div>
                             <div>
-                                <label class="field-label">Sub Total</label>
+                                <label class="field-label">Sub Total <span class="text-red-500">*</span></label>
                                 <input type="text" inputmode="decimal" wire:model="mechanics.{{ $index }}.sub_total" class="field-input">
                                 <p class="field-error">{{ $formErrors["mechanics.{$index}.sub_total"][0] ?? '' }}</p>
                             </div>

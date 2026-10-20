@@ -3,7 +3,7 @@
         @php
             $isCustomerAdd = ! ($this instanceof \App\Filament\Pages\CustomerEditPage);
             $locationReferencesReady = $this->locationReferenceSnapshotReady();
-            $requiredMarker = static fn (bool $isRequired): string => $isCustomerAdd && $isRequired
+            $requiredMarker = static fn (bool $isRequired, bool $showInEdit = false): string => ($isCustomerAdd || $showInEdit) && $isRequired
                 ? '<span class="text-danger-600" data-required-indicator="true" aria-hidden="true">*</span>'
                 : '';
             $provinceOptions = $provinces->where('region_id', $physical_region_id)->where('enabled', true);
@@ -33,9 +33,9 @@
         <div class="bg-white rounded-2xl shadow-sm p-5 space-y-4">
             <h2 class="font-extrabold">Customer Information</h2>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div class="md:col-span-2"><label class="fi-fo-field-wrp-label">{{ match($customerProfileType) { 'fleet' => 'Fleet Account Name', 'oe' => 'OE Account Name', 'ib' => 'IB Account Name', default => 'Store Name' } }} {!! $requiredMarker(true) !!}</label><x-filament::input wire:model="name" />@error('name')<p class="text-danger-600 text-sm">{{ $message }}</p>@enderror</div>
+                <div class="md:col-span-2"><label class="fi-fo-field-wrp-label">{{ match($customerProfileType) { 'fleet' => 'Fleet Account Name', 'oe' => 'OE Account Name', 'ib' => 'IB Account Name', default => 'Store Name' } }} {!! $requiredMarker(true, true) !!}</label><x-filament::input wire:model="name" />@error('name')<p class="text-danger-600 text-sm">{{ $message }}</p>@enderror</div>
                 <div><label class="fi-fo-field-wrp-label">Customer Code</label><x-filament::input wire:model="unique_id" readonly /></div>
-                <div><label class="fi-fo-field-wrp-label">Company {!! $requiredMarker($companies->isNotEmpty()) !!}</label><select wire:model.live="company_id" @disabled($this instanceof \App\Filament\Pages\CustomerEditPage) class="fi-input w-full"><option value="">Select company</option>@foreach($companies as $company)<option value="{{ $company->id }}">{{ $company->name }}</option>@endforeach @if($companyReferenceUnavailable)<option value="{{ $company_id }}">Unavailable saved Company reference (ID {{ $company_id }})</option>@endif</select>@if($companyReferenceUnavailable)<p class="mt-1 text-sm text-warning-700" role="status">The saved Company reference is unavailable offline. Its stored value is being preserved.</p>@endif</div>
+                <div><label class="fi-fo-field-wrp-label">Company {!! $requiredMarker($isCustomerAdd ? $companies->isNotEmpty() : true, true) !!}</label><select wire:model.live="company_id" @disabled($this instanceof \App\Filament\Pages\CustomerEditPage) class="fi-input w-full"><option value="">Select company</option>@foreach($companies as $company)<option value="{{ $company->id }}">{{ $company->name }}</option>@endforeach @if($companyReferenceUnavailable)<option value="{{ $company_id }}">Unavailable saved Company reference (ID {{ $company_id }})</option>@endif</select>@if($companyReferenceUnavailable)<p class="mt-1 text-sm text-warning-700" role="status">The saved Company reference is unavailable offline. Its stored value is being preserved.</p>@endif</div>
                 <div><label class="fi-fo-field-wrp-label">General Category {!! $requiredMarker($generalCategories->isNotEmpty()) !!}</label><select wire:model.live="general_category_id" class="fi-input w-full"><option value="">Select category</option>@foreach($generalCategories as $category)<option value="{{ $category->id }}">{{ $category->name }}</option>@endforeach</select></div>
                 @if((int) $general_category_id === 1)<div><label class="fi-fo-field-wrp-label">Competitor Volume {!! $requiredMarker(true) !!}</label><select wire:model="competitor_volume" class="fi-input w-full"><option value="">Not specified</option><option value="1">High</option><option value="2">Medium</option><option value="3">Low</option></select></div>@endif
                 <div x-data="{ search: '' }" class="space-y-2">

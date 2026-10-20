@@ -50,14 +50,14 @@
 
         <form x-ref="signageEntryForm" @submit.prevent="saveSignageForm()" class="space-y-4">
             <div>
-                <label class="field-label">Signage Name *</label>
+                <label class="field-label">Signage Name <span class="text-red-500">*</span></label>
                 <input type="text" required wire:model="name" class="field-input" placeholder="e.g. Store Front Signage">
                 <p class="field-error">{{ $formErrors['name'][0] ?? '' }}</p>
             </div>
 
             <div class="grid grid-cols-2 gap-3">
                 <div>
-                    <label class="field-label">Category *</label>
+                    <label class="field-label">Category <span class="text-red-500">*</span></label>
                     <select wire:model="category" class="field-input bg-white">
                         @foreach (\App\Enums\CRRSignage\SignageCategory::cases() as $categoryOption)
                             <option value="{{ $categoryOption->value }}">{{ $categoryOption->meta('title') }}</option>
@@ -82,7 +82,7 @@
 
             <div class="grid grid-cols-2 gap-3">
                 <div>
-                    <label class="field-label">Product *</label>
+                    <label class="field-label">Product <span class="text-red-500">*</span></label>
                     <select wire:model="product_id" class="field-input bg-white">
                         <option value="">Select a product</option>
                         @foreach ($products as $product)
@@ -92,7 +92,7 @@
                     <p class="field-error">{{ $formErrors['product_id'][0] ?? '' }}</p>
                 </div>
                 <div>
-                    <label class="field-label">Type *</label>
+                    <label class="field-label">Type <span class="text-red-500">*</span></label>
                     <select wire:model="type_id" class="field-input bg-white">
                         <option value="">Select a type</option>
                         @foreach ($types as $type)

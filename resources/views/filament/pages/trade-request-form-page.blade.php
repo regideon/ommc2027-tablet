@@ -51,7 +51,7 @@
         <form x-ref="tradeRequestEntryForm" @submit.prevent="saveTradeRequestForm()" class="space-y-4">
             <div class="grid grid-cols-2 gap-3">
                 <div>
-                    <label class="field-label">Product *</label>
+                    <label class="field-label">Product <span class="text-red-500">*</span></label>
                     <select wire:model="product_id" class="field-input bg-white">
                         <option value="">Select a product</option>
                         @foreach ($products as $product)
@@ -78,7 +78,7 @@
             <div class="space-y-3 p-4 bg-gray-50 border border-gray-200 rounded-xl">
                 <div class="flex items-center justify-between">
                     <div>
-                        <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Items *</p>
+                        <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Items <span class="text-red-500">*</span></p>
                         <p class="text-xs text-[#737685] mt-1">At least one item is required</p>
                     </div>
                     <button type="button" wire:click="addItemRow" class="inline-flex items-center gap-1 rounded-full bg-[#890f00] px-3 py-1.5 text-xs font-semibold text-white">
@@ -100,7 +100,7 @@
 
                         <div class="grid grid-cols-2 gap-3">
                             <div>
-                                <label class="field-label">Trade Type *</label>
+                                <label class="field-label">Trade Type <span class="text-red-500">*</span></label>
                                 <select wire:model="items.{{ $index }}.trade_type_id" class="field-input bg-white">
                                     <option value="">Select a type</option>
                                     @foreach ($types as $type)
@@ -110,7 +110,7 @@
                                 <p class="field-error">{{ $formErrors["items.{$index}.trade_type_id"][0] ?? '' }}</p>
                             </div>
                             <div>
-                                <label class="field-label">Quantity *</label>
+                                <label class="field-label">Quantity <span class="text-red-500">*</span></label>
                                 <input type="number" min="0" step="1" required wire:model="items.{{ $index }}.quantity" class="field-input" placeholder="0">
                                 <p class="field-error">{{ $formErrors["items.{$index}.quantity"][0] ?? '' }}</p>
                             </div>

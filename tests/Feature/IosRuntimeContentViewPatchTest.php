@@ -20,3 +20,21 @@ test('build deploy command ships ContentView as a durable ios runtime patch', fu
     expect($contents)->toContain('WKWebsiteDataStore.nonPersistent()');
     expect($contents)->toContain('verifyGeneratedIosArtifacts');
 });
+
+test('durable ios runtime keeps only remember cookies across app launches', function () {
+    $path = base_path('packages/ommc2027/ios-runtime/ContentView.swift');
+    $contents = (string) file_get_contents($path);
+
+    expect($contents)
+        ->toContain('removeNonRememberCookies')
+        ->toContain('hasPrefix("remember_")');
+});
+
+test('build deploy command verifies the ios remember-me cookie patch', function () {
+    $path = base_path('app/Console/Commands/BuildDeployCommand.php');
+    $contents = (string) file_get_contents($path);
+
+    expect($contents)
+        ->toContain('removeNonRememberCookies')
+        ->toContain('hasPrefix("remember_")');
+});
