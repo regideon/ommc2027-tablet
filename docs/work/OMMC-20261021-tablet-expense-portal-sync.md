@@ -1,7 +1,7 @@
 # OMMC V2 — Tablet Expense Push to Portal Correction
 
 - **Work ID:** `OMMC-20261021-tablet-expense-portal-sync`
-- **State:** `ACTIVE`
+- **State:** `TERMINAL_DELIVERED`
 - **Repositories:** Tablet `ommc2027-tablet`; Portal `ommc2027` (mirrored note).
 - **Authorization:** Human `GO` to investigate, reproduce with disposable local databases, implement the bounded correction, and deliver scoped commits/pushes for QA. Human `HOLD` for production deployment or database writes, migrations, and unrelated changes.
 - **QA report:** Build 62 created an Expense on Tablet, but it was absent from the reported Portal Expenses list, which showed “No Expenses”. Customer Access and Person in Charge concerns are out of scope.
@@ -42,6 +42,7 @@
 
 ## QA and remaining work
 
-- Work remains open pending QA verification on a tablet build containing this correction. Verify an existing Customer/normal Sales Call, then a newly created Customer/Unplanned Sales Call after Customer confirmation; confirm offline and failed request feedback; confirm the Portal acknowledgment/server ID, relationships and creator, authorized Expenses list visibility, retry without duplicates, and attachment delivery.
+- Outstanding post-delivery QA: on a tablet build containing this correction, verify an existing Customer/normal Sales Call, then a newly created Customer/Unplanned Sales Call after Customer confirmation; confirm offline and failed request feedback; confirm the Portal acknowledgment/server ID, relationships and creator, authorized Expenses list visibility, retry without duplicates, and attachment delivery. This limitation does not change the delivered implementation state and is not recorded as QA acceptance.
 - No device reset/reinstall or data repair is needed for these checks. No separate migration/deployment prerequisite has been identified.
-- **Delivery status:** `READY_FOR_QA_VALIDATION`; Work remains `ACTIVE` pending QA verification. Scoped commit/push delivery is authorized; no deployment or QA sign-off is recorded.
+- **Terminal reconciliation (2026-10-22):** The accepted implementation is committed and pushed in both repositories. Portal implementation/test delivery commit `435625e` and Tablet implementation delivery commit `03c1825` are ancestors of their current `origin/main` branches. A connected localhost end-to-end run passed with 18 assertions; the latest isolated Expense suites passed as recorded above.
+- **Terminal scope:** `TERMINAL_DELIVERED` covers the accepted implementation, documentation, and local/connected validation. It does **not** claim device QA acceptance. Outstanding QA limitation: verify the target tablet build, new Customer/Unplanned Sales Call dependency timing, offline and rejected-request feedback, retry without duplicates, attachments, and authorized Portal visibility. No production deployment or database operation was performed.
