@@ -7,6 +7,7 @@ use App\Models\Customer;
 use App\Models\Expense;
 use App\Models\ExpenseAttachment;
 use App\Models\ExpenseType;
+use App\Models\Itinerary;
 use App\Models\Salescall;
 use App\Models\User;
 use App\Services\ExpenseReadService;
@@ -375,6 +376,188 @@ test('pending historical Petty Cash syncs as PCV while retaining its old remarks
         && $request['payment_remarks'] === 'Legacy pending remarks');
     expect($expense->fresh()->payment_type)->toBe('Petty Cash')
         ->and($expense->fresh()->payment_remarks)->toBe('Legacy pending remarks');
+});
+
+test('submitting an Expense pushes it immediately and marks it synced only after Portal acknowledgment', function () {
+    config(['sync.server_url' => 'https://portal.example.test']);
+    $this->customer->update(['server_id' => 550, 'sync_status' => 'synced']);
+    $salescall = omExpenseReadCreateSalescall($this->customer, $this->user, 901);
+    $lodging = ExpenseType::query()->where('code', 'lodging')->firstOrFail();
+
+    Http::fake([
+        'portal.example.test/api/ping' => Http::response(['status' => 'ok']),
+        'portal.example.test/api/expenses/push' => Http::response(['server_id' => 701]),
+        '*' => Http::response([]),
+    ]);
+
+    $component = Livewire::withQueryParams([
+        'salescall' => $salescall->id,
+        'type' => $lodging->code,
+    ])->test(ExpenseCreatePage::class)
+        ->call('saveExpense', [
+            'amount' => '250.00',
+            'date_filed' => '2026-10-21',
+            'payment_type' => 'Cash',
+            'invoice_number' => 'INV-SUBMIT-1',
+            'establishment' => 'Hotel',
+            'location' => 'Manila',
+            'purpose' => 'Business expense',
+            'tin' => null,
+        ])
+        ->assertReturned(fn (array $result): bool => $result['ok'] === true)
+        ->assertNotified('Expense saved and synchronized.');
+
+    $expense = Expense::query()->sole();
+
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/expenses/push')
+        && $request['local_uuid'] === $expense->local_uuid
+        && $request['salescall_server_id'] === 901
+        && $request['expense_type_code'] === 'lodging');
+
+    expect($expense->sync_status)->toBe('synced')
+        ->and($expense->server_id)->toBe(701)
+        ->and($expense->synced_at)->not->toBeNull();
+});
+
+test('offline Expense submission stays pending and reports local save', function () {
+    config(['sync.server_url' => 'https://portal.example.test']);
+    $this->customer->update(['server_id' => 550, 'sync_status' => 'synced']);
+    $salescall = omExpenseReadCreateSalescall($this->customer, $this->user, 901);
+    $lodging = ExpenseType::query()->where('code', 'lodging')->firstOrFail();
+
+    Http::fake([
+        'portal.example.test/api/ping' => Http::response(['message' => 'offline'], 503),
+        '*' => Http::response([]),
+    ]);
+
+    Livewire::withQueryParams([
+        'salescall' => $salescall->id,
+        'type' => $lodging->code,
+    ])->test(ExpenseCreatePage::class)
+        ->call('saveExpense', [
+            'amount' => '250.00',
+            'date_filed' => '2026-10-21',
+            'payment_type' => 'Cash',
+            'invoice_number' => 'INV-OFFLINE-1',
+            'establishment' => 'Hotel',
+            'location' => 'Manila',
+            'purpose' => 'Business expense',
+        ])
+        ->assertReturned(fn (array $result): bool => $result['ok'] === true)
+        ->assertNotified('Expense saved locally. It will sync when you are back online.');
+
+    $expense = Expense::query()->sole();
+
+    Http::assertSentCount(1);
+    expect($expense->sync_status)->toBe('pending')
+        ->and($expense->sync_attempts)->toBe(0)
+        ->and($expense->server_id)->toBeNull();
+});
+
+test('new Customer Unplanned Sales Call waits for Customer confirmation, then submits its Expense', function () {
+    config(['sync.server_url' => 'https://portal.example.test']);
+    $itinerary = Itinerary::create([
+        'id' => 1,
+        'local_uuid' => (string) str()->uuid(),
+        'server_id' => 700,
+        'sync_status' => 'synced',
+    ]);
+    $this->customer->update(['sync_status' => 'pending']);
+    $salescall = Salescall::create([
+        'itinerary_id' => $itinerary->id,
+        'customer_id' => $this->customer->id,
+        'salescall_type_id' => 1,
+        'created_by' => $this->user->id,
+        'local_uuid' => (string) str()->uuid(),
+        'sync_status' => 'pending',
+    ]);
+    $lodging = ExpenseType::query()->where('code', 'lodging')->firstOrFail();
+
+    Http::fake([
+        'portal.example.test/api/ping' => Http::response(['status' => 'ok']),
+        'portal.example.test/api/customers/sync' => Http::response(['message' => 'Customer push rejected'], 422),
+        'portal.example.test/api/salescalls/push' => Http::response(['server_id' => 901, 'ref_number' => 10901]),
+        'portal.example.test/api/expenses/push' => Http::response(['server_id' => 701]),
+        '*' => Http::response([]),
+    ]);
+
+    Livewire::withQueryParams([
+        'salescall' => $salescall->id,
+        'type' => $lodging->code,
+    ])->test(ExpenseCreatePage::class)
+        ->call('saveExpense', [
+            'amount' => '250.00',
+            'date_filed' => '2026-10-21',
+            'payment_type' => 'Cash',
+            'invoice_number' => 'INV-UNPLANNED-1',
+            'establishment' => 'Hotel',
+            'location' => 'Manila',
+            'purpose' => 'Business expense',
+        ])
+        ->assertReturned(fn (array $result): bool => $result['ok'] === true)
+        ->assertNotified('Expense saved locally. Waiting for Customer synchronization.');
+
+    $expense = Expense::query()->sole();
+    Http::assertNotSent(fn ($request): bool => str_ends_with($request->url(), '/api/salescalls/push')
+        || str_ends_with($request->url(), '/api/expenses/push'));
+    expect($expense->sync_status)->toBe('pending')
+        ->and($expense->server_id)->toBeNull();
+
+    $this->customer->update(['server_id' => 550, 'sync_status' => 'synced']);
+    app(SyncService::class)->push();
+
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/salescalls/push'));
+
+    expect($salescall->fresh()->server_id)->toBe(901)
+        ->and($expense->fresh()->sync_status)->toBe('synced')
+        ->and($expense->fresh()->server_id)->toBe(701);
+});
+
+test('failed Expense push reports failure and a retry reuses the same local UUID', function () {
+    config(['sync.server_url' => 'https://portal.example.test']);
+    $this->customer->update(['server_id' => 550, 'sync_status' => 'synced']);
+    $salescall = omExpenseReadCreateSalescall($this->customer, $this->user, 901);
+    $lodging = ExpenseType::query()->where('code', 'lodging')->firstOrFail();
+
+    Http::fake([
+        'portal.example.test/api/ping' => Http::response(['status' => 'ok']),
+        'portal.example.test/api/expenses/push' => Http::sequence()
+            ->push(['message' => 'Expense validation failed'], 422)
+            ->push(['server_id' => 701]),
+        '*' => Http::response([]),
+    ]);
+
+    Livewire::withQueryParams([
+        'salescall' => $salescall->id,
+        'type' => $lodging->code,
+    ])->test(ExpenseCreatePage::class)
+        ->call('saveExpense', [
+            'amount' => '250.00',
+            'date_filed' => '2026-10-21',
+            'payment_type' => 'Cash',
+            'invoice_number' => 'INV-RETRY-1',
+            'establishment' => 'Hotel',
+            'location' => 'Manila',
+            'purpose' => 'Business expense',
+        ])
+        ->assertReturned(fn (array $result): bool => $result['ok'] === true)
+        ->assertNotified('Expense saved locally, but synchronization failed. It can be retried.');
+
+    $expense = Expense::query()->sole();
+    $localUuid = $expense->local_uuid;
+
+    expect($expense->sync_status)->toBe('failed')
+        ->and($expense->sync_attempts)->toBe(1)
+        ->and($expense->server_id)->toBeNull();
+
+    app(SyncService::class)->push();
+
+    Http::assertSentCount(3);
+    Http::assertSent(fn ($request): bool => str_ends_with($request->url(), '/api/expenses/push')
+        && $request['local_uuid'] === $localUuid);
+    expect(Expense::query()->count())->toBe(1)
+        ->and($expense->fresh()->sync_status)->toBe('synced')
+        ->and($expense->fresh()->server_id)->toBe(701);
 });
 
 test('server expense replaces its synced local copy by server identity', function () {

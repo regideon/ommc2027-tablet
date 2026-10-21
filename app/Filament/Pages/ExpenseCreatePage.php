@@ -2,9 +2,11 @@
 
 namespace App\Filament\Pages;
 
+use App\Models\Expense;
 use App\Models\ExpenseType;
 use App\Models\Salescall;
 use App\Services\LocalExpenseCreationService;
+use App\Services\SyncService;
 use App\Support\ExpensePaymentType;
 use App\Support\NativeMediaPath;
 use BackedEnum;
@@ -94,7 +96,7 @@ class ExpenseCreatePage extends Page
                 ]),
             );
 
-            Notification::make()->title('Expense saved locally.')->success()->send();
+            $this->attemptExpenseSync($expense);
 
             $this->redirectToSalescall();
 
@@ -124,6 +126,74 @@ class ExpenseCreatePage extends Page
     private function redirectToSalescall(): void
     {
         $this->redirect(SalescallPage::getUrl(['call' => $this->salescall->id]));
+    }
+
+    private function attemptExpenseSync(Expense $expense): void
+    {
+        try {
+            $sync = app(SyncService::class);
+
+            if (! $sync->isReachable()) {
+                Notification::make()
+                    ->title('Expense saved locally. It will sync when you are back online.')
+                    ->warning()
+                    ->send();
+
+                return;
+            }
+
+            $sync->push();
+            $expense->refresh()->load('salescall.customer');
+
+            if ($expense->sync_status === 'synced' && $expense->server_id !== null) {
+                Notification::make()->title('Expense saved and synchronized.')->success()->send();
+
+                return;
+            }
+
+            if ($expense->sync_status === 'failed') {
+                Notification::make()
+                    ->title('Expense saved locally, but synchronization failed. It can be retried.')
+                    ->warning()
+                    ->send();
+
+                return;
+            }
+
+            if (! $expense->salescall?->customer?->server_id) {
+                Notification::make()
+                    ->title('Expense saved locally. Waiting for Customer synchronization.')
+                    ->warning()
+                    ->send();
+
+                return;
+            }
+
+            if (! $expense->salescall?->server_id) {
+                Notification::make()
+                    ->title('Expense saved locally. Waiting for Sales Call synchronization.')
+                    ->warning()
+                    ->send();
+
+                return;
+            }
+
+            Notification::make()
+                ->title('Expense saved locally. Synchronization is still pending.')
+                ->warning()
+                ->send();
+        } catch (\Throwable $exception) {
+            Log::warning('Expense synchronization attempt failed after local save.', [
+                'expense_id' => $expense->id,
+                'local_uuid' => $expense->local_uuid,
+                'message' => $exception->getMessage(),
+            ]);
+
+            Notification::make()
+                ->title('Expense saved locally, but synchronization could not be confirmed.')
+                ->warning()
+                ->send();
+        }
     }
 
     public function takeExpenseAttachmentPhoto(): void

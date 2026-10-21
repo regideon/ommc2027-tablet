@@ -2286,7 +2286,8 @@ class SyncService
                         'local_uuid' => $expense->local_uuid,
                         'salescall_server_id' => $expense->salescall->server_id,
                         'expense_type_code' => $expense->expenseType?->code,
-                        'amount' => $expense->amount,
+                        // The Portal API accepts currency values with at most two decimals.
+                        'amount' => number_format((float) $expense->amount, 2, '.', ''),
                         'date_filed' => $expense->date_filed?->format('Y-m-d'),
                         'payment_type' => ExpensePaymentType::forSync($expense->payment_type),
                         'payment_remarks' => $expense->payment_remarks,
