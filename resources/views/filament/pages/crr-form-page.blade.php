@@ -87,7 +87,7 @@
             @endif
 
             <div>
-                <label class="field-label">CRR Program *</label>
+                <label class="field-label">CRR Program <span class="text-red-500">*</span></label>
                 <select wire:model="crr_program_id" class="field-input bg-white">
                     <option value="">Select a program</option>
                     @foreach ($programs as $program)
@@ -104,7 +104,7 @@
                     <p class="field-error">@if (isset($formErrors['date_implemented'])){{ $formErrors['date_implemented'][0] }}@endif</p>
                 </div>
                 <div>
-                    <label class="field-label">Amount *</label>
+                    <label class="field-label">Amount <span class="text-red-500">*</span></label>
                     <input type="text" inputmode="decimal" pattern="([0-9]+([.][0-9]{0,2})?|[.][0-9]{1,2})" required wire:model="amount" @input="onCrrAmountInput($event)" class="field-input" autocomplete="off">
                     <p class="field-error"><span x-text="crrAmountInputError"></span>@if (isset($formErrors['amount'])){{ $formErrors['amount'][0] }}@endif</p>
                 </div>

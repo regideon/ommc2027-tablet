@@ -1652,6 +1652,8 @@ test('Customer Edit does not show Add-only required indicators on optional locat
     $html = Livewire::test(CustomerEditPage::class, ['customerId' => $customerId])->html();
 
     expect($html)
+        ->toContain('Store Name <span class="text-danger-600" data-required-indicator="true"')
+        ->toContain('Company <span class="text-danger-600" data-required-indicator="true"')
         ->toContain('Address </label>')
         ->not->toContain('Address <span class="text-danger-600" data-required-indicator="true"');
 });

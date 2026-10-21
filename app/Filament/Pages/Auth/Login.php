@@ -8,18 +8,26 @@ use App\Services\TrustedLoginService;
 use Filament\Auth\Http\Responses\Contracts\LoginResponse;
 use Filament\Facades\Filament;
 use Filament\Notifications\Notification;
+use Filament\Schemas\Schema;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 use Native\Mobile\Facades\Geolocation;
 
 class Login extends \Filament\Auth\Pages\Login
 {
+    public function form(Schema $schema): Schema
+    {
+        return $schema->components([
+            $this->getEmailFormComponent(),
+            $this->getPasswordFormComponent(),
+        ]);
+    }
+
     public function authenticate(): ?LoginResponse
     {
         $data = $this->form->getState();
         $email = $data['email'];
         $password = $data['password'];
-        $remember = $data['remember'] ?? false;
         $sync = app(SyncService::class);
 
         $user = User::where('email', $email)->first();
@@ -36,7 +44,7 @@ class Login extends \Filament\Auth\Pages\Login
             if ($tokenResult->success) {
                 // refreshToken reconciles the Portal identity, roles, password hash, and token locally.
                 $user = User::where('email', $email)->firstOrFail();
-                Filament::auth()->login($user, $remember);
+                Filament::auth()->login($user);
                 session()->regenerate();
 
                 $pullResult = $sync->pull();
@@ -46,7 +54,7 @@ class Login extends \Filament\Auth\Pages\Login
                 }
 
                 $user = User::where('email', $email)->firstOrFail();
-                Filament::auth()->login($user, $remember);
+                Filament::auth()->login($user);
 
                 app(TrustedLoginService::class)->mark($user);
 
@@ -71,7 +79,7 @@ class Login extends \Filament\Auth\Pages\Login
             $this->throwFailureValidationException();
         }
 
-        Filament::auth()->login($user, $remember);
+        Filament::auth()->login($user);
         session()->regenerate();
 
         app(TrustedLoginService::class)->mark($user);

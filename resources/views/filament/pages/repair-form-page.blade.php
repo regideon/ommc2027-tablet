@@ -45,7 +45,7 @@
         <form x-ref="repairEntryForm" @submit.prevent="saveRepairForm()" class="space-y-4">
             <div class="grid grid-cols-2 gap-3">
                 <div>
-                    <label class="field-label">Plate Number *</label>
+                    <label class="field-label">Plate Number <span class="text-red-500">*</span></label>
                     <input type="text" required wire:model="plate_number" class="field-input" placeholder="ABC 1234">
                     <p class="field-error">{{ $formErrors['plate_number'][0] ?? '' }}</p>
                 </div>
@@ -57,7 +57,7 @@
             </div>
 
             <div>
-                <label class="field-label">Amount *</label>
+                <label class="field-label">Amount <span class="text-red-500">*</span></label>
                 <input type="text" inputmode="decimal" pattern="([0-9]+([.][0-9]{0,2})?|[.][0-9]{1,2})" required wire:model="amount" class="field-input" placeholder="0.00" autocomplete="off">
                 <p class="field-error">{{ $formErrors['amount'][0] ?? '' }}</p>
             </div>
@@ -74,7 +74,7 @@
             </div>
 
             <div>
-                <label class="field-label">Details *</label>
+                <label class="field-label">Details <span class="text-red-500">*</span></label>
                 <textarea rows="3" required wire:model="details" class="field-input"></textarea>
                 <p class="field-error">{{ $formErrors['details'][0] ?? '' }}</p>
             </div>
@@ -84,6 +84,8 @@
                 <textarea rows="3" wire:model="remarks" class="field-input"></textarea>
                 <p class="field-error">{{ $formErrors['remarks'][0] ?? '' }}</p>
             </div>
+
+            <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Attachments <span class="text-red-500">*</span></p>
 
             @foreach (\App\Enums\Repair\RepairAttachmentType::cases() as $attachmentType)
                 @php($typeValue = $attachmentType->value)

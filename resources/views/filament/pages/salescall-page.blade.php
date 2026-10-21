@@ -1001,7 +1001,7 @@
 
             {{-- Scheduled At --}}
             <div class="px-6 py-4 border-b border-gray-100 shrink-0">
-                <label class="text-[11px] font-extrabold text-[#737685] uppercase tracking-wider block mb-1.5">Scheduled At</label>
+                <label class="text-[11px] font-extrabold text-[#737685] uppercase tracking-wider block mb-1.5">Scheduled At <span class="text-red-500">*</span></label>
                 <input
                     x-model="addCallScheduledAt"
                     type="datetime-local"
@@ -1011,6 +1011,7 @@
 
             {{-- Search --}}
             <div class="px-6 py-4 border-b border-gray-100 shrink-0">
+                <label class="text-[11px] font-extrabold text-[#737685] uppercase tracking-wider block mb-1.5">Customer <span class="text-red-500">*</span></label>
                 <div class="flex items-center bg-[#edeef0] rounded-full px-4 py-2 gap-2">
                     <span class="material-symbols-outlined text-[#737685] text-lg">search</span>
                     <input
@@ -1088,7 +1089,7 @@
                     />
                 </div>
                 <div>
-                    <label class="text-[11px] font-extrabold text-[#737685] uppercase tracking-wider block mb-1.5">Note</label>
+                    <label class="text-[11px] font-extrabold text-[#737685] uppercase tracking-wider block mb-1.5">Note <span class="text-red-500">*</span></label>
                     <textarea
                         x-model="noteForm.body"
                         rows="4"
@@ -2270,27 +2271,32 @@
 
                         {{-- Category / Sub Category selector --}}
                         <div>
-                            <label class="block text-xs font-bold text-[#737685] uppercase tracking-wider mb-2">Category</label>
                             <div class="grid grid-cols-2 gap-3">
-                                <select x-model="profileCategoryId"
-                                    @change="profileSubCategoryId = ''; profileWithForm = false; profileFormType = null"
-                                    class="w-full px-4 py-3 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
-                                    <option value="">— Select —</option>
-                                    <template x-for="cat in categories" :key="cat.id">
-                                        <option :value="cat.id" x-text="cat.name"></option>
-                                    </template>
-                                </select>
+                                <div>
+                                    <label class="block text-xs font-bold text-[#737685] uppercase tracking-wider mb-2">Category <span class="text-red-500">*</span></label>
+                                    <select x-model="profileCategoryId"
+                                        @change="profileSubCategoryId = ''; profileWithForm = false; profileFormType = null"
+                                        class="w-full px-4 py-3 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
+                                        <option value="">— Select —</option>
+                                        <template x-for="cat in categories" :key="cat.id">
+                                            <option :value="cat.id" x-text="cat.name"></option>
+                                        </template>
+                                    </select>
+                                </div>
 
-                                <select x-model="profileSubCategoryId"
-                                    @change="onProfileSubCategoryChange()"
-                                    :disabled="!profileCategoryId"
-                                    :class="!profileCategoryId ? 'opacity-40 cursor-not-allowed' : ''"
-                                    class="w-full px-4 py-3 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
-                                    <option value="">— Select —</option>
-                                    <template x-for="sub in profileSubCategoryOptions" :key="sub.id">
-                                        <option :value="sub.id" x-text="sub.name"></option>
-                                    </template>
-                                </select>
+                                <div>
+                                    <label class="block text-xs font-bold text-[#737685] uppercase tracking-wider mb-2">Sub Category <span class="text-red-500">*</span></label>
+                                    <select x-model="profileSubCategoryId"
+                                        @change="onProfileSubCategoryChange()"
+                                        :disabled="!profileCategoryId"
+                                        :class="!profileCategoryId ? 'opacity-40 cursor-not-allowed' : ''"
+                                        class="w-full px-4 py-3 bg-[#f3f4f6] border-0 rounded-2xl text-[#191c1e] text-sm focus:ring-2 focus:ring-[#890f00] outline-none appearance-none">
+                                        <option value="">— Select —</option>
+                                        <template x-for="sub in profileSubCategoryOptions" :key="sub.id">
+                                            <option :value="sub.id" x-text="sub.name"></option>
+                                        </template>
+                                    </select>
+                                </div>
                             </div>
 
                             {{-- Category-change approval warning --}}
