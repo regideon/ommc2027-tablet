@@ -37,11 +37,11 @@
     <div class="{{ $selected !== null ? 'hidden min-[900px]:block' : '' }} min-w-0 rounded-2xl border border-gray-200 bg-white min-[900px]:max-h-[calc(100dvh-11rem)] min-[900px]:overflow-y-auto min-[900px]:overscroll-contain" style="-webkit-overflow-scrolling: touch;">
         <div class="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-gray-100 bg-white/95 px-4 py-3 backdrop-blur">
             <div class="min-w-0">
-                <h3 class="text-base font-bold text-[#191c1e]">Trade Request</h3>
-                <p class="text-xs text-[#737685]">Your Trade Requests</p>
+                <h3 class="text-base font-bold text-[#191c1e]">CRR - LSM</h3>
+                <p class="text-xs text-[#737685]">Your CRR - LSM submissions</p>
             </div>
             <div class="flex shrink-0 items-center gap-2 ml-auto">
-                <button type="button" wire:click="syncNow" @disabled($syncing) class="flex h-9 items-center gap-1.5 rounded-full bg-[#890f00] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#6f0c00] disabled:opacity-50" title="Sync pending Trade Requests and refresh the list">
+                <button type="button" wire:click="syncNow" @disabled($syncing) class="flex h-9 items-center gap-1.5 rounded-full bg-[#890f00] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#6f0c00] disabled:opacity-50" title="Sync pending CRR - LSM and refresh the list">
                     <span class="material-symbols-outlined text-lg {{ $syncing ? 'animate-spin' : '' }}">{{ $syncing ? 'sync' : 'refresh' }}</span>
                     <span class="hidden sm:inline">{{ $syncing ? 'Syncing…' : 'Sync' }}</span>
                 </button>
@@ -49,7 +49,7 @@
                     href="{{ \App\Filament\Pages\TradeRequestFormPage::getUrl() }}"
                     class="inline-flex items-center gap-1.5 rounded-full bg-[#890f00] px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#6f0c00]">
                     <span class="material-symbols-outlined mat-fill text-lg">add_circle</span>
-                    <span class="hidden sm:inline">Create Trade Request</span>
+                    <span class="hidden sm:inline">Create CRR - LSM</span>
                 </a>
             </div>
         </div>
@@ -73,7 +73,7 @@
                     class="w-full min-h-[88px] border-l-4 px-4 py-3 text-left transition-colors {{ $selectedRowKey === $key ? 'border-[#890f00] bg-red-50' : 'border-transparent bg-white hover:bg-red-50' }}">
                     <div class="flex items-start justify-between gap-3">
                         <div class="min-w-0">
-                            <p class="truncate text-sm font-bold text-[#191c1e]">{{ $row['product'] ?? 'Trade Request' }}</p>
+                            <p class="truncate text-sm font-bold text-[#191c1e]">{{ $row['product'] ?? 'CRR - LSM' }}</p>
                             <p class="mt-1 truncate text-xs text-[#434654]">{{ count($row['items'] ?? []) }} item(s) · {{ $row['sales_call'] ?? '—' }}</p>
                         </div>
                         <div class="flex max-w-[45%] shrink-0 flex-col items-end gap-1">
@@ -87,7 +87,7 @@
                     </div>
                 </button>
             @empty
-                <p class="bg-gray-50 py-10 text-center text-sm text-[#737685]">No Trade Request submissions found.</p>
+                <p class="bg-gray-50 py-10 text-center text-sm text-[#737685]">No CRR - LSM submissions found.</p>
             @endforelse
         </div>
     </div>
@@ -108,8 +108,8 @@
                     <span class="material-symbols-outlined text-[#434654]">arrow_back</span>
                 </button>
                 <div class="min-w-0">
-                    <p class="text-[10px] font-black uppercase tracking-widest text-[#890f00]">Trade Request Details</p>
-                    <h3 class="truncate text-base font-bold text-[#191c1e]">{{ $selected['product'] ?? 'Trade Request' }}</h3>
+                    <p class="text-[10px] font-black uppercase tracking-widest text-[#890f00]">CRR - LSM Details</p>
+                    <h3 class="truncate text-base font-bold text-[#191c1e]">{{ $selected['product'] ?? 'CRR - LSM' }}</h3>
                 </div>
                 @if (($selected['sync_status'] ?? '') !== 'synced')
                     <span class="ml-auto shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800">Pending Sync</span>
@@ -186,12 +186,12 @@
                     wire:click="editSelectedRow"
                     class="inline-flex w-full items-center justify-center gap-1.5 rounded-full bg-[#890f00] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#6f0c00]">
                     <span class="material-symbols-outlined text-lg">edit</span>
-                    <span>Edit Trade Request</span>
+                    <span>Edit CRR - LSM</span>
                 </button>
             @endif
         @else
             <div class="flex min-h-64 items-center justify-center rounded-2xl border border-dashed border-gray-300 bg-white px-6 text-center">
-                <p class="text-sm text-[#737685]">Select a Trade Request to view its details.</p>
+                <p class="text-sm text-[#737685]">Select a CRR - LSM to view its details.</p>
             </div>
         @endif
     </div>

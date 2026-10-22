@@ -25,7 +25,7 @@ class NotificationsPage extends Page
         'marketing' => 'Marketing',
         'repair' => 'Repair',
         'trade-check' => 'Trade Check',
-        'trade-request' => 'Trade Request',
+        'trade-request' => 'CRR - LSM',
         'training' => 'Training',
     ];
 

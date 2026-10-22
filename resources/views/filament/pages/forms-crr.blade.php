@@ -33,6 +33,7 @@
 
     $selected = $this->selectedRow();
     $money = fn ($value): string => '₱'.number_format((float) $value, 2);
+    $dateImplemented = fn ($value): string => \App\Models\Forms\CRR\Crr::formatDateImplemented(is_string($value) ? $value : null) ?? '—';
     $rowKey = fn (array $row): string => ! empty($row['server_id']) ? 'server:'.$row['server_id'] : 'local:'.$row['local_uuid'];
 @endphp
 
@@ -89,7 +90,7 @@
                         <div class="min-w-0">
                             <p class="truncate text-sm font-bold text-[#191c1e]">{{ $row['program'] ?? 'CRR' }}</p>
                             <p class="mt-1 truncate text-xs text-[#434654]">{{ $row['sales_call'] ?? '—' }}</p>
-                            <p class="mt-1 text-xs text-[#737685]">{{ $money($row['amount'] ?? 0) }} · {{ $row['date_implemented'] ?: '—' }}</p>
+                            <p class="mt-1 text-xs text-[#737685]">{{ $money($row['amount'] ?? 0) }} · {{ $dateImplemented($row['date_implemented'] ?? null) }}</p>
                         </div>
                         <div class="flex max-w-[45%] shrink-0 flex-col items-end gap-1">
                             <span class="inline-block rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide {{ $status['class'] }}">{{ $status['title'] }}</span>
@@ -129,7 +130,7 @@
                 <h4 class="text-xs font-black uppercase tracking-wider text-[#737685]">Header</h4>
                 @foreach ([
                     ['Program', $selected['program'] ?? '—'],
-                    ['Date Implemented', $selected['date_implemented'] ?: '—'],
+                    ['Date Implemented', $dateImplemented($selected['date_implemented'] ?? null)],
                     ['Amount', $money($selected['amount'] ?? 0)],
                     ['Sales Call', $selected['sales_call'] ?? '—'],
                     ['Details', $selected['details'] ?: '—'],

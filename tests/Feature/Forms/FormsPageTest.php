@@ -203,6 +203,54 @@ test('a locally created pending CRR appears in the list with a Pending Sync badg
         ->assertSee('CRR Details');
 });
 
+test('the CRR list and details render Date Implemented in the readable date format', function () {
+    $user = formsPageUser();
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+    formsPageFakePortal();
+
+    $program = formsPageProgram();
+    $crr = app(CrrService::class)->create($user, [
+        'crr_program_id' => $program->id,
+        'date_implemented' => '2026-10-22',
+        'amount' => '1500.50',
+        'details' => 'Sample details',
+        'remarks' => null,
+        'salescall_uuid' => null,
+        'attachments' => [],
+    ]);
+
+    Livewire::test(FormsPage::class)
+        ->assertSee('Oct 22, 2026')
+        ->assertDontSee('2026-10-22')
+        ->call('selectRow', 'local:'.$crr->local_uuid)
+        ->assertSee('Date Implemented')
+        ->assertSee('Oct 22, 2026')
+        ->assertDontSee('2026-10-22');
+});
+
+test('the CRR Date Implemented preserves a month-only value', function () {
+    $user = formsPageUser();
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+    formsPageFakePortal();
+
+    $program = formsPageProgram();
+    $crr = app(CrrService::class)->create($user, [
+        'crr_program_id' => $program->id,
+        'date_implemented' => 'Oct 2026',
+        'amount' => '1500.50',
+        'details' => null,
+        'remarks' => null,
+        'salescall_uuid' => null,
+        'attachments' => [],
+    ]);
+
+    Livewire::test(FormsPage::class)
+        ->call('selectRow', 'local:'.$crr->local_uuid)
+        ->assertSee('Oct 2026');
+});
+
 test('selecting Marketing loads locally created recommendations into the list', function () {
     $user = formsPageUser();
     $this->actingAs($user);
@@ -489,8 +537,8 @@ test('selecting Trade Request loads locally created submissions into the list an
     $component = Livewire::test(FormsPage::class)
         ->call('selectForm', 'trade-request')
         ->assertSet('selectedForm', 'trade-request')
-        ->assertSee('Create Trade Request')
-        ->assertSee('Your Trade Requests')
+        ->assertSee('Create CRR - LSM')
+        ->assertSee('Your CRR - LSM submissions')
         ->assertSee('Jacket')
         ->assertSee('Pending Sync');
 
@@ -501,9 +549,9 @@ test('selecting Trade Request loads locally created submissions into the list an
     $key = 'local:'.$tradeRequest->local_uuid;
     $component->call('selectRow', $key)
         ->assertSet('selectedRowKey', $key)
-        ->assertSee('Trade Request Details')
+        ->assertSee('CRR - LSM Details')
         ->assertSee('Apparel')
-        ->assertSee('Edit Trade Request');
+        ->assertSee('Edit CRR - LSM');
 
     $component->call('editSelectedRow')
         ->assertRedirect(TradeRequestFormPage::getUrl(['submission' => $tradeRequest->id]));
@@ -563,6 +611,9 @@ test('selecting Training loads locally created submissions into the list and det
     $component->call('selectRow', $key)
         ->assertSet('selectedRowKey', $key)
         ->assertSee('Training Details')
+        ->assertSee('Preferred At')
+        ->assertSee('Nov 1, 2026 9:00 AM')
+        ->assertDontSee('2026-11-01 09:00:00')
         ->assertSee('Juan Dela Cruz')
         ->assertSee('Edit Training');
 
@@ -689,7 +740,7 @@ test('opening the Forms page with a form parameter selects that form', function 
     Livewire::withQueryParams(['form' => 'trade-request'])
         ->test(FormsPage::class)
         ->assertSet('selectedForm', 'trade-request')
-        ->assertSee('Your Trade Requests');
+        ->assertSee('Your CRR - LSM submissions');
 
     Livewire::withQueryParams(['form' => 'training'])
         ->test(FormsPage::class)

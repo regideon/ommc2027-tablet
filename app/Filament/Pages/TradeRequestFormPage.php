@@ -183,24 +183,24 @@ class TradeRequestFormPage extends Page
         try {
             if ($this->isEdit && $this->tradeRequest instanceof TradeRequest) {
                 $service->update($this->tradeRequest, $input);
-                $title = 'Trade Request updated locally.';
+                $title = 'CRR - LSM updated locally.';
             } else {
                 $service->create(auth()->user(), $input);
-                $title = 'Trade Request saved locally.';
+                $title = 'CRR - LSM saved locally.';
             }
         } catch (ValidationException $exception) {
             $this->formErrors = $exception->errors();
 
             return;
         } catch (Throwable $exception) {
-            Log::error('Local Trade Request save failed.', [
+            Log::error('Local CRR - LSM save failed.', [
                 'trade_request_id' => $this->tradeRequest?->id,
                 'exception' => $exception::class,
                 'message' => $exception->getMessage(),
             ]);
 
             $this->formErrors = [
-                'form' => ['The Trade Request could not be saved. Please try again.'],
+                'form' => ['The CRR - LSM could not be saved. Please try again.'],
             ];
 
             return;

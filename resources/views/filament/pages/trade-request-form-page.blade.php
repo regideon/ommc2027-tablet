@@ -27,7 +27,7 @@
             },
             cancelTradeRequest() {
                 if (Object.values(this.tradeRequestAttachments).some((list) => (list || []).length > 0)) {
-                    if (! window.confirm('Cancel this Trade Request without saving?')) return;
+                    if (! window.confirm('Cancel this CRR - LSM without saving?')) return;
                 }
                 $wire.cancel();
             },
@@ -36,8 +36,8 @@
     >
         <div class="flex items-start justify-between gap-4">
             <div>
-                <p class="text-[10px] font-black text-[#890f00] tracking-widest uppercase">Forms · Trade Request</p>
-                <h1 class="text-2xl font-extrabold text-[#191c1e]">{{ $isEdit ? 'Edit Trade Request' : 'Add Trade Request' }}</h1>
+                <p class="text-[10px] font-black text-[#890f00] tracking-widest uppercase">Forms · CRR - LSM</p>
+                <h1 class="text-2xl font-extrabold text-[#191c1e]">{{ $isEdit ? 'Edit CRR - LSM' : 'Add CRR - LSM' }}</h1>
             </div>
             <button type="button" @click="cancelTradeRequest()" class="h-10 px-4 rounded-xl border border-gray-200 text-[#434654] font-bold">Back</button>
         </div>
@@ -190,7 +190,7 @@
 
             <p class="field-error">{{ $formErrors['attachments'][0] ?? '' }}</p>
 
-            <div class="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">At least one item and one Request attachment are required. This Trade Request will be saved locally and remain pending synchronization.</div>
+            <div class="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">At least one item and one Request attachment are required. This CRR - LSM will be saved locally and remain pending synchronization.</div>
             @if (isset($formErrors['trade_request']))
                 <div class="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">{{ $formErrors['trade_request'][0] }}</div>
             @endif

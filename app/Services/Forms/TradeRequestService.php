@@ -195,14 +195,14 @@ class TradeRequestService extends AbstractFormService implements FormSubmissionS
     public function update(Model $submission, array $input): TradeRequest
     {
         if (! $submission instanceof TradeRequest) {
-            throw new InvalidArgumentException('Expected a Trade Request submission.');
+            throw new InvalidArgumentException('Expected a CRR - LSM submission.');
         }
 
         $tradeRequest = $submission;
 
         if (! $tradeRequest->isEditable()) {
             throw ValidationException::withMessages([
-                'trade_request' => ['Only Trade Requests that are still pending can be edited.'],
+                'trade_request' => ['Only CRR - LSM that are still pending can be edited.'],
             ]);
         }
 
@@ -260,7 +260,7 @@ class TradeRequestService extends AbstractFormService implements FormSubmissionS
         }
 
         throw ValidationException::withMessages([
-            'trade_request' => ['This Trade Request is not available locally yet. Refresh the form list and try again.'],
+            'trade_request' => ['This CRR - LSM is not available locally yet. Refresh the form list and try again.'],
         ]);
     }
 
