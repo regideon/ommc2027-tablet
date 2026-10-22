@@ -84,7 +84,8 @@ test('the Trade Request form opens with the cached masters and one empty item ro
         ->assertSet('isEdit', false)
         ->assertSet('product_id', null)
         ->assertCount('items', 1)
-        ->assertSee('Add Trade Request')
+        ->assertSee('Add CRR - LSM')
+        ->assertSee('Forms · CRR - LSM')
         ->assertSee('Jacket')
         ->assertSee('Apparel');
 });

@@ -347,8 +347,8 @@ test('updating a Giveaway can add a new row with a staged signature', function (
 test('server status changes for the mapped user are cached on pull', function () {
     $payload = giveawayPullPayload();
     $payload['giveaways'][0]['answers'] = [
-        ['id' => 1, 'giveaway_id' => 30, 'item_id' => 201, 'submitted_by' => 2, 'rsm_status' => RSMStatus::APPROVED->value, 'answerItem' => ['answer' => '2']],
-        ['id' => 2, 'giveaway_id' => 30, 'item_id' => 202, 'submitted_by' => 2, 'rsm_status' => RSMStatus::APPROVED->value, 'answerItem' => ['answer' => '1']],
+        ['id' => 1, 'giveaway_id' => 30, 'item_id' => 201, 'submitted_by' => 2, 'rsm_status' => RSMStatus::APPROVED->value, 'answer_item' => ['answer' => '2']],
+        ['id' => 2, 'giveaway_id' => 30, 'item_id' => 202, 'submitted_by' => 2, 'rsm_status' => RSMStatus::APPROVED->value, 'answer_item' => ['answer' => '1']],
     ];
 
     Http::fake(['*/api/forms/giveaway/pull' => Http::response($payload, 200)]);

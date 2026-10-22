@@ -53,4 +53,25 @@ class Crr extends Model
             && $this->sps_status === SPSStatus::PENDING
             && $this->spm_status === SPMStatus::PENDING;
     }
+
+    /**
+     * Format full dates while preserving month-only values and date ranges,
+     * which do not contain an exact day.
+     */
+    public static function formatDateImplemented(?string $value): ?string
+    {
+        if (blank($value)) {
+            return null;
+        }
+
+        foreach (['Y-m-d', 'Y-m-d H:i:s', 'n/j/Y', 'M j, Y', 'F j, Y'] as $format) {
+            $date = \DateTimeImmutable::createFromFormat('!'.$format, $value);
+
+            if ($date !== false && $date->format($format) === $value) {
+                return $date->format('M j, Y');
+            }
+        }
+
+        return $value;
+    }
 }

@@ -399,12 +399,14 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
                     ],
                 );
 
+                $answerItem = $answerRow['answer_item'] ?? $answerRow['answerItem'] ?? null;
+
                 GiveawayAnswerItem::updateOrCreate(
                     [
                         'giveaway_id' => $giveaway->id,
                         'item_id' => $localItemId,
                     ],
-                    ['answer' => $answerRow['answerItem']['answer'] ?? null],
+                    ['answer' => is_array($answerItem) ? ($answerItem['answer'] ?? null) : null],
                 );
             }
         }

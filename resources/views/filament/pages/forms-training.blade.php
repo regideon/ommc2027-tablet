@@ -17,6 +17,7 @@
     };
 
     $selected = $this->selectedRow();
+    $dateTimeLabel = fn ($value): string => filled($value) ? \Illuminate\Support\Carbon::parse($value)->format('M j, Y g:i A') : '—';
     $rowKey = fn (array $row): string => ! empty($row['server_id']) ? 'server:'.$row['server_id'] : 'local:'.$row['local_uuid'];
 @endphp
 
@@ -120,7 +121,7 @@
                 <h4 class="text-xs font-black uppercase tracking-wider text-[#737685]">Header</h4>
                 @foreach ([
                     ['Topic', $selected['topic'] ?? '—'],
-                    ['Preferred At', $selected['preferred_at'] ?? '—'],
+                    ['Preferred At', $dateTimeLabel($selected['preferred_at'] ?? null)],
                     ['OMCC Volume', $selected['omcc_volume'] ?? '—'],
                     ['Competitor Volume', $selected['competitor_volume'] ?? '—'],
                     ['Sales Call', $selected['sales_call'] ?? '—'],

@@ -1828,7 +1828,7 @@
                                     ['assignment', 'CRR', 'Customer Call Report', 'crr'],
                                     ['image', 'CRR Signage', 'Signage request form', 'signage'],
                                     ['campaign', 'Marketing', 'Local Store Marketing', 'marketing'],
-                                    ['shopping_bag', 'Trade Request', 'Trade request form', 'tradeRequest'],
+                                    ['shopping_bag', 'CRR - LSM', 'CRR - LSM form', 'tradeRequest'],
                                     ['checklist', 'Trade Check', 'Trade check form', 'tradeCheck'],
                                     ['redeem', 'Giveaway', 'Giveaway form', 'giveaway'],
                                 ] as [$icon, $label, $sub, $formKey])
@@ -2620,7 +2620,7 @@
                                         {{-- Phase 2: Trade Request requirement disabled.
                                         <span class="flex items-center gap-1.5 shrink-0" :class="hasTradeRequestForm ? 'text-green-600' : 'text-red-500'">
                                             <span class="material-symbols-outlined text-sm mat-fill" x-text="hasTradeRequestForm ? 'check_circle' : 'radio_button_unchecked'"></span>
-                                            <span>Trade Request<span x-show="!hasTradeRequestForm"> (missing)</span></span>
+                                            <span>CRR - LSM<span x-show="!hasTradeRequestForm"> (missing)</span></span>
                                         </span>
                                         --}}
                                     </p>

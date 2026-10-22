@@ -1494,7 +1494,7 @@ class SalescallPage extends Page
                 Notification::make()
                     ->title(match ($blocker) {
                         'image' => 'Capture a photo for every photo category and type before completing this visit.',
-                        'forms' => 'Create the Trade Request form for this sales call before completing.',
+                        'forms' => 'Create the CRR - LSM form for this sales call before completing.',
                         default => 'Save brands before submitting.',
                     })
                     ->danger()
