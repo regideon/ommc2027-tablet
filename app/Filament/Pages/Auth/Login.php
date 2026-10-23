@@ -8,8 +8,11 @@ use App\Services\TrustedLoginService;
 use Filament\Auth\Http\Responses\Contracts\LoginResponse;
 use Filament\Facades\Filament;
 use Filament\Notifications\Notification;
+use Filament\Schemas\Components\Component;
 use Filament\Schemas\Schema;
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\HtmlString;
 use Illuminate\Validation\ValidationException;
 use Native\Mobile\Facades\Geolocation;
 
@@ -21,6 +24,15 @@ class Login extends \Filament\Auth\Pages\Login
             $this->getEmailFormComponent(),
             $this->getPasswordFormComponent(),
         ]);
+    }
+
+    protected function getPasswordFormComponent(): Component
+    {
+        return parent::getPasswordFormComponent()
+            ->hint(new HtmlString(Blade::render(
+                '<x-filament::link :href="$url" tabindex="-1">Forgot password?</x-filament::link>',
+                ['url' => Filament::getCurrentOrDefaultPanel()->route('forgot-password')],
+            )));
     }
 
     public function authenticate(): ?LoginResponse
