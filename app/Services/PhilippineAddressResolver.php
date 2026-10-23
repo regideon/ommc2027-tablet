@@ -42,7 +42,7 @@ class PhilippineAddressResolver
 
         $stateTokens = [$components['state'] ?? null, $components['region'] ?? null];
 
-        $regionId = $this->match(Region::class, $stateTokens, [], true);
+        $regionId = $this->matchRegion($stateTokens);
         $provinceId = $this->match(Province::class, [$components['county'] ?? null, $components['state_district'] ?? null], ['enabled' => true], true);
         $municipalityId = $this->match(Municipality::class, [
             $components['city'] ?? null,
@@ -128,6 +128,35 @@ class PhilippineAddressResolver
     }
 
     /**
+     * @param  array<int, mixed>  $values
+     */
+    private function matchRegion(array $values): ?int
+    {
+        $regionId = $this->match(Region::class, $values, [], true);
+
+        if ($regionId !== null) {
+            return $regionId;
+        }
+
+        $aliases = (array) config('customer_location_lookup.region_aliases', []);
+        $ids = [];
+
+        foreach ($this->tokens($values) as $token) {
+            $psgcCode = $aliases[$token] ?? null;
+
+            if (! is_string($psgcCode) || $psgcCode === '') {
+                continue;
+            }
+
+            $ids = [...$ids, ...Region::query()->where('psgc_code', $psgcCode)->pluck('id')->map(fn ($id): int => (int) $id)->all()];
+        }
+
+        $ids = array_values(array_unique($ids));
+
+        return count($ids) === 1 ? $ids[0] : null;
+    }
+
+    /**
      * @param  class-string<Model>  $model
      * @param  array<int, mixed>  $values
      * @param  array<string, mixed>  $constraints
@@ -153,16 +182,50 @@ class PhilippineAddressResolver
             $query->where($column, $value);
         }
 
+        $rows = $query->get(['id', 'name']);
+        $ids = $this->matchingIds($rows, $tokens, false);
+
+        // Retry without a trailing "City" only when nothing matched exactly,
+        // so a provider "Quezon" cannot silently resolve to "Quezon City".
+        if ($ids === []) {
+            $ids = $this->matchingIds($rows, $tokens, true);
+        }
+
+        return count($ids) === 1 ? $ids[0] : null;
+    }
+
+    /**
+     * @param  iterable<int, Model>  $rows
+     * @param  list<string>  $tokens
+     * @return list<int>
+     */
+    private function matchingIds(iterable $rows, array $tokens, bool $withoutCitySuffix): array
+    {
+        $tokens = $withoutCitySuffix
+            ? array_map(fn (string $token): string => $this->withoutCitySuffix($token), $tokens)
+            : $tokens;
         $ids = [];
-        foreach ($query->get(['id', 'name']) as $row) {
-            if (array_intersect($this->candidateNames($row->name), $tokens) !== []) {
+
+        foreach ($rows as $row) {
+            $candidates = $this->candidateNames($row->name);
+
+            if ($withoutCitySuffix) {
+                $candidates = array_map(fn (string $candidate): string => $this->withoutCitySuffix($candidate), $candidates);
+            }
+
+            if (array_intersect($candidates, $tokens) !== []) {
                 $ids[] = (int) $row->id;
             }
         }
 
-        $ids = array_values(array_unique($ids));
+        return array_values(array_unique($ids));
+    }
 
-        return count($ids) === 1 ? $ids[0] : null;
+    private function withoutCitySuffix(string $value): string
+    {
+        $stripped = preg_replace('/\s+city$/', '', $value);
+
+        return is_string($stripped) && $stripped !== '' ? $stripped : $value;
     }
 
     /**

@@ -20,6 +20,72 @@ function seedResolverGeography(): void
     DB::table('area_clusters')->insert(['id' => 1, 'region_specific_id' => 1, 'code' => 'gmaarea1', 'name' => 'GMA - Area 1', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now]);
 }
 
+function seedTabletNcrResolverGeography(): void
+{
+    $now = now();
+
+    DB::table('regions')->insert([
+        ['id' => 1, 'code' => 'MM', 'psgc_code' => null, 'name' => 'Metro Manila', 'created_at' => $now, 'updated_at' => $now],
+        ['id' => 2, 'code' => 'PSGC-1300000000', 'psgc_code' => '1300000000', 'name' => 'National Capital Region (NCR)', 'created_at' => $now, 'updated_at' => $now],
+        ['id' => 3, 'code' => 'PSGC-1400000000', 'psgc_code' => '1400000000', 'name' => 'Cordillera Administrative Region (CAR)', 'created_at' => $now, 'updated_at' => $now],
+        ['id' => 7, 'code' => 'PSGC-0400000000', 'psgc_code' => '0400000000', 'name' => 'Region IV-A (CALABARZON)', 'created_at' => $now, 'updated_at' => $now],
+    ]);
+
+    DB::table('region_specifics')->insert([
+        ['id' => 52, 'region_id' => 7, 'name' => 'Region IV-A (Cavite, Rizal)', 'sort' => 0, 'created_at' => $now, 'updated_at' => $now],
+    ]);
+
+    $municipalities = [
+        2 => ['City of Caloocan', '1380100000'],
+        3 => ['City of Las Piñas', '1380200000'],
+        4 => ['City of Makati', '1380300000'],
+        5 => ['City of Malabon', '1380400000'],
+        6 => ['City of Mandaluyong', '1380500000'],
+        7 => ['City of Manila', '1380600000'],
+        8 => ['City of Marikina', '1380700000'],
+        9 => ['City of Muntinlupa', '1380800000'],
+        10 => ['City of Navotas', '1380900000'],
+        11 => ['City of Parañaque', '1381000000'],
+        12 => ['Pasay City', '1381100000'],
+        13 => ['City of Pasig', '1381200000'],
+        14 => ['Quezon City', '1381300000'],
+        15 => ['City of San Juan', '1381400000'],
+        16 => ['City of Taguig', '1381500000'],
+        17 => ['City of Valenzuela', '1381600000'],
+        18 => ['Pateros', '1381701000'],
+    ];
+
+    foreach ($municipalities as $id => [$name, $psgcCode]) {
+        DB::table('municipalities')->insert([
+            'id' => $id, 'psgc_code' => $psgcCode, 'region_id' => 2, 'province_id' => null,
+            'name' => $name, 'enabled' => true, 'sort' => $id, 'created_at' => $now, 'updated_at' => $now,
+        ]);
+    }
+
+    // A same-named municipality outside NCR reproduces the nationwide ambiguity.
+    DB::table('municipalities')->insert([
+        'id' => 40, 'psgc_code' => '1400122000', 'region_id' => 3, 'province_id' => null,
+        'name' => 'San Juan', 'enabled' => true, 'sort' => 40, 'created_at' => $now, 'updated_at' => $now,
+    ]);
+
+    DB::table('barangays')->insert([
+        ['id' => 500, 'psgc_code' => '1381300001', 'municipality_id' => 14, 'code' => 'central', 'name' => 'Central', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now],
+        ['id' => 1632, 'psgc_code' => '1381400019', 'municipality_id' => 15, 'code' => 'tibagan', 'name' => 'Tibagan', 'enabled' => true, 'created_at' => $now, 'updated_at' => $now],
+    ]);
+
+    foreach (range(1, 10) as $area) {
+        DB::table('area_clusters')->insert([
+            'id' => 100 + $area, 'region_specific_id' => 52, 'code' => 'gmaarea'.$area,
+            'name' => 'GMA - Area '.$area, 'enabled' => true, 'created_at' => $now, 'updated_at' => $now,
+        ]);
+    }
+
+    DB::table('location_area_cluster_mappings')->insert([
+        'location_level' => 'barangay', 'location_id' => 500, 'decision' => 'mapped',
+        'area_cluster_id' => 102, 'created_at' => $now, 'updated_at' => $now,
+    ]);
+}
+
 test('resolver maps reverse geocode components to reference ids', function () {
     seedResolverGeography();
 
@@ -211,4 +277,53 @@ test('resolver falls back to the region only specific region when the name and p
         ->and($result['province_id'])->toBe(1)
         ->and($result['region_specific_id'])->toBeNull()
         ->and($result['area_cluster_id'])->toBeNull();
+});
+
+test('resolver applies the approved GMA cluster to every NCR municipality', function () {
+    seedTabletNcrResolverGeography();
+
+    $expectedClusters = [
+        2 => 101, 3 => 108, 4 => 107, 5 => 101, 6 => 104, 7 => 105, 8 => 106,
+        9 => 108, 10 => 101, 11 => 109, 12 => 107, 13 => 110, 14 => 102, 15 => 104,
+        16 => 109, 17 => 101, 18 => 110,
+    ];
+
+    $providerCities = [
+        2 => 'Caloocan', 3 => 'Las Piñas', 4 => 'Makati', 5 => 'Malabon',
+        6 => 'Mandaluyong', 7 => 'Manila', 8 => 'Marikina', 9 => 'Muntinlupa',
+        10 => 'Navotas', 11 => 'Parañaque', 12 => 'Pasay', 13 => 'Pasig',
+        14 => 'Quezon City', 15 => 'San Juan', 16 => 'Taguig', 17 => 'Valenzuela', 18 => 'Pateros',
+    ];
+
+    $responses = [];
+
+    foreach ($providerCities as $municipalityId => $providerCity) {
+        $address = ['city' => $providerCity, 'region' => 'Metro Manila'];
+
+        if ($municipalityId === 14) {
+            $address['quarter'] = 'Central';
+        }
+
+        if ($municipalityId === 15) {
+            $address['quarter'] = 'Tibagan';
+        }
+
+        $responses[] = ['display_name' => $providerCity.', Metro Manila', 'address' => $address];
+    }
+
+    $responseIndex = 0;
+    Http::fake(function () use (&$responseIndex, $responses) {
+        return Http::response($responses[$responseIndex++], 200);
+    });
+
+    foreach ($providerCities as $municipalityId => $providerCity) {
+        $result = app(PhilippineAddressResolver::class)->resolve(14.6, 121.0);
+        $message = 'NCR municipality '.$municipalityId.' ('.$providerCity.')';
+
+        expect($result['region_id'])->toBe(2, $message)
+            ->and($result['province_id'])->toBeNull($message)
+            ->and($result['municipality_id'])->toBe($municipalityId, $message)
+            ->and($result['region_specific_id'])->toBe(52, $message)
+            ->and($result['area_cluster_id'])->toBe($expectedClusters[$municipalityId], $message);
+    }
 });
