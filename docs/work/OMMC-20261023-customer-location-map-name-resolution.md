@@ -23,6 +23,18 @@
 - Added a regression test that runs all 17 NCR municipalities through the resolver and asserts the exact municipality, physical Region 2, Specific Region 52, and expected GMA Area cluster. Quezon City uses a barangay mapping, San Juan uses Tibagan, and Pasay covers the `City` suffix fallback.
 - The resolver and configuration changes are mirrored in both repositories.
 
+## Relationship audit
+
+- The same read-only audit was run against the Portal `ommc2027` database and the Tablet snapshot. Both contain 19 regions, 18 specific regions, 53 area clusters, 85 provinces, 1,643 municipalities, 42,010 barangays, and 241 location mapping rows. All relationship results below matched between the two databases.
+- All 17 NCR municipality relationships were checked: municipality enabled, physical Region 2, province null, approved GMA code, enabled cluster under operational Specific Region 52, and resolver result. All 17 passed.
+- Cluster evidence by business area: Area 1 → Caloocan/Malabon/Navotas/Valenzuela (cluster 50); Area 4 → Mandaluyong/San Juan (53); Area 5 → Manila (54); Area 6 → Marikina (16); Area 7 → Makati/Pasay (55); Area 8 → Las Piñas/Muntinlupa (56); Area 9 → Parañaque/Taguig (57); Area 10 → Pasig/Pateros (58); Quezon City → Area 2 (51) or Area 3 (52) by barangay.
+- All 142 Quezon City barangay mappings are valid: every barangay belongs to municipality 14, every decision is `mapped`, and every target is an enabled Area 2 or Area 3 cluster under Specific Region 52. Split: 80 Area 2, 62 Area 3.
+- All 76 mapped province relationships match the supplied table, including cluster label, enabled state, and physical Region parent equality. The four previously known exceptions remain `unresolved`: Negros Occidental (VIS Area 2), Negros Oriental (VIS Area 3), Siquijor (VIS Area 3), and Sulu (MIN Area 6). Maguindanao del Norte and del Sur both map to MIN Area 4.
+- `provinces.region_specific_id` is null for 82 of 85 province rows; only three legacy NCR province rows carry a value. This denormalized column is not used by the resolver or the location selector, so it has no functional effect on these mappings.
+- The Specific Region selector is the physical-region selector. For GMA it intentionally allows Region IDs 1 (legacy Metro Manila alias), 2 (canonical NCR), and 7 (Region IV-A for Cavite/Rizal). The screenshot's `National Capital Region (NCR)` selection is correct for San Juan. The legacy `Metro Manila` option remains available and is not a mapping failure.
+- Legacy physical Region 1 has no enabled province and no province-less enabled municipality in either database; its only municipality is the old Quezon City row with a province parent that is not selectable. Selecting `Metro Manila` on Add is therefore a dead-end. Hiding Region 1 from new Add selections while preserving it for Edit hydration is a separate UI decision.
+- Live resolver check using the screenshot coordinates `14.5993808, 121.0264206`: Region 2, municipality 15 (San Juan), barangay 1616 (Batis), Specific Region 52, Area Cluster 53 (GMA Area 4).
+
 ## Validation
 
 - Tablet focused suites `tests/Feature/PhilippineAddressResolverTest.php` and `tests/Feature/MetroManilaAreaClusterSelectionTest.php`: 14 passed, 135 assertions.

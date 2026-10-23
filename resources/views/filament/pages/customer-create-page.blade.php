@@ -145,12 +145,56 @@
                     </button>
                 </div>
 
+                <div class="shrink-0 px-5 pt-4">
+                    <div class="relative">
+                        <div class="flex gap-2">
+                            <input
+                                type="search"
+                                x-model="searchQuery"
+                                x-on:input="scheduleSearch()"
+                                x-on:keydown.enter.prevent="searchLocation()"
+                                placeholder="Search address or place"
+                                aria-label="Search address or place"
+                                class="fi-input w-full"
+                            >
+                            <button
+                                type="button"
+                                x-on:click="searchLocation()"
+                                class="fi-btn fi-btn-size-md fi-btn-color-gray inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold shadow-sm ring-1 ring-inset ring-gray-950/10"
+                            >
+                                <span class="material-symbols-outlined text-lg">search</span>
+                                Search
+                            </button>
+                        </div>
+                        <div
+                            x-cloak
+                            x-show="searching || searchMessage || searchResults.length > 0"
+                            data-location-search-results
+                            class="absolute left-0 right-0 top-full mt-1 max-h-60 space-y-1 overflow-y-auto rounded-lg border border-gray-200 bg-white p-2 shadow-xl"
+                            style="z-index: 1001;"
+                            aria-live="polite"
+                        >
+                            <p x-show="searching" class="px-2 py-1 text-xs text-[#737685]">Searching…</p>
+                            <p x-show="!searching && searchMessage" x-text="searchMessage" class="px-2 py-1 text-xs text-[#737685]"></p>
+                            <template x-for="(result, index) in searchResults" :key="index">
+                                <button
+                                    type="button"
+                                    x-on:click="selectSearchResult(result)"
+                                    x-text="result.label"
+                                    class="block w-full rounded px-2 py-1 text-left text-sm hover:bg-gray-50"
+                                ></button>
+                            </template>
+                        </div>
+                    </div>
+                    <p class="mt-1 text-[10px] text-[#737685]">Search results © OpenStreetMap contributors</p>
+                </div>
+
                 <div
                     x-ref="pickerMap"
                     wire:ignore
                     id="customer-location-map"
-                    class="mx-4 my-4 flex-1 overflow-hidden rounded-xl border border-gray-200"
-                    style="min-height: 20rem;"
+                    class="mx-4 my-4 min-h-0 flex-1 overflow-hidden rounded-xl border border-gray-200"
+                    style="min-height: 10rem;"
                     role="application"
                     aria-label="Customer location map"
                 ></div>
@@ -195,6 +239,12 @@
                 addressPreview: '',
                 addressLoading: false,
                 lookupToken: 0,
+                searchQuery: '',
+                searchResults: [],
+                searchMessage: '',
+                searching: false,
+                searchTimer: null,
+                searchController: null,
                 neutralCenter: [14.5995, 120.9842],
                 neutralZoom: 10,
                 locationZoom: 16,
@@ -205,6 +255,10 @@
 
                 longitudeInput() {
                     return this.$root.querySelector('[data-location-coordinate="longitude"]');
+                },
+
+                addressInput() {
+                    return this.$root.querySelector('[data-location-address="address"]');
                 },
 
                 currentCoordinates() {
@@ -223,6 +277,13 @@
                     this.message = '';
                     this.addressPreview = '';
                     this.addressLoading = false;
+                    this.resetSearch();
+
+                    const address = this.addressInput()?.value?.trim() ?? '';
+
+                    if (address.length >= 3) {
+                        this.searchQuery = address;
+                    }
 
                     // x-show only toggles display, so wait a paint before Leaflet
                     // measures the container (see the salescall mini-map note).
@@ -231,12 +292,122 @@
 
                 closePicker() {
                     this.showPicker = false;
+                    this.resetSearch();
 
                     if (this.map) {
                         this.map.remove();
                         this.map = null;
                         this.marker = null;
                     }
+                },
+
+                resetSearch() {
+                    if (this.searchTimer) {
+                        clearTimeout(this.searchTimer);
+                        this.searchTimer = null;
+                    }
+
+                    this.searchController?.abort();
+                    this.searchController = null;
+                    this.searchQuery = '';
+                    this.searchResults = [];
+                    this.searchMessage = '';
+                    this.searching = false;
+                },
+
+                scheduleSearch() {
+                    if (this.searchTimer) {
+                        clearTimeout(this.searchTimer);
+                        this.searchTimer = null;
+                    }
+
+                    if (this.searchQuery.trim().length < 3) {
+                        this.searchResults = [];
+                        this.searchMessage = '';
+                        this.searching = false;
+                        return;
+                    }
+
+                    this.searchTimer = setTimeout(() => this.searchLocation(), 1000);
+                },
+
+                async searchLocation() {
+                    const query = this.searchQuery.trim();
+
+                    if (query.length < 3) {
+                        this.searchResults = [];
+                        this.searchMessage = '';
+                        return;
+                    }
+
+                    if (this.searchTimer) {
+                        clearTimeout(this.searchTimer);
+                        this.searchTimer = null;
+                    }
+
+                    this.searchController?.abort();
+                    const controller = new AbortController();
+                    this.searchController = controller;
+                    this.searching = true;
+                    this.searchMessage = '';
+
+                    const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2'
+                        + '&limit=5&addressdetails=1'
+                        + '&q=' + encodeURIComponent(query);
+
+                    try {
+                        const response = await fetch(url, {
+                            headers: { Accept: 'application/json' },
+                            signal: controller.signal,
+                        });
+
+                        if (! response.ok) {
+                            throw new Error('HTTP ' + response.status);
+                        }
+
+                        const data = await response.json();
+
+                        if (controller !== this.searchController) {
+                            return;
+                        }
+
+                        this.searchResults = (Array.isArray(data) ? data : [])
+                            .filter((result) => Number.isFinite(Number(result?.lat)) && Number.isFinite(Number(result?.lon)))
+                            .map((result) => ({
+                                label: typeof result.display_name === 'string' ? result.display_name : 'Unnamed place',
+                                latitude: Number(result.lat),
+                                longitude: Number(result.lon),
+                            }));
+                        this.searchMessage = this.searchResults.length === 0 ? 'No matching places found.' : '';
+                    } catch (error) {
+                        if (controller !== this.searchController || error.name === 'AbortError') {
+                            return;
+                        }
+
+                        this.searchResults = [];
+                        this.searchMessage = 'Could not search places. Check your Internet connection.';
+                    } finally {
+                        if (controller === this.searchController) {
+                            this.searching = false;
+                            this.searchController = null;
+                        }
+                    }
+                },
+
+                selectSearchResult(result) {
+                    this.addressPreview = result.label;
+                    this.message = '';
+                    this.setCoordinates(result.latitude, result.longitude);
+                    this.setInput(this.addressInput(), result.label);
+                    this.searchResults = [];
+                    this.searchMessage = '';
+
+                    if (! this.map) {
+                        return;
+                    }
+
+                    this.placeMarker([result.latitude, result.longitude]);
+                    this.map.setView([result.latitude, result.longitude], this.locationZoom);
                 },
 
                 buildMap() {

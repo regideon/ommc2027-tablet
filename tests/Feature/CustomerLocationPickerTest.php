@@ -41,6 +41,21 @@ test('customer add page renders the map location picker', function () {
         ->assertSee('wire:model="longitude"', false);
 });
 
+test('customer location picker offers an OpenStreetMap place search', function () {
+    $this->actingAs(seedCustomerLocationPickerFixtures());
+
+    Livewire::test(CustomerCreatePage::class)
+        ->assertOk()
+        ->assertSee('Search address or place', false)
+        ->assertSee('searchResults', false)
+        ->assertSee('nominatim.openstreetmap.org/search', false)
+        ->assertSee('data-location-search-results', false)
+        ->assertSee('absolute', false)
+        ->assertSee('z-index: 1001', false)
+        ->assertSee('addressInput()', false)
+        ->assertSee('min-height: 10rem', false);
+});
+
 test('customer location picker writes coordinates into the component state', function () {
     $this->actingAs(seedCustomerLocationPickerFixtures());
 
