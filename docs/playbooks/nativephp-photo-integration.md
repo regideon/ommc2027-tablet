@@ -249,13 +249,20 @@ The browser file-input fallback accepts `image/*`, reads a data URL, and calls
 SalescallImage/preview state; it does not use the NativePHP capture ID flow.
 Do not present that path as equivalent input validation to the native path.
 
-Synchronization remains owned by `SyncService` and
-`TabletS3UploadService`. Pending SalescallImage rows wait until their parent
-Salescall has a server ID, then the binary is uploaded and the image payload is
-sent through the existing Sales Call image endpoint. Keep photo acquisition
-and local persistence offline-first; do not upload directly in the callback,
-clear pending state on a false `start()` result, or change sync behavior as
-part of a photo integration fix.
+Synchronization remains owned by `SyncService`. Pending SalescallImage rows
+wait until their parent Salescall has a server ID, then the tablet sends the
+local file directly to the Portal through the existing Sales Call image
+endpoint. Salescall images are **not** pre-uploaded to S3; the Portal stores
+the received file on its env-selected `filesystems.default` disk and returns
+the Portal `server_id`. The tablet keeps the original `local_path` and stores
+that `server_id`; it does not replace the path with a Portal or S3 path.
+
+`TabletS3UploadService` remains in use for Customer Profile signatures and
+profile attachments. Do not extend the sales-call image path back into S3
+without a separate design decision. Keep photo acquisition and local
+persistence offline-first; do not upload directly in the callback, clear
+pending state on a false `start()` result, or change sync behavior as part of
+a photo integration fix.
 
 ## 8. Diagnostic playbook
 

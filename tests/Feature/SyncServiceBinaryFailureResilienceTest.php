@@ -9,7 +9,6 @@ use App\Models\SubCategory;
 use App\Models\User;
 use App\Services\SyncResult;
 use App\Services\SyncService;
-use App\Services\TabletS3UploadService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -72,7 +71,7 @@ function omBinaryProfileContext(Salescall $salescall): array
     return [$category, $subCategory, $profile];
 }
 
-test('image portal failure after s3 success remains retryable and retains s3 key', function () {
+test('salescall image portal failure remains retryable and keeps the local file', function () {
     $user = User::factory()->create(['api_token' => 'tablet-token']);
     $this->actingAs($user);
 
@@ -100,13 +99,12 @@ test('image portal failure after s3 success remains retryable and retains s3 key
         ->and($result->failureReasons)->toContain('portal_upload_failed')
         ->and($image->sync_status)->toBe('failed')
         ->and($image->sync_attempts)->toBe(1)
-        ->and($image->s3_key)->not->toBeNull()
-        ->and(Storage::disk('s3')->exists($image->s3_key))->toBeTrue()
+        ->and($image->s3_key)->toBeNull()
         ->and($image->sync_error)->toContain('portal_upload_failed')
         ->and(is_file($image->local_path))->toBeTrue();
 });
 
-test('image s3 failure remains retryable and does not call portal', function () {
+test('salescall image push does not attempt an s3 upload', function () {
     $user = User::factory()->create(['api_token' => 'tablet-token']);
     $this->actingAs($user);
 
@@ -121,28 +119,22 @@ test('image s3 failure remains retryable and does not call portal', function () 
         'sync_status' => 'pending',
     ]);
 
-    app()->instance(TabletS3UploadService::class, new class extends TabletS3UploadService
-    {
-        public function ensureSalescallImageUploaded(SalescallImage $image): string
-        {
-            throw new RuntimeException('S3 put failed.');
-        }
-    });
-
-    Http::fake();
+    Http::fake([
+        'https://portal.test/api/salescalls/push-image' => Http::response(['server_id' => 9301], 200),
+    ]);
 
     $result = app(SyncService::class)->push();
     $image->refresh();
 
-    expect($result->success)->toBeFalse()
-        ->and($result->failureReasons)->toContain('s3_upload_failed')
-        ->and($image->sync_status)->toBe('failed')
-        ->and($image->sync_attempts)->toBe(1)
+    expect($result->success)->toBeTrue()
+        ->and($image->sync_status)->toBe('synced')
+        ->and($image->server_id)->toBe(9301)
         ->and($image->s3_key)->toBeNull()
-        ->and($image->sync_error)->toContain('s3_upload_failed')
+        ->and(Storage::disk('s3')->allFiles())->toBeEmpty()
         ->and(is_file($image->local_path))->toBeTrue();
 
-    Http::assertNothingSent();
+    Http::assertSent(fn ($request) => $request->url() === 'https://portal.test/api/salescalls/push-image'
+        && $request->isMultipart());
 });
 
 test('signature portal failure after s3 success remains retryable and retains s3 key', function () {
@@ -215,11 +207,12 @@ test('one failed binary item does not block another successful item and reports 
         ->and($goodImage->server_id)->toBe(9002);
 });
 
-test('repeated retry after image s3 success does not duplicate s3 upload', function () {
+test('a repeated salescall image retry keeps one local file and eventually syncs', function () {
     $user = User::factory()->create(['api_token' => 'tablet-token']);
     $this->actingAs($user);
 
     $salescall = omBinarySalescall($user, 505);
+    $salescall->update(['sync_status' => 'synced']);
     $localPath = omBinaryLocalFile(storage_path('app/private/salescall_images/'.str()->uuid().'.jpg'));
 
     $image = SalescallImage::create([
@@ -236,19 +229,56 @@ test('repeated retry after image s3 success does not duplicate s3 upload', funct
 
     $first = app(SyncService::class)->push();
     $image->refresh();
-    $firstKey = $image->s3_key;
 
     $second = app(SyncService::class)->push();
     $image->refresh();
 
     expect($first->success)->toBeFalse()
-        ->and($firstKey)->not->toBeNull()
-        ->and(Storage::disk('s3')->exists($firstKey))->toBeTrue()
-        ->and(count(Storage::disk('s3')->allFiles()))->toBe(1)
+        ->and($image->s3_key)->toBeNull()
+        ->and(Storage::disk('s3')->allFiles())->toBeEmpty()
+        ->and(is_file($localPath))->toBeTrue()
         ->and($second->success)->toBeTrue()
         ->and($image->sync_status)->toBe('synced')
-        ->and($image->s3_key)->toBe($firstKey)
-        ->and(count(Storage::disk('s3')->allFiles()))->toBe(1);
+        ->and($image->server_id)->toBe(9300)
+        ->and($image->s3_key)->toBeNull()
+        ->and(is_file($image->local_path))->toBeTrue();
+});
+
+test('an exhausted failed salescall image is retried until it reaches the portal', function () {
+    $user = User::factory()->create(['api_token' => 'tablet-token']);
+    $this->actingAs($user);
+
+    $salescall = omBinarySalescall($user, 506);
+    $salescall->update(['sync_status' => 'synced']);
+    $localPath = omBinaryLocalFile(storage_path('app/private/salescall_images/'.str()->uuid().'.jpg'));
+
+    $image = SalescallImage::create([
+        'salescall_id' => $salescall->id,
+        'salescall_image_type_id' => 1,
+        'local_path' => $localPath,
+        'local_uuid' => (string) str()->uuid(),
+        'sync_status' => 'failed',
+        'sync_attempts' => 3,
+        'sync_error' => 's3_upload_failed: Failed to upload file to S3.',
+    ]);
+
+    Http::fake([
+        'https://portal.test/api/salescalls/push-image' => Http::response(['server_id' => 9302], 200),
+    ]);
+
+    expect(app(SyncService::class)->hasPendingChanges())->toBeTrue();
+
+    $result = app(SyncService::class)->push();
+    $image->refresh();
+
+    expect($result->success)->toBeTrue()
+        ->and($image->sync_status)->toBe('synced')
+        ->and($image->server_id)->toBe(9302)
+        ->and($image->s3_key)->toBeNull()
+        ->and($image->local_path)->toBe($localPath)
+        ->and(is_file($localPath))->toBeTrue();
+
+    Http::assertSent(fn ($request) => $request->url() === 'https://portal.test/api/salescalls/push-image');
 });
 
 test('top level Livewire sync action reports failure when the sync service throws', function () {

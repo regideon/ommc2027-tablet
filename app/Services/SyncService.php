@@ -87,11 +87,13 @@ class SyncService
             ->where('sync_status', 'pending')
             ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
 
+        $pendingOrFailed = fn ($query) => $query->whereIn('sync_status', ['pending', 'failed']);
+
         return $pendingOrRetryable(Itinerary::query())->exists()
-            || $pendingOrRetryable(Salescall::query())->exists()
+            || $pendingOrFailed(Salescall::query())->exists()
             || $pendingOrRetryable(SalescallBrand::query())->exists()
             || $pendingOrRetryable(SalescallCategory::query())->exists()
-            || $pendingOrRetryable(SalescallImage::query())->exists()
+            || $pendingOrFailed(SalescallImage::query())->exists()
             || $pendingOrRetryable(CustomerProfile::query())->exists()
             || $pendingOrRetryable(CustomerProfileAttachment::query())->exists()
             || $pendingOrRetryable(Expense::query())->exists()
@@ -2193,8 +2195,7 @@ class SyncService
             }
 
             $pendingSalescalls = Salescall::with('itinerary')
-                ->where('sync_status', 'pending')
-                ->orWhere(fn ($q) => $q->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
+                ->whereIn('sync_status', ['pending', 'failed'])
                 ->get();
 
             foreach ($pendingSalescalls as $salescall) {
@@ -3104,10 +3105,7 @@ class SyncService
             }
 
             $pendingImages = SalescallImage::with('salescall')
-                ->where(function ($q) {
-                    $q->where('sync_status', 'pending')
-                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
-                })
+                ->whereIn('sync_status', ['pending', 'failed'])
                 ->get();
 
             foreach ($pendingImages as $image) {
@@ -3421,8 +3419,6 @@ class SyncService
                 return ['success' => false, 'reason' => 'local_file_missing'];
             }
 
-            $s3Key = $this->ensureSalescallImageS3Key($image);
-
             $stream = fopen($image->local_path, 'r');
 
             if ($stream === false) {
@@ -3462,7 +3458,6 @@ class SyncService
                     'stage' => 'salescall-image:portal',
                     'endpoint' => '/api/salescalls/push-image',
                     'http_status' => $response->status(),
-                    's3_key' => $s3Key,
                 ]);
 
                 return ['success' => false, 'reason' => $failure];
@@ -3470,6 +3465,7 @@ class SyncService
 
             $this->markSynced($image, [
                 'server_id' => $response->json('server_id'),
+                's3_key' => null,
             ]);
 
             return ['success' => true];
@@ -3479,7 +3475,6 @@ class SyncService
                 'stage' => 'salescall-image:unexpected',
                 'endpoint' => '/api/salescalls/push-image',
                 'local_path' => $image->local_path,
-                's3_key' => $image->s3_key,
             ]);
 
             return ['success' => false, 'reason' => $classification];
@@ -4280,25 +4275,6 @@ class SyncService
 
             return ['success' => false, 'reason' => $classification];
         }
-    }
-
-    private function ensureSalescallImageS3Key(SalescallImage $image): string
-    {
-        try {
-            $s3Key = $this->tabletS3UploadService->ensureSalescallImageUploaded($image);
-        } catch (Throwable $e) {
-            throw $this->rethrowWithClassification($e, 's3_upload_failed');
-        }
-
-        if ($image->s3_key !== $s3Key) {
-            try {
-                $image->update(['s3_key' => $s3Key]);
-            } catch (Throwable $e) {
-                throw $this->rethrowWithClassification($e, 's3_key_persist_failed');
-            }
-        }
-
-        return $s3Key;
     }
 
     private function ensureProfileAttachmentS3Key(CustomerProfileAttachment $attachment): string
