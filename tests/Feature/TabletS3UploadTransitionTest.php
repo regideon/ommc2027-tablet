@@ -7,7 +7,6 @@ use App\Models\SalescallImage;
 use App\Models\SubCategory;
 use App\Models\User;
 use App\Services\SyncService;
-use App\Services\TabletS3UploadService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -32,37 +31,7 @@ function omTabletLocalFile(string $path, string $contents = 'binary-test-data'):
     return $path;
 }
 
-test('tablet s3 upload service is idempotent for repeated salescall image retries', function () {
-    $salescall = Salescall::create([
-        'itinerary_id' => 1,
-        'customer_id' => 1,
-        'local_uuid' => (string) str()->uuid(),
-        'server_id' => 101,
-        'sync_status' => 'pending',
-    ]);
-
-    $localPath = omTabletLocalFile(storage_path('app/private/salescall_images/'.str()->uuid().'.jpg'));
-
-    $image = SalescallImage::create([
-        'salescall_id' => $salescall->id,
-        'salescall_image_type_id' => 1,
-        'local_path' => $localPath,
-        'local_uuid' => (string) str()->uuid(),
-        'sync_status' => 'pending',
-    ]);
-
-    $service = app(TabletS3UploadService::class);
-
-    $firstKey = $service->ensureSalescallImageUploaded($image);
-    $image->update(['s3_key' => $firstKey]);
-
-    $secondKey = $service->ensureSalescallImageUploaded($image->fresh('salescall'));
-
-    expect($secondKey)->toBe($firstKey)
-        ->and(Storage::disk('s3')->exists($firstKey))->toBeTrue();
-});
-
-test('sync service uploads to s3 before preserving salescall image portal compatibility sync', function () {
+test('sync service uploads the salescall image to the portal without s3', function () {
     config()->set('sync.server_url', 'https://portal.test');
 
     $user = User::factory()->create(['api_token' => 'tablet-token']);
@@ -73,7 +42,7 @@ test('sync service uploads to s3 before preserving salescall image portal compat
         'customer_id' => 1,
         'local_uuid' => (string) str()->uuid(),
         'server_id' => 202,
-        'sync_status' => 'pending',
+        'sync_status' => 'synced',
     ]);
 
     $localPath = omTabletLocalFile(storage_path('app/private/salescall_images/'.str()->uuid().'.jpg'));
@@ -95,13 +64,15 @@ test('sync service uploads to s3 before preserving salescall image portal compat
     $image->refresh();
 
     expect($result->success)->toBeTrue()
-        ->and($image->s3_key)->not->toBeNull()
-        ->and(Storage::disk('s3')->exists($image->s3_key))->toBeTrue()
+        ->and($image->s3_key)->toBeNull()
+        ->and(Storage::disk('s3')->allFiles())->toBeEmpty()
         ->and($image->server_id)->toBe(9001)
         ->and($image->sync_status)->toBe('synced')
+        ->and($image->local_path)->toBe($localPath)
         ->and(is_file($image->local_path))->toBeTrue();
 
-    Http::assertSent(fn ($request) => $request->url() === 'https://portal.test/api/salescalls/push-image');
+    Http::assertSent(fn ($request) => $request->url() === 'https://portal.test/api/salescalls/push-image'
+        && $request->isMultipart());
 });
 
 test('sync service uploads signatures to s3 before preserving customer profile portal compatibility sync', function () {
