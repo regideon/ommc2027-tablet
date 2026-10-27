@@ -1,12 +1,9 @@
 <?php
 
 use App\Enums\Marketing\RealizationStage;
-use App\Filament\Pages\CrrFormPage;
 use App\Filament\Pages\FormsPage;
 use App\Filament\Pages\MarketingFormPage;
 use App\Models\Customer;
-use App\Models\Forms\CRR\Crr;
-use App\Models\Forms\CRR\CrrProgram;
 use App\Models\Forms\Marketing\Marketing;
 use App\Models\Forms\Marketing\MarketingMechanic;
 use App\Models\Forms\Marketing\MarketingProgram;
@@ -237,36 +234,22 @@ function marketingFormPageSalescall(User $user): Salescall
     ]);
 }
 
-function marketingFormPageCrr(User $user, Salescall $salescall): Crr
-{
-    $program = CrrProgram::create(['name' => 'Trade Program']);
-
-    return Crr::create([
-        'local_uuid' => (string) Str::uuid(),
-        'submitted_by' => $user->id,
-        'salescall_id' => $salescall->id,
-        'crr_program_id' => $program->id,
-        'amount' => 1500,
-        'sync_status' => 'pending',
-    ]);
-}
-
-test('opening the Marketing form from a sales call with a CRR preselects and locks that sales call', function () {
+test('opening the Marketing form from a sales call preselects and locks it without requiring a CRR', function () {
     $user = marketingFormPageUser();
     marketingFormPageProgram();
     marketingFormPageRegion();
     $this->actingAs($user);
 
     $salescall = marketingFormPageSalescall($user);
-    marketingFormPageCrr($user, $salescall);
 
     Livewire::withQueryParams(['salescall' => $salescall->local_uuid])
         ->test(MarketingFormPage::class)
         ->assertOk()
         ->assertSet('salescall_uuid', $salescall->local_uuid, true)
         ->assertSet('salescallLocked', true, true)
-        ->assertSet('crrRequired', false, true)
+        ->assertDontSee('Create a CRR for this sales call first')
         ->assertSee('Started from this Sales Call')
+        ->assertSee('Mechanics Description')
         ->assertSeeHtml('wire:model="salescall_uuid" class="field-input bg-white" disabled');
 });
 
@@ -299,7 +282,7 @@ test('a sales call owned by another rep is ignored when opening the Marketing fo
         ->assertSet('salescallLocked', false, true);
 });
 
-test('opening the Marketing form from a sales call without a CRR shows the CRR-first warning instead of the form', function () {
+test('opening the Marketing form from a sales call without a CRR still shows the form', function () {
     $user = marketingFormPageUser();
     marketingFormPageProgram();
     marketingFormPageRegion();
@@ -312,54 +295,17 @@ test('opening the Marketing form from a sales call without a CRR shows the CRR-f
         ->assertOk()
         ->assertSet('salescall_uuid', $salescall->local_uuid, true)
         ->assertSet('salescallLocked', true, true)
-        ->assertSet('crrRequired', true)
-        ->assertSee('Create a CRR for this sales call first')
-        ->assertSeeHtml('href="'.CrrFormPage::getUrl(['salescall' => $salescall->local_uuid]).'"')
-        ->assertDontSee('Mechanics Description');
+        ->assertDontSee('Create a CRR for this sales call first')
+        ->assertSee('Mechanics Description');
 });
 
-test('saving a Marketing recommendation linked to a sales call without a CRR reports an error and creates nothing', function () {
+test('saving a Marketing recommendation linked to a sales call without a CRR creates it linked to the visit', function () {
     $user = marketingFormPageUser();
     $program = marketingFormPageProgram();
     $region = marketingFormPageRegion();
     $this->actingAs($user);
 
     $salescall = marketingFormPageSalescall($user);
-
-    $component = Livewire::test(MarketingFormPage::class)
-        ->set('program_id', $program->id)
-        ->set('region_type_id', $region->id)
-        ->set('duration_start_at', '2026-11-01')
-        ->set('duration_end_at', '2027-01-31')
-        ->set('objective', 'Grow monthly case volume')
-        ->set('name', 'Branch Expansion Support')
-        ->set('mechanics_description', 'Volume rebate per incremental case.')
-        ->set('salescall_uuid', $salescall->local_uuid)
-        ->set('volumes', [['before_program' => '1000', 'during_program' => '1500', 'volume' => '500']])
-        ->set('realizations', [[
-            'stage' => RealizationStage::FIRST_STAGE->value,
-            'start_at' => '2026-11-01',
-            'end_at' => '2026-12-31',
-            'volume' => '5000',
-        ]])
-        ->set('mechanics', [['period' => '2026-11-15', 'unit_price' => '1500', 'sub_total' => '7500']])
-        ->call('save');
-
-    expect($component->get('formErrors'))
-        ->toHaveKey('salescall_uuid')
-        ->and(Marketing::query()->count())->toBe(0);
-
-    $component->assertNoRedirect();
-});
-
-test('saving a Marketing recommendation with a CRR for the sales call creates it linked to the visit', function () {
-    $user = marketingFormPageUser();
-    $program = marketingFormPageProgram();
-    $region = marketingFormPageRegion();
-    $this->actingAs($user);
-
-    $salescall = marketingFormPageSalescall($user);
-    marketingFormPageCrr($user, $salescall);
 
     Livewire::test(MarketingFormPage::class)
         ->set('program_id', $program->id)
@@ -384,42 +330,6 @@ test('saving a Marketing recommendation with a CRR for the sales call creates it
     expect(Marketing::query()->first()->salescall_id)->toBe($salescall->id);
 });
 
-test('a CRR for another sales call or another rep does not unlock the Marketing save', function () {
-    $user = marketingFormPageUser();
-    $otherUser = User::factory()->create();
-    $program = marketingFormPageProgram();
-    $region = marketingFormPageRegion();
-    $this->actingAs($user);
-
-    $salescall = marketingFormPageSalescall($user);
-    $otherSalescall = marketingFormPageSalescall($user);
-    marketingFormPageCrr($otherUser, $salescall);
-    marketingFormPageCrr($user, $otherSalescall);
-
-    $component = Livewire::test(MarketingFormPage::class)
-        ->set('program_id', $program->id)
-        ->set('region_type_id', $region->id)
-        ->set('duration_start_at', '2026-11-01')
-        ->set('duration_end_at', '2027-01-31')
-        ->set('objective', 'Grow monthly case volume')
-        ->set('name', 'Branch Expansion Support')
-        ->set('mechanics_description', 'Volume rebate per incremental case.')
-        ->set('salescall_uuid', $salescall->local_uuid)
-        ->set('volumes', [['before_program' => '1000', 'during_program' => '1500', 'volume' => '500']])
-        ->set('realizations', [[
-            'stage' => RealizationStage::FIRST_STAGE->value,
-            'start_at' => '2026-11-01',
-            'end_at' => '2026-12-31',
-            'volume' => '5000',
-        ]])
-        ->set('mechanics', [['period' => '2026-11-15', 'unit_price' => '1500', 'sub_total' => '7500']])
-        ->call('save');
-
-    expect($component->get('formErrors'))
-        ->toHaveKey('salescall_uuid')
-        ->and(Marketing::query()->count())->toBe(0);
-});
-
 test('editing an existing Marketing recommendation does not require a CRR for its sales call', function () {
     $user = marketingFormPageUser();
     $program = marketingFormPageProgram();
@@ -435,7 +345,6 @@ test('editing an existing Marketing recommendation does not require a CRR for it
         ->test(MarketingFormPage::class)
         ->assertOk()
         ->assertSet('isEdit', true)
-        ->assertSet('crrRequired', false, true)
         ->set('name', 'Updated Without CRR')
         ->call('save')
         ->assertRedirect(FormsPage::getUrl(['form' => 'marketing']));

@@ -6,7 +6,6 @@ use App\Contracts\FormSubmissionService;
 use App\Enums\Marketing\RealizationStage;
 use App\Enums\RACStatus;
 use App\Enums\SPSStatus;
-use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\Marketing\Marketing;
 use App\Models\Forms\Marketing\MarketingMechanic;
 use App\Models\Forms\Marketing\MarketingProgram;
@@ -99,7 +98,7 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
             $local = collect();
         }
 
-        $server = $this->syncService->readMarketingsWithStatus();
+        $server = $this->refreshApprovalStatuses();
         $this->globalReadFailed = $this->globalReadFailed || $server['failed'];
 
         if (! $server['failed']) {
@@ -127,6 +126,56 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
         return $this->globalReadFailed;
     }
 
+    /**
+     * Pull the latest Marketing rows and persist their approval state on the
+     * matching local rows. A failed pull leaves the last-known state intact.
+     *
+     * @return array{marketings: array<int, array<string, mixed>>, failed: bool}
+     */
+    public function refreshApprovalStatuses(): array
+    {
+        $result = $this->syncService->readMarketingsWithStatus();
+
+        if (! $result['failed']) {
+            $this->persistApprovalStatuses($result['marketings']);
+        }
+
+        return $result;
+    }
+
+    /**
+     * Resolve whether the rep's Marketing Recommendation for the sales call is
+     * approved, pending, missing, or cannot be confirmed while offline.
+     */
+    public function approvalStateForSalescall(User $user, Salescall $salescall): string
+    {
+        $result = $this->refreshApprovalStatuses();
+
+        $local = Marketing::query()
+            ->where('salescall_id', $salescall->id)
+            ->where('submitted_by', $user->id)
+            ->get();
+
+        if ($local->contains(fn (Marketing $marketing): bool => $marketing->isApproved())) {
+            return 'approved';
+        }
+
+        if (! $result['failed']) {
+            if ($this->serverHasMarketingFor($result['marketings'], $user, $salescall, approvedOnly: true)) {
+                return 'approved';
+            }
+
+            if ($local->isNotEmpty()
+                || $this->serverHasMarketingFor($result['marketings'], $user, $salescall, approvedOnly: false)) {
+                return 'pending';
+            }
+
+            return 'none';
+        }
+
+        return $local->isNotEmpty() ? 'pending' : 'unknown';
+    }
+
     /*
     |--------------------------------------------------------------------------
     | CREATE / EDIT
@@ -141,12 +190,6 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
         $validated = Validator::make($input, $this->rules())->validate();
 
         $salescallId = $this->resolveSalescall($validated['salescall_uuid'] ?? null);
-
-        if ($salescallId !== null && ! $this->crrExistsFor($salescallId, $user)) {
-            throw ValidationException::withMessages([
-                'salescall_uuid' => ['Create a CRR for this sales call before creating a Marketing Recommendation.'],
-            ]);
-        }
 
         return DB::transaction(function () use ($user, $validated, $salescallId): Marketing {
             $marketing = Marketing::create([
@@ -520,15 +563,64 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
     }
 
     /**
-     * A Marketing Recommendation tied to a visit requires the rep's own CRR
-     * for that same visit.
+     * Persist Portal-owned approval fields on local rows without touching
+     * children, sync metadata, or locally pending submissions.
+     *
+     * @param  array<int, array<string, mixed>>  $serverMarketings
      */
-    private function crrExistsFor(int $salescallId, User $user): bool
+    private function persistApprovalStatuses(array $serverMarketings): void
     {
-        return Crr::query()
-            ->where('salescall_id', $salescallId)
-            ->where('submitted_by', $user->id)
-            ->exists();
+        foreach ($serverMarketings as $row) {
+            $serverId = $row['id'] ?? null;
+
+            if (! is_numeric($serverId)) {
+                continue;
+            }
+
+            $marketing = Marketing::query()
+                ->where('server_id', (int) $serverId)
+                ->first();
+
+            if (! $marketing instanceof Marketing) {
+                continue;
+            }
+
+            $marketing->update([
+                'sps_status' => (int) ($row['sps_status'] ?? $marketing->sps_status->value),
+                'rac_status' => (int) ($row['rac_status'] ?? $marketing->rac_status->value),
+                'rac_return_count' => (int) ($row['rac_return_count'] ?? $marketing->rac_return_count),
+            ]);
+        }
+    }
+
+    /**
+     * Match a pulled Marketing row to the rep and sales call using the Portal
+     * IDs, covering a submission made from another tablet.
+     *
+     * @param  array<int, array<string, mixed>>  $serverMarketings
+     */
+    private function serverHasMarketingFor(
+        array $serverMarketings,
+        User $user,
+        Salescall $salescall,
+        bool $approvedOnly,
+    ): bool {
+        if (! $salescall->server_id || ! $user->server_id) {
+            return false;
+        }
+
+        return collect($serverMarketings)->contains(function (array $row) use ($salescall, $user, $approvedOnly): bool {
+            if ((int) ($row['salescall_id'] ?? 0) !== (int) $salescall->server_id) {
+                return false;
+            }
+
+            if ((int) ($row['submitted_by'] ?? 0) !== (int) $user->server_id) {
+                return false;
+            }
+
+            return ! $approvedOnly
+                || (int) ($row['rac_status'] ?? 0) === RACStatus::APPROVED->value;
+        });
     }
 
     /**
