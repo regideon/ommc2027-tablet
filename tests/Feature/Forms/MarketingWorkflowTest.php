@@ -1,5 +1,7 @@
 <?php
 
+use App\Enums\RACStatus;
+use App\Enums\SPSStatus;
 use App\Models\Forms\Marketing\Marketing;
 use App\Models\Forms\Marketing\MarketingMechanic;
 use App\Models\Forms\Marketing\MarketingProgram;
@@ -323,4 +325,116 @@ test('has pending changes includes Marketing recommendations', function () {
     app(MarketingService::class)->create($user, marketingValidInput($program, $region));
 
     expect(app(SyncService::class)->hasPendingChanges())->toBeTrue();
+});
+
+function marketingWorkflowServerMarketing(
+    User $user,
+    MarketingProgram $program,
+    RegionType $region,
+    int $spsStatus = SPSStatus::PENDING->value,
+    int $racStatus = RACStatus::PENDING->value,
+): Marketing {
+    return Marketing::create([
+        'local_uuid' => (string) Str::uuid(),
+        'server_id' => 900,
+        'submitted_at' => now(),
+        'submitted_by' => $user->id,
+        'region_type_id' => $region->id,
+        'role_id' => $user->roles()->value('id'),
+        'program_id' => $program->id,
+        'duration_start_at' => now(),
+        'duration_end_at' => now()->addMonth(),
+        'objective' => 'Objective',
+        'name' => 'Name',
+        'mechanics_description' => 'Mechanics',
+        'sps_status' => $spsStatus,
+        'rac_status' => $racStatus,
+        'rac_return_count' => 0,
+        'sync_status' => 'synced',
+    ]);
+}
+
+test('refreshing Marketing approval statuses persists the Portal state locally', function () {
+    $user = marketingWorkflowUser();
+    $program = marketingWorkflowProgram(serverId: 55);
+    $region = marketingWorkflowRegion();
+    $marketing = marketingWorkflowServerMarketing($user, $program, $region);
+
+    Http::fake([
+        '*/api/forms/marketing/pull' => Http::response([
+            'marketings' => [[
+                'id' => 900,
+                'salescall_id' => null,
+                'submitted_by' => $user->server_id,
+                'sps_status' => SPSStatus::ENDORSED->value,
+                'rac_status' => RACStatus::APPROVED->value,
+                'rac_return_count' => 1,
+            ]],
+        ], 200),
+    ]);
+
+    $this->actingAs($user);
+    $result = app(MarketingService::class)->refreshApprovalStatuses();
+
+    expect($result['failed'])->toBeFalse()
+        ->and($result['marketings'])->toHaveCount(1);
+
+    $marketing->refresh();
+
+    expect($marketing->sps_status)->toBe(SPSStatus::ENDORSED)
+        ->and($marketing->rac_status)->toBe(RACStatus::APPROVED)
+        ->and($marketing->rac_return_count)->toBe(1)
+        ->and($marketing->isApproved())->toBeTrue();
+});
+
+test('the Marketing list read persists approval status on the local row', function () {
+    $user = marketingWorkflowUser();
+    $program = marketingWorkflowProgram(serverId: 55);
+    $region = marketingWorkflowRegion();
+    $marketing = marketingWorkflowServerMarketing($user, $program, $region);
+
+    Http::fake([
+        '*/api/forms/marketing/pull' => Http::response([
+            'marketings' => [[
+                'id' => 900,
+                'name' => 'Server name',
+                'program_id' => 55,
+                'region_type_id' => $region->id,
+                'salescall_id' => null,
+                'submitted_by' => $user->server_id,
+                'sps_status' => SPSStatus::ENDORSED->value,
+                'rac_status' => RACStatus::APPROVED->value,
+                'rac_return_count' => 0,
+                'volumes' => [],
+                'realizations' => [],
+                'mechanics' => [],
+            ]],
+        ], 200),
+    ]);
+
+    $this->actingAs($user);
+    app(MarketingService::class)->submissions();
+
+    expect($marketing->fresh()->rac_status)->toBe(RACStatus::APPROVED);
+});
+
+test('a failed Marketing approval refresh keeps the last known status', function () {
+    $user = marketingWorkflowUser();
+    $program = marketingWorkflowProgram(serverId: 55);
+    $region = marketingWorkflowRegion();
+    $marketing = marketingWorkflowServerMarketing(
+        $user,
+        $program,
+        $region,
+        spsStatus: SPSStatus::ENDORSED->value,
+        racStatus: RACStatus::APPROVED->value,
+    );
+
+    Http::fake(['*/api/forms/marketing/pull' => Http::response([], 500)]);
+
+    $this->actingAs($user);
+    $result = app(MarketingService::class)->refreshApprovalStatuses();
+
+    expect($result['failed'])->toBeTrue()
+        ->and($marketing->fresh()->rac_status)->toBe(RACStatus::APPROVED);
 });

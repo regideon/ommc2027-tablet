@@ -23,14 +23,6 @@
             <button type="button" @click="cancelMarketing()" class="h-10 px-4 rounded-xl border border-gray-200 text-[#434654] font-bold">Back</button>
         </div>
 
-        @if ($crrRequired)
-            <div role="alert" class="rounded-xl border border-amber-300 bg-amber-50 px-4 py-4 text-sm text-amber-900 space-y-3">
-                <p class="font-bold">Create a CRR for this sales call first</p>
-                <p>A Marketing Recommendation for this visit needs a CRR (Customer Call Report) on the same sales call. Create the CRR, then come back to this form.</p>
-                <a href="{{ \App\Filament\Pages\CrrFormPage::getUrl(['salescall' => $salescall_uuid]) }}"
-                    class="inline-flex items-center justify-center h-11 px-4 rounded-xl bg-[#890f00] text-white font-bold">Create CRR</a>
-            </div>
-        @else
         <form x-ref="marketingEntryForm" @submit.prevent="saveMarketingForm()" class="space-y-4">
             @if ($programLoadError !== '')
                 <div role="alert" class="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -229,7 +221,6 @@
                 </button>
             </div>
         </form>
-        @endif
     </div>
 
     <style>

@@ -1,10 +1,15 @@
 <?php
 
+use App\Enums\RACStatus;
+use App\Enums\SPSStatus;
 use App\Models\Customer;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrAttachment;
 use App\Models\Forms\CRR\CrrProgram;
+use App\Models\Forms\Marketing\Marketing;
+use App\Models\Forms\Marketing\MarketingProgram;
 use App\Models\Itinerary;
+use App\Models\RegionType;
 use App\Models\Salescall;
 use App\Models\User;
 use App\Services\Forms\CrrService;
@@ -15,6 +20,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Spatie\Permission\Models\Role;
 
 uses(RefreshDatabase::class);
 
@@ -484,3 +490,77 @@ function crrWorkflowSalescall(User $user): Salescall
         'actual_in' => now(),
     ]);
 }
+
+function crrWorkflowMarketing(
+    User $user,
+    Salescall $salescall,
+    int $racStatus = RACStatus::APPROVED->value,
+): Marketing {
+    $program = MarketingProgram::create(['name' => 'Price Support']);
+    $region = RegionType::create(['name' => 'Metro Manila']);
+    $role = Role::firstOrCreate(['name' => 'drm', 'guard_name' => 'web']);
+
+    return Marketing::create([
+        'local_uuid' => (string) Str::uuid(),
+        'submitted_at' => now(),
+        'submitted_by' => $user->id,
+        'region_type_id' => $region->id,
+        'role_id' => $role->id,
+        'program_id' => $program->id,
+        'salescall_id' => $salescall->id,
+        'duration_start_at' => now(),
+        'duration_end_at' => now()->addMonth(),
+        'objective' => 'Grow monthly case volume',
+        'name' => 'Branch Expansion Support',
+        'mechanics_description' => 'Volume rebate per incremental case.',
+        'sps_status' => SPSStatus::ENDORSED->value,
+        'rac_status' => $racStatus,
+        'rac_return_count' => 0,
+        'sync_status' => 'pending',
+    ]);
+}
+
+test('creating a CRR linked to a sales call requires an approved Marketing recommendation', function () {
+    $user = crrWorkflowUser();
+    $program = crrWorkflowProgram();
+    $salescall = crrWorkflowSalescall($user);
+
+    crrWorkflowMarketing($user, $salescall, RACStatus::PENDING->value);
+
+    expect(fn () => app(CrrService::class)->create($user, crrValidInput($program, [
+        'salescall_uuid' => $salescall->local_uuid,
+    ])))->toThrow(ValidationException::class);
+
+    expect(Crr::query()->count())->toBe(0);
+});
+
+test('creating a CRR linked to a sales call with an approved Marketing recommendation succeeds', function () {
+    $user = crrWorkflowUser();
+    $program = crrWorkflowProgram();
+    $salescall = crrWorkflowSalescall($user);
+
+    crrWorkflowMarketing($user, $salescall);
+
+    $crr = app(CrrService::class)->create($user, crrValidInput($program, [
+        'salescall_uuid' => $salescall->local_uuid,
+    ]));
+
+    expect($crr->salescall_id)->toBe($salescall->id);
+});
+
+test('a Marketing for another sales call or another rep does not unlock CRR creation', function () {
+    $user = crrWorkflowUser();
+    $otherUser = crrWorkflowUser();
+    $program = crrWorkflowProgram();
+    $salescall = crrWorkflowSalescall($user);
+    $otherSalescall = crrWorkflowSalescall($user);
+
+    crrWorkflowMarketing($otherUser, $salescall);
+    crrWorkflowMarketing($user, $otherSalescall);
+
+    expect(fn () => app(CrrService::class)->create($user, crrValidInput($program, [
+        'salescall_uuid' => $salescall->local_uuid,
+    ])))->toThrow(ValidationException::class);
+
+    expect(Crr::query()->count())->toBe(0);
+});

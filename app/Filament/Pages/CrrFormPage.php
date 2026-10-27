@@ -7,7 +7,9 @@ use App\Filament\Concerns\LocksRequestedSalescall;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrProgram;
 use App\Models\Salescall;
+use App\Models\User;
 use App\Services\Forms\CrrService;
+use App\Services\Forms\MarketingService;
 use App\Support\NativeMediaPath;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
@@ -35,6 +37,12 @@ class CrrFormPage extends Page
     public ?Crr $crr = null;
 
     public bool $isEdit = false;
+
+    /**
+     * Approval gate for a CRR opened from a sales call: not_required,
+     * approved, pending, none, or unknown.
+     */
+    public string $marketingApprovalState = 'not_required';
 
     /** @var array<int, array{id: int, name: string}> */
     public array $programs = [];
@@ -118,6 +126,10 @@ class CrrFormPage extends Page
         }
 
         $this->applyRequestedSalescallLock();
+
+        if ($this->salescallLocked) {
+            $this->marketingApprovalState = $this->marketingApprovalStateForSelectedSalescall();
+        }
 
         $this->date_implemented = now()->toDateString();
     }
@@ -291,6 +303,26 @@ class CrrFormPage extends Page
         unset($this->attachments[$index]);
         $this->attachments = array_values($this->attachments);
         unset($this->formErrors['attachments']);
+    }
+
+    private function marketingApprovalStateForSelectedSalescall(): string
+    {
+        $user = auth()->user();
+
+        if (! $user instanceof User) {
+            return 'not_required';
+        }
+
+        $salescall = Salescall::query()
+            ->where('local_uuid', $this->salescall_uuid)
+            ->where('created_by', $user->id)
+            ->first();
+
+        if (! $salescall instanceof Salescall) {
+            return 'not_required';
+        }
+
+        return app(MarketingService::class)->approvalStateForSalescall($user, $salescall);
     }
 
     private function dispatchAttachmentFromPath(string $sourcePath): void

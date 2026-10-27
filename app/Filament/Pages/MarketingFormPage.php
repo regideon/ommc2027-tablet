@@ -4,7 +4,6 @@ namespace App\Filament\Pages;
 
 use App\Enums\FormKey;
 use App\Filament\Concerns\LocksRequestedSalescall;
-use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\Marketing\Marketing;
 use App\Models\Forms\Marketing\MarketingMechanic;
 use App\Models\Forms\Marketing\MarketingProgram;
@@ -33,13 +32,6 @@ class MarketingFormPage extends Page
     public ?Marketing $marketing = null;
 
     public bool $isEdit = false;
-
-    /**
-     * True when the form was opened from a sales call whose rep has no CRR
-     * yet. A Marketing Recommendation for a visit needs its CRR first, so the
-     * form is replaced by a create-the-CRR-first warning.
-     */
-    public bool $crrRequired = false;
 
     /** @var array<int, array{id: int, name: string}> */
     public array $programs = [];
@@ -174,10 +166,6 @@ class MarketingFormPage extends Page
 
         $this->applyRequestedSalescallLock();
 
-        if ($this->salescallLocked && ! $this->hasCrrForSelectedSalescall()) {
-            $this->crrRequired = true;
-        }
-
         $this->duration_start_at = now()->toDateString();
         $this->duration_end_at = now()->addMonth()->toDateString();
 
@@ -270,23 +258,6 @@ class MarketingFormPage extends Page
     public function cancel(): void
     {
         $this->redirect(FormsPage::getUrl(['form' => FormKey::MARKETING->value]));
-    }
-
-    /**
-     * Whether the logged-in rep already has a CRR for the locked sales call.
-     */
-    private function hasCrrForSelectedSalescall(): bool
-    {
-        $salescallId = Salescall::query()
-            ->where('local_uuid', $this->salescall_uuid)
-            ->where('created_by', auth()->id())
-            ->value('id');
-
-        return $salescallId !== null
-            && Crr::query()
-                ->where('salescall_id', $salescallId)
-                ->where('submitted_by', auth()->id())
-                ->exists();
     }
 
     /**

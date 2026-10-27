@@ -83,4 +83,12 @@ class Marketing extends Model
         return $this->sps_status === SPSStatus::PENDING
             && $this->rac_status === RACStatus::PENDING;
     }
+
+    /**
+     * Whether RAC has given the Marketing Recommendation its final approval.
+     */
+    public function isApproved(): bool
+    {
+        return $this->rac_status === RACStatus::APPROVED;
+    }
 }

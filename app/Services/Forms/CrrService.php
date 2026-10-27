@@ -3,12 +3,14 @@
 namespace App\Services\Forms;
 
 use App\Contracts\FormSubmissionService;
+use App\Enums\RACStatus;
 use App\Enums\RSMStatus;
 use App\Enums\SPMStatus;
 use App\Enums\SPSStatus;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrAttachment;
 use App\Models\Forms\CRR\CrrProgram;
+use App\Models\Forms\Marketing\Marketing;
 use App\Models\Salescall;
 use App\Models\User;
 use App\Services\SyncService;
@@ -36,7 +38,10 @@ class CrrService extends AbstractFormService implements FormSubmissionService
 
     private bool $programReadFailed = false;
 
-    public function __construct(private readonly SyncService $syncService) {}
+    public function __construct(
+        private readonly SyncService $syncService,
+        private readonly MarketingService $marketingService,
+    ) {}
 
     /*
     |--------------------------------------------------------------------------
@@ -135,15 +140,23 @@ class CrrService extends AbstractFormService implements FormSubmissionService
     public function create(User $user, array $input): Crr
     {
         $validated = Validator::make($input, $this->rules())->validate();
+        $salescallId = $this->resolveSalescall($validated['salescall_uuid'] ?? null);
+
+        if ($salescallId !== null && ! $this->approvedMarketingExistsFor($salescallId, $user)) {
+            throw ValidationException::withMessages([
+                'salescall_uuid' => ['Create and get approval for a Marketing Recommendation for this sales call before creating a CRR.'],
+            ]);
+        }
+
         $attachments = $this->normalizeAttachments($this->attachmentPayload($input));
         $storedPaths = [];
 
         try {
-            return DB::transaction(function () use ($user, $validated, $attachments, &$storedPaths): Crr {
+            return DB::transaction(function () use ($user, $validated, $salescallId, $attachments, &$storedPaths): Crr {
                 $crr = Crr::create([
                     'local_uuid' => (string) Str::uuid(),
                     'submitted_by' => $user->id,
-                    'salescall_id' => $this->resolveSalescall($validated['salescall_uuid'] ?? null),
+                    'salescall_id' => $salescallId,
                     'crr_program_id' => $validated['crr_program_id'],
                     'date_implemented' => $validated['date_implemented'] ?? null,
                     'amount' => $validated['amount'],
@@ -446,6 +459,28 @@ class CrrService extends AbstractFormService implements FormSubmissionService
         }
 
         return '/_assets/'.$relativePath;
+    }
+
+    /**
+     * A CRR tied to a visit requires the rep's own RAC-approved Marketing
+     * Recommendation for that same visit.
+     */
+    private function approvedMarketingExistsFor(int $salescallId, User $user): bool
+    {
+        $approvedLocally = Marketing::query()
+            ->where('salescall_id', $salescallId)
+            ->where('submitted_by', $user->id)
+            ->where('rac_status', RACStatus::APPROVED->value)
+            ->exists();
+
+        if ($approvedLocally) {
+            return true;
+        }
+
+        $salescall = Salescall::query()->find($salescallId);
+
+        return $salescall instanceof Salescall
+            && $this->marketingService->approvalStateForSalescall($user, $salescall) === 'approved';
     }
 
     /**

@@ -79,6 +79,24 @@
             <button type="button" @click="cancelCrr()" class="h-10 px-4 rounded-xl border border-gray-200 text-[#434654] font-bold">Back</button>
         </div>
 
+        @if (in_array($marketingApprovalState, ['none', 'pending', 'unknown'], true))
+            <div role="alert" class="rounded-xl border border-amber-300 bg-amber-50 px-4 py-4 text-sm text-amber-900 space-y-3">
+                @if ($marketingApprovalState === 'none')
+                    <p class="font-bold">Create a Marketing Recommendation for this sales call first</p>
+                    <p>A CRR for this visit needs an approved Marketing Recommendation on the same sales call. Create the Marketing Recommendation, then come back after RAC approves it.</p>
+                    <a href="{{ \App\Filament\Pages\MarketingFormPage::getUrl(['salescall' => $salescall_uuid]) }}"
+                        class="inline-flex items-center justify-center h-11 px-4 rounded-xl bg-[#890f00] text-white font-bold">Create Marketing Recommendation</a>
+                @elseif ($marketingApprovalState === 'pending')
+                    <p class="font-bold">Marketing approval required</p>
+                    <p>The Marketing Recommendation for this sales call must be approved before you can create a CRR.</p>
+                    <a href="{{ \App\Filament\Pages\FormsPage::getUrl(['form' => 'marketing']) }}"
+                        class="inline-flex items-center justify-center h-11 px-4 rounded-xl bg-[#890f00] text-white font-bold">Check Marketing status</a>
+                @else
+                    <p class="font-bold">Marketing approval could not be confirmed</p>
+                    <p>Reconnect and reopen this form to confirm that the Marketing Recommendation for this sales call is approved.</p>
+                @endif
+            </div>
+        @else
         <form x-ref="crrEntryForm" @submit.prevent="saveCrrForm()" class="space-y-4">
             @if ($programLoadError !== '')
                 <div role="alert" class="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -182,6 +200,7 @@
                 </button>
             </div>
         </form>
+        @endif
     </div>
 
     <style>
