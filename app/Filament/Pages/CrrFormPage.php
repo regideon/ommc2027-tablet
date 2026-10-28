@@ -87,43 +87,32 @@ class CrrFormPage extends Page
             ? 'CRR programs could not be loaded. Reconnect and reopen this form.'
             : '';
 
-        $this->salescalls = Salescall::query()
-            ->with('customer')
-            ->where('created_by', auth()->id())
-            ->latest('id')
-            ->get()
-            ->map(fn (Salescall $salescall): array => [
-                'uuid' => $salescall->local_uuid,
-                'label' => $salescall->customer?->name
-                    ?? $salescall->ref_number
-                    ?? ('Salescall #'.$salescall->id),
-            ])
-            ->values()
-            ->all();
-
         $crrId = filter_var(request()->query('crr'), FILTER_VALIDATE_INT);
 
-        if ($crrId !== false && $crrId !== null) {
-            $crr = Crr::query()
+        $crr = $crrId !== false && $crrId !== null
+            ? Crr::query()
                 ->with('salescall')
                 ->where('submitted_by', auth()->id())
-                ->find($crrId);
+                ->find($crrId)
+            : null;
 
-            if ($crr instanceof Crr) {
-                abort_unless($crr->isEditable(), 403);
+        if ($crr instanceof Crr) {
+            abort_unless($crr->isEditable(), 403);
 
-                $this->crr = $crr;
-                $this->isEdit = true;
-                $this->crr_program_id = $crr->crr_program_id;
-                $this->date_implemented = $crr->date_implemented;
-                $this->amount = $crr->amount !== null ? (string) $crr->amount : null;
-                $this->details = $crr->details;
-                $this->remarks = $crr->remarks;
-                $this->salescall_uuid = $crr->salescall?->local_uuid;
+            $this->salescalls = $this->salescallOptions();
+            $this->crr = $crr;
+            $this->isEdit = true;
+            $this->crr_program_id = $crr->crr_program_id;
+            $this->date_implemented = $crr->date_implemented;
+            $this->amount = $crr->amount !== null ? (string) $crr->amount : null;
+            $this->details = $crr->details;
+            $this->remarks = $crr->remarks;
+            $this->salescall_uuid = $crr->salescall?->local_uuid;
 
-                return;
-            }
+            return;
         }
+
+        $this->salescalls = $this->salescallOptions(approvedOnly: true);
 
         $this->applyRequestedSalescallLock();
 
@@ -303,6 +292,41 @@ class CrrFormPage extends Page
         unset($this->attachments[$index]);
         $this->attachments = array_values($this->attachments);
         unset($this->formErrors['attachments']);
+    }
+
+    /**
+     * @return array<int, array{uuid: ?string, label: string}>
+     */
+    private function salescallOptions(bool $approvedOnly = false): array
+    {
+        $user = auth()->user();
+        $query = Salescall::query()
+            ->with('customer')
+            ->where('created_by', $user?->id);
+
+        if ($approvedOnly && $user instanceof User) {
+            $requestedUuid = trim((string) request()->query('salescall'));
+
+            $query->where(function ($query) use ($user, $requestedUuid): void {
+                $query->whereIn('id', app(MarketingService::class)->locallyApprovedSalescallIdsFor($user));
+
+                if ($requestedUuid !== '') {
+                    $query->orWhere('local_uuid', $requestedUuid);
+                }
+            });
+        }
+
+        return $query
+            ->latest('id')
+            ->get()
+            ->map(fn (Salescall $salescall): array => [
+                'uuid' => $salescall->local_uuid,
+                'label' => $salescall->customer?->name
+                    ?? $salescall->ref_number
+                    ?? ('Salescall #'.$salescall->id),
+            ])
+            ->values()
+            ->all();
     }
 
     private function marketingApprovalStateForSelectedSalescall(): string
