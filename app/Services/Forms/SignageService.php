@@ -17,13 +17,13 @@ use App\Models\StagedAttachment;
 use App\Models\User;
 use App\Services\StagedAttachmentService;
 use App\Services\SyncService;
+use App\Support\Forms\SignageRules;
 use Closure;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
-use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
@@ -149,7 +149,7 @@ class SignageService extends AbstractFormService implements FormSubmissionServic
      */
     public function create(User $user, array $input): Signage
     {
-        $validated = Validator::make($input, $this->rules())->validate();
+        $validated = SignageRules::validate($input);
 
         $staged = $this->normalizeStagedAttachments($validated['staged_attachments'] ?? []);
 
@@ -204,7 +204,7 @@ class SignageService extends AbstractFormService implements FormSubmissionServic
             ]);
         }
 
-        $validated = Validator::make($input, $this->rules())->validate();
+        $validated = SignageRules::validate($input);
 
         $staged = $this->normalizeStagedAttachments($validated['staged_attachments'] ?? []);
         $removed = $this->normalizeIds($validated['remove_attachments'] ?? []);
@@ -329,7 +329,11 @@ class SignageService extends AbstractFormService implements FormSubmissionServic
                 continue;
             }
 
-            $signage = Signage::query()->firstOrNew(['server_id' => $row['id']]);
+            $clientUuid = is_string($row['client_uuid'] ?? null) && $row['client_uuid'] !== '' ? $row['client_uuid'] : null;
+            $signage = $clientUuid !== null
+                ? Signage::query()->where('local_uuid', $clientUuid)->first()
+                : null;
+            $signage ??= Signage::query()->firstOrNew(['server_id' => $row['id']]);
 
             // Never overwrite local work that has not been pushed yet.
             if ($signage->exists && $signage->sync_status !== 'synced') {
@@ -625,27 +629,5 @@ class SignageService extends AbstractFormService implements FormSubmissionServic
         }
 
         return $salescall->customer?->name ?? ('Salescall #'.$salescall->id);
-    }
-
-    /**
-     * Local user-input rules. The Portal push request remains the final
-     * server-side validator.
-     *
-     * @return array<string, mixed>
-     */
-    private function rules(): array
-    {
-        return [
-            'salescall_uuid' => ['nullable', 'string', 'max:36'],
-            'product_id' => ['required', 'integer', 'exists:signage_products,id'],
-            'type_id' => ['required', 'integer', 'exists:signage_types,id'],
-            'category' => ['required', 'integer', 'in:'.implode(',', SignageCategory::values())],
-            'name' => ['required', 'string', 'max:255'],
-            'staged_attachments' => ['nullable', 'array'],
-            'staged_attachments.*.type' => ['required_with:staged_attachments', 'integer', 'in:'.implode(',', SignageAttachmentType::values())],
-            'staged_attachments.*.staged_id' => ['required_with:staged_attachments', 'integer'],
-            'remove_attachments' => ['nullable', 'array'],
-            'remove_attachments.*' => ['integer'],
-        ];
     }
 }

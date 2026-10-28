@@ -121,6 +121,29 @@ test('saving without a signature reports a field error and creates nothing', fun
     $component->assertNoRedirect();
 });
 
+test('Giveaway validation messages use friendly field names instead of row indexes', function () {
+    Storage::fake('local');
+    $user = giveawayFormPageUser();
+    $this->actingAs($user);
+
+    $component = Livewire::test(GiveawayFormPage::class)
+        ->assertOk()
+        ->set('name', 'Store Giveaway')
+        ->set('items.0.category', null)
+        ->set('items.0.name', '')
+        ->call('save');
+
+    $errors = $component->get('formErrors');
+
+    expect($errors['items.0.category'][0])->toBe('The category field is required.')
+        ->and($errors['items.0.name'][0])->toBe('The item name field is required.')
+        ->and(collect($errors)->flatten()->implode(' '))->not->toMatch('/\.\d+\./');
+
+    expect(Giveaway::query()->count())->toBe(0);
+
+    $component->assertNoRedirect();
+});
+
 test('the Giveaway form renders a signature pad per item row', function () {
     Storage::fake('local');
     $user = giveawayFormPageUser();

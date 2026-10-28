@@ -646,6 +646,42 @@ test('editing a non-editable CRR is refused', function () {
         ->assertSet('actionError', '');
 });
 
+test('a server form row with a matching client_uuid opens the local pending row instead of adopting a duplicate', function () {
+    $user = formsPageUser();
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+
+    $program = CrrProgram::create(['name' => 'Price Support', 'server_id' => 55]);
+
+    $crr = app(CrrService::class)->create($user, [
+        'crr_program_id' => $program->id,
+        'date_implemented' => '2026-10-11',
+        'amount' => '100.00',
+        'details' => null,
+        'remarks' => null,
+        'salescall_uuid' => null,
+        'attachments' => [],
+    ]);
+
+    formsPageFakePortal(crrs: [[
+        'id' => 77,
+        'client_uuid' => $crr->local_uuid,
+        'crr_program_id' => 55,
+        'amount' => '100.00',
+        'rsm_status' => 1,
+        'sps_status' => 1,
+        'spm_status' => 1,
+        'attachments' => [],
+    ]]);
+
+    Livewire::test(FormsPage::class)
+        ->call('selectRow', 'server:77')
+        ->call('editSelectedRow')
+        ->assertRedirect(CrrFormPage::getUrl(['crr' => $crr->id]));
+
+    expect(Crr::query()->count())->toBe(1);
+});
+
 test('editing an editable CRR redirects to the CRR form', function () {
     $user = formsPageUser();
     $this->actingAs($user);

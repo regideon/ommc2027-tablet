@@ -17,13 +17,13 @@ use App\Models\StagedAttachment;
 use App\Models\User;
 use App\Services\StagedAttachmentService;
 use App\Services\SyncService;
+use App\Support\Forms\TradeCheckSubmissionRules;
 use Closure;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
-use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
@@ -132,7 +132,7 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
      */
     public function create(User $user, array $input): TradeCheck
     {
-        $validated = Validator::make($input, $this->rules())->validate();
+        $validated = TradeCheckSubmissionRules::validate($input);
 
         $tradeCheck = TradeCheck::query()->with('group.items')->find($validated['trade_check_id']);
 
@@ -186,7 +186,7 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
             ]);
         }
 
-        $validated = Validator::make($input, $this->rules(includeTemplate: false))->validate();
+        $validated = TradeCheckSubmissionRules::validate($input, includeTemplate: false);
 
         $this->assertRequiredAnswers($tradeCheck->load('group.items'), $validated['answers'] ?? []);
         $attachments = $this->normalizeItemAttachments($input['attachments'] ?? []);
@@ -262,7 +262,16 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
                 continue;
             }
 
-            $tradeCheck = TradeCheck::query()->firstOrNew(['server_id' => $row['id']]);
+            $clientUuid = is_string($row['client_uuid'] ?? null) && $row['client_uuid'] !== '' ? $row['client_uuid'] : null;
+            $tradeCheck = $clientUuid !== null
+                ? TradeCheck::query()->where('local_uuid', $clientUuid)->first()
+                : null;
+            $tradeCheck ??= TradeCheck::query()->firstOrNew(['server_id' => $row['id']]);
+
+            // Never overwrite local work that has not been pushed yet.
+            if ($tradeCheck->exists && $tradeCheck->sync_status !== 'synced') {
+                continue;
+            }
 
             if (! $tradeCheck->exists) {
                 $tradeCheck->local_uuid = (string) Str::uuid();
@@ -753,23 +762,5 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
         }
 
         return $salescall->customer?->name ?? ('Salescall #'.$salescall->id);
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function rules(bool $includeTemplate = true): array
-    {
-        $rules = [
-            'salescall_uuid' => ['nullable', 'string', 'max:36'],
-            'answers' => ['nullable', 'array'],
-            'remove_attachments' => ['nullable', 'array'],
-        ];
-
-        if ($includeTemplate) {
-            $rules['trade_check_id'] = ['required', 'integer', 'exists:trade_checks,id'];
-        }
-
-        return $rules;
     }
 }

@@ -1412,11 +1412,16 @@ test('customer add page still rejects an invalid access user id', function () {
     $this->actingAs($user);
     Http::fake();
 
-    Livewire::test(CustomerCreatePage::class)
+    $component = Livewire::test(CustomerCreatePage::class)
         ->set(validCustomerCreateState())
         ->set('access_user_ids', [999999])
         ->call('saveCustomer')
         ->assertHasErrors(['access_user_ids.0']);
+
+    expect($component->html())
+        ->not->toContain('access user ids.0')
+        ->not->toContain('Access User Ids 0')
+        ->toContain('The selected access user is invalid.');
 
     expect(DB::table('customers')->where('name', 'Diagnostic Customer')->exists())->toBeFalse();
     Http::assertNotSent(fn ($request): bool => str_ends_with($request->url(), '/api/customers/sync'));

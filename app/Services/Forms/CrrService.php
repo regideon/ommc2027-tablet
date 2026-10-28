@@ -14,12 +14,12 @@ use App\Models\Forms\Marketing\Marketing;
 use App\Models\Salescall;
 use App\Models\User;
 use App\Services\SyncService;
+use App\Support\Forms\CrrRules;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
@@ -139,7 +139,7 @@ class CrrService extends AbstractFormService implements FormSubmissionService
      */
     public function create(User $user, array $input): Crr
     {
-        $validated = Validator::make($input, $this->rules())->validate();
+        $validated = CrrRules::validate($input);
         $salescallId = $this->resolveSalescall($validated['salescall_uuid'] ?? null);
 
         if ($salescallId !== null && ! $this->approvedMarketingExistsFor($salescallId, $user)) {
@@ -198,7 +198,7 @@ class CrrService extends AbstractFormService implements FormSubmissionService
             ]);
         }
 
-        $validated = Validator::make($input, $this->rules())->validate();
+        $validated = CrrRules::validate($input);
         $attachments = $this->normalizeAttachments($this->attachmentPayload($input));
         $storedPaths = [];
 
@@ -347,6 +347,7 @@ class CrrService extends AbstractFormService implements FormSubmissionService
         return [
             'id' => null,
             'server_id' => $serverCrr['id'],
+            'client_uuid' => $serverCrr['client_uuid'] ?? null,
             'local_uuid' => null,
             'program' => $programsByServerId->get($programId)?->name ?? '—',
             'date_implemented' => $serverCrr['date_implemented'] ?? null,
@@ -481,24 +482,6 @@ class CrrService extends AbstractFormService implements FormSubmissionService
 
         return $salescall instanceof Salescall
             && $this->marketingService->approvalStateForSalescall($user, $salescall) === 'approved';
-    }
-
-    /**
-     * Local user-input rules. The Portal push request remains the final
-     * server-side validator.
-     *
-     * @return array<string, mixed>
-     */
-    private function rules(): array
-    {
-        return [
-            'crr_program_id' => ['required', 'integer', 'exists:crr_programs,id'],
-            'date_implemented' => ['nullable', 'string', 'max:255'],
-            'amount' => ['required', 'numeric', 'gt:0', 'decimal:0,2'],
-            'details' => ['nullable', 'string'],
-            'remarks' => ['nullable', 'string'],
-            'salescall_uuid' => ['nullable', 'string', 'max:36'],
-        ];
     }
 
     /**

@@ -15,13 +15,13 @@ use App\Models\StagedAttachment;
 use App\Models\User;
 use App\Services\StagedAttachmentService;
 use App\Services\SyncService;
+use App\Support\Forms\GiveawayRules;
 use Closure;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
-use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
@@ -121,7 +121,7 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
      */
     public function create(User $user, array $input): Giveaway
     {
-        $validated = Validator::make($input, $this->rules())->validate();
+        $validated = GiveawayRules::validate($input);
 
         $items = $this->normalizeItems($validated['items'] ?? []);
         $this->assertItems($items);
@@ -176,7 +176,7 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
             ]);
         }
 
-        $validated = Validator::make($input, $this->rules())->validate();
+        $validated = GiveawayRules::validate($input);
 
         $items = $this->normalizeItems($validated['items'] ?? []);
         $this->assertItems($items);
@@ -307,7 +307,11 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
                 continue;
             }
 
-            $giveaway = Giveaway::query()->firstOrNew(['server_id' => $row['id']]);
+            $clientUuid = is_string($row['client_uuid'] ?? null) && $row['client_uuid'] !== '' ? $row['client_uuid'] : null;
+            $giveaway = $clientUuid !== null
+                ? Giveaway::query()->where('local_uuid', $clientUuid)->first()
+                : null;
+            $giveaway ??= Giveaway::query()->firstOrNew(['server_id' => $row['id']]);
 
             // Never overwrite local work that has not been pushed yet.
             if ($giveaway->exists && $giveaway->sync_status !== 'synced') {
@@ -723,26 +727,5 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
         }
 
         return $salescall->customer?->name ?? ('Salescall #'.$salescall->id);
-    }
-
-    /**
-     * Local user-input rules. The Portal push request remains the final
-     * server-side validator.
-     *
-     * @return array<string, mixed>
-     */
-    private function rules(): array
-    {
-        return [
-            'salescall_uuid' => ['nullable', 'string', 'max:36'],
-            'name' => ['required', 'string', 'max:255'],
-            'items' => ['nullable', 'array'],
-            'items.*.id' => ['nullable', 'integer'],
-            'items.*.category' => ['required', 'integer'],
-            'items.*.name' => ['required', 'string', 'max:255'],
-            'items.*.answer' => ['nullable', 'string'],
-            'items.*.signature_id' => ['nullable', 'integer'],
-            'items.*.staged_signature_id' => ['nullable', 'integer'],
-        ];
     }
 }

@@ -18,13 +18,13 @@ use App\Models\StagedAttachment;
 use App\Models\User;
 use App\Services\StagedAttachmentService;
 use App\Services\SyncService;
+use App\Support\Forms\TradeRequestRules;
 use Closure;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
-use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
@@ -151,7 +151,7 @@ class TradeRequestService extends AbstractFormService implements FormSubmissionS
      */
     public function create(User $user, array $input): TradeRequest
     {
-        $validated = Validator::make($input, $this->rules())->validate();
+        $validated = TradeRequestRules::validate($input);
 
         $items = $this->normalizeItems($validated['items'] ?? []);
         $staged = $this->normalizeStagedAttachments($validated['staged_attachments'] ?? []);
@@ -206,7 +206,7 @@ class TradeRequestService extends AbstractFormService implements FormSubmissionS
             ]);
         }
 
-        $validated = Validator::make($input, $this->rules())->validate();
+        $validated = TradeRequestRules::validate($input);
 
         $items = $this->normalizeItems($validated['items'] ?? []);
         $staged = $this->normalizeStagedAttachments($validated['staged_attachments'] ?? []);
@@ -399,7 +399,11 @@ class TradeRequestService extends AbstractFormService implements FormSubmissionS
                 continue;
             }
 
-            $tradeRequest = $existingByServerId->get((int) $row['id'])
+            $clientUuid = is_string($row['client_uuid'] ?? null) && $row['client_uuid'] !== '' ? $row['client_uuid'] : null;
+            $tradeRequest = $clientUuid !== null
+                ? TradeRequest::query()->where('local_uuid', $clientUuid)->first()
+                : null;
+            $tradeRequest ??= $existingByServerId->get((int) $row['id'])
                 ?? new TradeRequest(['server_id' => $row['id']]);
 
             // Never overwrite local work that has not been pushed yet.
@@ -803,29 +807,5 @@ class TradeRequestService extends AbstractFormService implements FormSubmissionS
         }
 
         return $salescall->customer?->name ?? ('Salescall #'.$salescall->id);
-    }
-
-    /**
-     * Local user-input rules. The Portal push request remains the final
-     * server-side validator.
-     *
-     * @return array<string, mixed>
-     */
-    private function rules(): array
-    {
-        return [
-            'salescall_uuid' => ['nullable', 'string', 'max:36'],
-            'product_id' => ['required', 'integer', 'exists:trade_products,id'],
-            'items' => ['nullable', 'array'],
-            'items.*.trade_type_id' => ['required_with:items', 'integer', 'exists:trade_types,id'],
-            'items.*.quantity' => ['required_with:items', 'integer', 'min:0'],
-            'items.*.size' => ['nullable', 'integer', 'in:'.implode(',', Size::values())],
-            'items.*.description' => ['nullable', 'string'],
-            'staged_attachments' => ['nullable', 'array'],
-            'staged_attachments.*.type' => ['required_with:staged_attachments', 'integer', 'in:'.implode(',', TradeRequestAttachmentType::values())],
-            'staged_attachments.*.staged_id' => ['required_with:staged_attachments', 'integer'],
-            'remove_attachments' => ['nullable', 'array'],
-            'remove_attachments.*' => ['integer'],
-        ];
     }
 }

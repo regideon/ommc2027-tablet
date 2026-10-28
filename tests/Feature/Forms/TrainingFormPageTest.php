@@ -130,6 +130,32 @@ test('saving without participants reports an error and creates nothing', functio
     $component->assertNoRedirect();
 });
 
+test('Training validation messages use friendly field names instead of row indexes', function () {
+    Storage::fake('local');
+    $user = trainingFormPageUser();
+    $this->actingAs($user);
+
+    $component = Livewire::test(TrainingFormPage::class)->assertOk();
+    $topic = TrainingTopic::query()->firstOrFail();
+
+    $component
+        ->set('topic_choice', (string) $topic->id)
+        ->set('preferred_at', '2026-11-01T09:00')
+        ->set('participants.0.name', '')
+        ->set('participants.0.position_id', null)
+        ->call('save');
+
+    $errors = $component->get('formErrors');
+
+    expect($errors['participants.0.name'][0])->toBe('The name field is required.')
+        ->and($errors['participants.0.position_id'][0])->toBe('The position field is required.')
+        ->and(collect($errors)->flatten()->implode(' '))->not->toMatch('/\.\d+\./');
+
+    expect(Training::query()->count())->toBe(0);
+
+    $component->assertNoRedirect();
+});
+
 test('saving with a topic, a participant, and a Request attachment creates the Training', function () {
     Storage::fake('local');
     $user = trainingFormPageUser();

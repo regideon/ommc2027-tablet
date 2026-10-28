@@ -61,12 +61,12 @@
             <div class="grid grid-cols-2 gap-3">
                 <div>
                     <label class="field-label">Duration Start <span class="text-red-500">*</span></label>
-                    <input type="date" wire:model="duration_start_at" class="field-input">
+                    <input type="date" wire:model="duration_start_at" x-ref="durationStart" x-on:change="$refs.durationEnd.min = $event.target.value" class="field-input">
                     <p class="field-error">{{ $formErrors['duration_start_at'][0] ?? '' }}</p>
                 </div>
                 <div>
                     <label class="field-label">Duration End <span class="text-red-500">*</span></label>
-                    <input type="date" wire:model="duration_end_at" class="field-input">
+                    <input type="date" wire:model="duration_end_at" x-ref="durationEnd" x-bind:min="$refs.durationStart.value" class="field-input">
                     <p class="field-error">{{ $formErrors['duration_end_at'][0] ?? '' }}</p>
                 </div>
             </div>
@@ -160,12 +160,12 @@
                             </div>
                             <div>
                                 <label class="field-label">Start <span class="text-red-500">*</span></label>
-                                <input type="date" wire:model="realizations.{{ $index }}.start_at" class="field-input">
+                                <input type="date" wire:model="realizations.{{ $index }}.start_at" x-ref="realizationStart{{ $index }}" x-on:change="$refs.realizationEnd{{ $index }}.min = $event.target.value" class="field-input">
                                 <p class="field-error">{{ $formErrors["realizations.{$index}.start_at"][0] ?? '' }}</p>
                             </div>
                             <div>
                                 <label class="field-label">End <span class="text-red-500">*</span></label>
-                                <input type="date" wire:model="realizations.{{ $index }}.end_at" class="field-input">
+                                <input type="date" wire:model="realizations.{{ $index }}.end_at" x-ref="realizationEnd{{ $index }}" x-bind:min="$refs.realizationStart{{ $index }}.value" class="field-input">
                                 <p class="field-error">{{ $formErrors["realizations.{$index}.end_at"][0] ?? '' }}</p>
                             </div>
                         </div>

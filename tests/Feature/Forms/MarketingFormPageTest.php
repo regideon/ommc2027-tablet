@@ -174,6 +174,113 @@ test('saving a Marketing recommendation without a name reports a form error and 
     $component->assertNoRedirect();
 });
 
+test('Marketing validation messages use friendly field names instead of row indexes', function () {
+    $user = marketingFormPageUser();
+    $program = marketingFormPageProgram();
+    $region = marketingFormPageRegion();
+    $this->actingAs($user);
+
+    $component = Livewire::test(MarketingFormPage::class)
+        ->set('program_id', $program->id)
+        ->set('region_type_id', $region->id)
+        ->set('duration_start_at', '2026-11-01')
+        ->set('duration_end_at', '2027-01-31')
+        ->set('objective', 'Grow monthly case volume')
+        ->set('name', 'Branch Expansion Support')
+        ->set('mechanics_description', 'Volume rebate per incremental case.')
+        ->set('volumes', [['before_program' => null, 'during_program' => null, 'volume' => null]])
+        ->set('realizations', [['stage' => null, 'start_at' => null, 'end_at' => null, 'volume' => null]])
+        ->set('mechanics', [['period' => null, 'unit_price' => null, 'sub_total' => null]])
+        ->call('save');
+
+    $errors = $component->get('formErrors');
+
+    expect($errors['volumes.0.before_program'][0])->toBe('The before program field is required.')
+        ->and($errors['realizations.0.stage'][0])->toBe('The stage field is required.')
+        ->and($errors['mechanics.0.period'][0])->toBe('The period field is required.')
+        ->and(collect($errors)->flatten()->implode(' '))->not->toMatch('/\.\d+\./');
+
+    expect(Marketing::query()->count())->toBe(0);
+
+    $component->assertNoRedirect();
+});
+
+test('Marketing rejects end dates before their start dates', function () {
+    $user = marketingFormPageUser();
+    $program = marketingFormPageProgram();
+    $region = marketingFormPageRegion();
+    $this->actingAs($user);
+
+    $component = Livewire::test(MarketingFormPage::class)
+        ->set('program_id', $program->id)
+        ->set('region_type_id', $region->id)
+        ->set('duration_start_at', '2027-01-31')
+        ->set('duration_end_at', '2026-11-01')
+        ->set('objective', 'Grow monthly case volume')
+        ->set('name', 'Branch Expansion Support')
+        ->set('mechanics_description', 'Volume rebate per incremental case.')
+        ->set('volumes', [['before_program' => 1000, 'during_program' => 1500, 'volume' => 500]])
+        ->set('realizations', [[
+            'stage' => RealizationStage::FIRST_STAGE->value,
+            'start_at' => '2026-12-31',
+            'end_at' => '2026-11-01',
+            'volume' => 5000,
+        ]])
+        ->set('mechanics', [['period' => '2026-11-15', 'unit_price' => 1500, 'sub_total' => 7500]])
+        ->call('save');
+
+    $errors = $component->get('formErrors');
+
+    expect($errors['duration_end_at'][0])->toBe('The duration end must be on or after the duration start.')
+        ->and($errors['realizations.0.end_at'][0])->toBe('The end date must be on or after the start date.')
+        ->and(Marketing::query()->count())->toBe(0);
+
+    $component->assertNoRedirect();
+});
+
+test('Marketing accepts end dates equal to their start dates', function () {
+    $user = marketingFormPageUser();
+    $program = marketingFormPageProgram();
+    $region = marketingFormPageRegion();
+    $this->actingAs($user);
+
+    Livewire::test(MarketingFormPage::class)
+        ->set('program_id', $program->id)
+        ->set('region_type_id', $region->id)
+        ->set('duration_start_at', '2026-11-01')
+        ->set('duration_end_at', '2026-11-01')
+        ->set('objective', 'Grow monthly case volume')
+        ->set('name', 'Branch Expansion Support')
+        ->set('mechanics_description', 'Volume rebate per incremental case.')
+        ->set('volumes', [['before_program' => 1000, 'during_program' => 1500, 'volume' => 500]])
+        ->set('realizations', [[
+            'stage' => RealizationStage::FIRST_STAGE->value,
+            'start_at' => '2026-11-01',
+            'end_at' => '2026-11-01',
+            'volume' => 5000,
+        ]])
+        ->set('mechanics', [['period' => '2026-11-15', 'unit_price' => 1500, 'sub_total' => 7500]])
+        ->call('save')
+        ->assertRedirect(FormsPage::getUrl(['form' => 'marketing']));
+
+    expect(Marketing::query()->count())->toBe(1);
+});
+
+test('the Marketing date pickers prevent end dates before their start dates', function () {
+    $user = marketingFormPageUser();
+    marketingFormPageProgram();
+    marketingFormPageRegion();
+    $this->actingAs($user);
+
+    Livewire::test(MarketingFormPage::class)
+        ->assertOk()
+        ->assertDontSee('nextDate', false)
+        ->assertSee('x-bind:min="$refs.durationStart.value"', false)
+        ->assertSee('x-bind:min="$refs.realizationStart0.value"', false)
+        ->assertSee('x-on:change="$refs.durationEnd.min = $event.target.value"', false)
+        ->assertSee('x-on:change="$refs.realizationEnd0.min = $event.target.value"', false);
+});
+
 test('the edit route loads a pending Marketing recommendation and saves an update', function () {
     $user = marketingFormPageUser();
     $program = marketingFormPageProgram();

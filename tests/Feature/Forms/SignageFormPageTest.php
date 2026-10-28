@@ -126,6 +126,28 @@ test('saving without a Request attachment reports an error and creates nothing',
     $component->assertNoRedirect();
 });
 
+test('Signage validation messages use friendly field names', function () {
+    Storage::fake('local');
+    $user = signageFormPageUser();
+    $this->actingAs($user);
+
+    $component = Livewire::test(SignageFormPage::class)
+        ->assertOk()
+        ->set('name', '')
+        ->set('product_id', null)
+        ->set('type_id', null)
+        ->call('save');
+
+    $errors = $component->get('formErrors');
+
+    expect($errors['product_id'][0])->toBe('The product field is required.')
+        ->and($errors['type_id'][0])->toBe('The type field is required.')
+        ->and($errors['name'][0])->toBe('The name field is required.')
+        ->and(collect($errors)->flatten()->implode(' '))->not->toMatch('/\.\d+\./');
+
+    $component->assertNoRedirect();
+});
+
 test('saving with a Request attachment creates the Signage and redirects', function () {
     Storage::fake('local');
     $user = signageFormPageUser();

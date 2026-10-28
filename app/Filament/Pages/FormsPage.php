@@ -215,6 +215,14 @@ class FormsPage extends Page
     {
         $modelClass = $this->modelClass();
 
+        if (! empty($row['client_uuid'])) {
+            $existing = $modelClass::query()->where('local_uuid', $row['client_uuid'])->first();
+
+            if ($existing) {
+                return $existing;
+            }
+        }
+
         if (! empty($row['id'])) {
             return $modelClass::query()->findOrFail($row['id']);
         }

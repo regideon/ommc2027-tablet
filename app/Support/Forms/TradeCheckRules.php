@@ -3,9 +3,12 @@
 namespace App\Support\Forms;
 
 use App\Contracts\ProvidesFormRules;
+use App\Support\Forms\Concerns\ValidatesFormPayload;
 
 class TradeCheckRules implements ProvidesFormRules
 {
+    use ValidatesFormPayload;
+
     /**
      * @return array<string, mixed>
      */
@@ -29,6 +32,31 @@ class TradeCheckRules implements ProvidesFormRules
             'groups.*.items.*.options' => ['nullable', 'array'],
             'groups.*.items.*.order' => ['nullable', 'integer'],
             'groups.*.items.*.answer' => ['nullable', 'string'],
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function attributes(): array
+    {
+        return [
+            'name' => 'name',
+            'salescall_uuid' => 'sales call',
+            'groups' => 'groups',
+            'groups.*.name' => 'group name',
+            'groups.*.category' => 'group category',
+            'groups.*.description' => 'group description',
+            'groups.*.order' => 'group order',
+            'groups.*.items' => 'group items',
+            'groups.*.items.*.name' => 'item name',
+            'groups.*.items.*.description' => 'item description',
+            'groups.*.items.*.type' => 'item type',
+            'groups.*.items.*.is_required' => 'requirement',
+            'groups.*.items.*.is_image_required' => 'image requirement',
+            'groups.*.items.*.options' => 'item options',
+            'groups.*.items.*.order' => 'item order',
+            'groups.*.items.*.answer' => 'answer',
         ];
     }
 }

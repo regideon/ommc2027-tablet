@@ -72,7 +72,7 @@ function marketingFoundationPayload(int $programId, int $regionTypeId, string $s
             ],
         ],
         'mechanics' => [
-            ['period' => 'Week 1', 'unit_price' => 5.0, 'sub_total' => 50.0],
+            ['period' => '2026-10-15', 'unit_price' => 5.0, 'sub_total' => 50.0],
         ],
     ];
 }

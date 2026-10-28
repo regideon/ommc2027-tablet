@@ -110,6 +110,31 @@ test('saving without items reports an error and creates nothing', function () {
     $component->assertNoRedirect();
 });
 
+test('Trade Request validation messages use friendly field names instead of row indexes', function () {
+    Storage::fake('local');
+    $user = tradeRequestFormPageUser();
+    $this->actingAs($user);
+
+    $component = Livewire::test(TradeRequestFormPage::class)->assertOk();
+    $product = TradeProduct::query()->firstOrFail();
+
+    $component
+        ->set('product_id', $product->id)
+        ->set('items.0.trade_type_id', null)
+        ->set('items.0.quantity', null)
+        ->call('save');
+
+    $errors = $component->get('formErrors');
+
+    expect($errors['items.0.trade_type_id'][0])->toBe('The trade type field is required.')
+        ->and($errors['items.0.quantity'][0])->toBe('The quantity field is required.')
+        ->and(collect($errors)->flatten()->implode(' '))->not->toMatch('/\.\d+\./');
+
+    expect(TradeRequest::query()->count())->toBe(0);
+
+    $component->assertNoRedirect();
+});
+
 test('saving with an item and a Request attachment creates the Trade Request and redirects', function () {
     Storage::fake('local');
     $user = tradeRequestFormPageUser();

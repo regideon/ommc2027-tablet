@@ -2130,6 +2130,21 @@ class SyncService
 
     public function push(): SyncResult
     {
+        $lock = Cache::lock('sync:push', 900);
+
+        if (! $lock->get()) {
+            return SyncResult::fail('A sync is already in progress. Please wait for it to finish.', 'sync_in_progress');
+        }
+
+        try {
+            return $this->performPush();
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private function performPush(): SyncResult
+    {
         $user = auth()->user() ?? User::whereNotNull('api_token')->first();
 
         if (! $user || blank($user->api_token)) {
@@ -2380,6 +2395,7 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/crr/push", [
                         'server_id' => $crr->server_id,
+                        'client_uuid' => $crr->local_uuid,
                         'salescall_uuid' => $crr->salescall?->local_uuid,
                         'crr_program_id' => $crr->program->server_id,
                         'date_implemented' => $crr->date_implemented,
@@ -2459,6 +2475,7 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/marketing/push", [
                         'server_id' => $marketing->server_id,
+                        'client_uuid' => $marketing->local_uuid,
                         'salescall_uuid' => $marketing->salescall?->local_uuid,
                         'program_id' => $marketing->program->server_id,
                         'region_type_id' => $marketing->region_type_id,
@@ -2526,6 +2543,7 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/trade-check/push", [
                         'server_id' => $tradeCheck->server_id,
+                        'client_uuid' => $tradeCheck->local_uuid,
                         'salescall_uuid' => $tradeCheck->salescall?->local_uuid,
                         'name' => $tradeCheck->name,
                         'groups' => $tradeCheck->group
@@ -2621,6 +2639,7 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/giveaway/push", [
                         'server_id' => $giveaway->server_id,
+                        'client_uuid' => $giveaway->local_uuid,
                         'salescall_uuid' => $giveaway->salescall?->local_uuid,
                         'name' => $giveaway->name,
                         'items' => $giveaway->items
@@ -2701,6 +2720,7 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/repair/push", [
                         'server_id' => $repair->server_id,
+                        'client_uuid' => $repair->local_uuid,
                         'salescall_uuid' => $repair->salescall?->local_uuid,
                         'plate_number' => $repair->plate_number,
                         'invoice_number' => $repair->invoice_number,
@@ -2776,6 +2796,7 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/crr-signage/push", [
                         'server_id' => $signage->server_id,
+                        'client_uuid' => $signage->local_uuid,
                         'salescall_uuid' => $signage->salescall?->local_uuid,
                         'product_id' => $signage->product?->server_id,
                         'type_id' => $signage->type?->server_id,
@@ -2850,6 +2871,7 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/trade-request/push", [
                         'server_id' => $tradeRequest->server_id,
+                        'client_uuid' => $tradeRequest->local_uuid,
                         'salescall_uuid' => $tradeRequest->salescall?->local_uuid,
                         'product_id' => $tradeRequest->product?->server_id,
                         'items' => $tradeRequest->items
@@ -2931,6 +2953,7 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/training/push", [
                         'server_id' => $training->server_id,
+                        'client_uuid' => $training->local_uuid,
                         'salescall_uuid' => $training->salescall?->local_uuid,
                         'topic_id' => $training->topic?->server_id,
                         'other_topic' => $training->other_topic,

@@ -149,8 +149,12 @@ test('a missing required answer reports a field error and creates nothing', func
         ->set('answers.'.$items[1]->id, 'Good')
         ->call('save');
 
-    expect($component->get('formErrors'))
+    $errors = $component->get('formErrors');
+
+    expect($errors)
         ->toHaveKey('answers.'.$items[0]->id)
+        ->and($errors['answers.'.$items[0]->id][0])->toBe('This Trade Check item is required.')
+        ->and(collect($errors)->flatten()->implode(' '))->not->toMatch('/\.\d+\./')
         ->and(TradeCheckAnswer::query()->count())->toBe(0)
         ->and(TradeCheckAnswerItems::query()->count())->toBe(0)
         ->and($template->fresh()->sync_status)->toBe('synced');

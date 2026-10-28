@@ -106,6 +106,23 @@ test('saving a CRR with a zero amount reports an amount error and creates nothin
     $component->assertNoRedirect();
 });
 
+test('CRR validation messages use friendly field names', function () {
+    $user = crrFormPageUser();
+    $this->actingAs($user);
+
+    $component = Livewire::test(CrrFormPage::class)
+        ->assertOk()
+        ->call('save');
+
+    $errors = $component->get('formErrors');
+
+    expect($errors['crr_program_id'][0])->toBe('The CRR program field is required.')
+        ->and($errors['amount'][0])->toBe('The amount field is required.')
+        ->and(collect($errors)->flatten()->implode(' '))->not->toMatch('/\.\d+\./');
+
+    $component->assertNoRedirect();
+});
+
 test('the edit route loads a pending CRR and saves an update', function () {
     $user = crrFormPageUser();
     $program = crrFormPageProgram();
