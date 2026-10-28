@@ -27,20 +27,22 @@ function insertPushCustomer(string $name, string $status = 'pending', int $attem
     ]);
 }
 
-test('Customer-only push sends pending and retryable failed customers and reconciles success', function () {
+test('Customer-only push sends pending and all failed customers and reconciles success', function () {
     config(['sync.server_url' => 'http://portal.test']);
     $user = User::factory()->create(['api_token' => 'tablet-token']);
     $this->actingAs($user);
     $token = '11111111-1111-4111-8111-111111111111';
     $pendingId = insertPushCustomer('Pending Shop', 'pending', 0, $token);
     $retryId = insertPushCustomer('Retry Shop', 'failed', 2);
-    insertPushCustomer('Exhausted Shop', 'failed', 3);
+    $aboveOldCapId = insertPushCustomer('Above Old Cap Shop', 'failed', 9);
     DB::table('itineraries')->insert(['local_uuid' => (string) Str::uuid(), 'sync_status' => 'pending', 'created_at' => now(), 'updated_at' => now()]);
 
-    $ackIds = [301, 302];
-    $ackIndex = 0;
-    Http::fake(function ($request) use (&$ackIndex, $ackIds) {
-        $serverId = $ackIds[$ackIndex++];
+    Http::fake(function ($request) {
+        $serverId = match ($request['name']) {
+            'Pending Shop' => 301,
+            'Retry Shop' => 302,
+            'Above Old Cap Shop' => 303,
+        };
 
         return Http::response([
             'server_id' => $serverId,
@@ -53,15 +55,17 @@ test('Customer-only push sends pending and retryable failed customers and reconc
     $result = app(SyncService::class)->pushPendingCustomers();
 
     expect($result->success)->toBeTrue()
-        ->and($result->syncedCount)->toBe(2)
+        ->and($result->syncedCount)->toBe(3)
         ->and(DB::table('customers')->where('id', $pendingId)->value('server_id'))->toBe(301)
         ->and(DB::table('customers')->where('id', $pendingId)->value('unique_id'))->toBe('PORTAL-CODE')
         ->and(DB::table('customers')->where('id', $pendingId)->value('customer_code_reservation_token'))->toBeNull()
         ->and(DB::table('customers')->where('id', $pendingId)->value('sync_status'))->toBe('synced')
         ->and(DB::table('customers')->where('id', $retryId)->value('sync_status'))->toBe('synced')
+        ->and(DB::table('customers')->where('id', $aboveOldCapId)->value('sync_status'))->toBe('synced')
+        ->and(DB::table('customers')->where('id', $aboveOldCapId)->value('sync_attempts'))->toBe(0)
         ->and(DB::table('itineraries')->value('sync_status'))->toBe('pending');
 
-    Http::assertSentCount(2);
+    Http::assertSentCount(3);
     Http::assertSent(fn ($request): bool => $request->url() === 'http://portal.test/api/customers/sync'
         && $request->data()['customer_code_reservation_token'] === $token);
 });
@@ -415,14 +419,13 @@ test('synced customers do not make Push Customers red', function () {
         ->assertDontSee('text-red-500 hover:text-red-600', false);
 });
 
-test('exhausted failed customers do not make Push Customers red', function () {
+test('failed customers above the old cap still make Push Customers red', function () {
     $user = User::factory()->create(['api_token' => 'tablet-token']);
     $this->actingAs($user);
-    insertPushCustomer('Exhausted Indicator Shop', 'failed', 3);
+    insertPushCustomer('Above Old Cap Indicator Shop', 'failed', 9);
 
     Livewire::test(CustomerPage::class)
-        ->assertSee('text-[#434654] hover:text-[#890f00]', false)
-        ->assertDontSee('text-red-500 hover:text-red-600', false);
+        ->assertSee('text-red-500 hover:text-red-600', false);
 });
 
 test('indicator eligibility matches records attempted by Customer-only push', function () {
@@ -431,9 +434,9 @@ test('indicator eligibility matches records attempted by Customer-only push', fu
     $this->actingAs($user);
     insertPushCustomer('Pending Parity Shop');
     insertPushCustomer('Retry Parity Shop', 'failed', 2);
-    insertPushCustomer('Exhausted Parity Shop', 'failed', 3);
+    insertPushCustomer('Above Old Cap Parity Shop', 'failed', 9);
     insertPushCustomer('Synced Parity Shop', 'synced');
-    $ackIds = [401, 402];
+    $ackIds = [401, 402, 403];
     $ackIndex = 0;
     Http::fake(function ($request) use (&$ackIndex, $ackIds) {
         return Http::response(['server_id' => $ackIds[$ackIndex++], 'local_uuid' => $request['local_uuid'], 'updated_at' => now()->toISOString()]);
@@ -447,9 +450,9 @@ test('indicator eligibility matches records attempted by Customer-only push', fu
 
     $result = $sync->pushPendingCustomers();
 
-    expect($result->syncedCount)->toBe(2)
+    expect($result->syncedCount)->toBe(3)
         ->and($sync->hasPendingCustomerPushWork())->toBeFalse();
-    Http::assertSentCount(2);
+    Http::assertSentCount(3);
 });
 
 test('successful manual push immediately clears red state when no customer work remains', function () {

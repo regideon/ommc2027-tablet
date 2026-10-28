@@ -149,7 +149,7 @@ class CustomerEditPage extends CustomerCreatePage
             }
         }
 
-        Notification::make()->title($wasFailed ? 'Correction saved. Use Retry Customer to make one push attempt.' : 'Customer updated offline')->success()->send();
+        Notification::make()->title($wasFailed ? 'Correction saved. Retry now or wait for the next sync.' : 'Customer updated offline')->success()->send();
         $this->redirect(CustomerPage::getUrl());
     }
 }

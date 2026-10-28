@@ -94,8 +94,8 @@ class SyncService
             || $pendingOrRetryable(SalescallBrand::query())->exists()
             || $pendingOrRetryable(SalescallCategory::query())->exists()
             || $pendingOrFailed(SalescallImage::query())->exists()
-            || $pendingOrRetryable(CustomerProfile::query())->exists()
-            || $pendingOrRetryable(CustomerProfileAttachment::query())->exists()
+            || $pendingOrFailed(CustomerProfile::query())->exists()
+            || $pendingOrFailed(CustomerProfileAttachment::query())->exists()
             || $pendingOrRetryable(Expense::query())->exists()
             || $pendingOrRetryable(ExpenseAttachment::query())->exists()
             || $pendingOrRetryable(Crr::query())->exists()
@@ -113,7 +113,7 @@ class SyncService
             || $pendingOrRetryable(TradeRequestAttachment::query())->exists()
             || $pendingOrRetryable(Training::query())->exists()
             || $pendingOrRetryable(TrainingAttachment::query())->exists()
-            || $pendingOrRetryable(CustomerNote::query())->exists();
+            || $pendingOrFailed(CustomerNote::query())->exists();
     }
 
     public function retryFailedExpenseAttachment(int $attachmentId): SyncResult
@@ -3152,10 +3152,7 @@ class SyncService
             }
 
             $pendingAttachments = CustomerProfileAttachment::with('salescall')
-                ->where(function ($q) {
-                    $q->where('sync_status', 'pending')
-                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
-                })
+                ->whereIn('sync_status', ['pending', 'failed'])
                 ->get();
 
             foreach ($pendingAttachments as $attachment) {
@@ -3179,10 +3176,7 @@ class SyncService
             }
 
             $pendingProfiles = CustomerProfile::with('salescall')
-                ->where(function ($q) {
-                    $q->where('sync_status', 'pending')
-                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
-                })
+                ->whereIn('sync_status', ['pending', 'failed'])
                 ->get();
 
             foreach ($pendingProfiles as $profile) {
@@ -3205,10 +3199,7 @@ class SyncService
                 }
             }
 
-            $pendingNotes = CustomerNote::where(function ($q) {
-                $q->where('sync_status', 'pending')
-                    ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
-            })->get();
+            $pendingNotes = CustomerNote::whereIn('sync_status', ['pending', 'failed'])->get();
 
             foreach ($pendingNotes as $note) {
                 try {

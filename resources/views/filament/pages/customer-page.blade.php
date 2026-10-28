@@ -135,7 +135,7 @@
                                 <p class="text-xs text-[#737685]"><span class="font-bold">Earlier push attempt {{ $previousPushError['attempt'] ?? '' }}:</span> {{ $previousPushError['message'] ?? '' }}</p>
                             @endforeach
                             @if(($customerDetail['customer']['sync_status'] ?? null) === 'failed' && (int) ($customerDetail['customer']['sync_attempts'] ?? 0) >= 3)
-                                <p class="text-xs text-[#737685]">Automatic retries are exhausted. Correct and save a value before making one explicit retry.</p>
+                                <p class="text-xs text-[#737685]">This Customer will retry automatically on the next sync. Correct and save a value before making an immediate retry.</p>
                                 <button type="button" wire:click="retryCustomerPush('{{ $selectedCustomer->id }}')" wire:loading.attr="disabled" class="fi-btn fi-btn-size-sm fi-btn-color-primary" @disabled((string) $retryingCustomerId === (string) $selectedCustomer->id)>
                                     {{ $retryingCustomerId === $selectedCustomer->id ? 'Retrying…' : 'Retry Customer' }}
                                 </button>
