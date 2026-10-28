@@ -144,6 +144,25 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
     }
 
     /**
+     * Sales-call IDs with a locally persisted, RAC-approved Marketing
+     * Recommendation from the rep.
+     *
+     * @return array<int, int>
+     */
+    public function locallyApprovedSalescallIdsFor(User $user): array
+    {
+        return Marketing::query()
+            ->where('submitted_by', $user->id)
+            ->whereNotNull('salescall_id')
+            ->where('rac_status', RACStatus::APPROVED->value)
+            ->distinct()
+            ->pluck('salescall_id')
+            ->map(fn (mixed $salescallId): int => (int) $salescallId)
+            ->values()
+            ->all();
+    }
+
+    /**
      * Resolve whether the rep's Marketing Recommendation for the sales call is
      * approved, pending, missing, or cannot be confirmed while offline.
      */

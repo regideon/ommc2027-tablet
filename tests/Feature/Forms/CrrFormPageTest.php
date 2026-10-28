@@ -219,6 +219,28 @@ function crrFormPageMarketing(
     ]);
 }
 
+test('the create page lists only sales calls whose Marketing is locally approved', function () {
+    $user = crrFormPageUser();
+    crrFormPageProgram();
+    $this->actingAs($user);
+
+    $approved = crrFormPageSalescall($user);
+    crrFormPageMarketing($user, $approved);
+
+    $pending = crrFormPageSalescall($user);
+    crrFormPageMarketing($user, $pending, RACStatus::PENDING->value, SPSStatus::PENDING->value);
+
+    crrFormPageSalescall($user);
+
+    $otherUser = User::factory()->create();
+    $otherRepsSalescall = crrFormPageSalescall($otherUser);
+    crrFormPageMarketing($otherUser, $otherRepsSalescall);
+
+    $options = Livewire::test(CrrFormPage::class)->get('salescalls');
+
+    expect(collect($options)->pluck('uuid')->all())->toBe([$approved->local_uuid]);
+});
+
 test('opening the CRR form from a sales call with an approved Marketing preselects and locks that sales call', function () {
     $user = crrFormPageUser();
     crrFormPageProgram();

@@ -2,11 +2,13 @@
 
 - **Title:** Tablet — require an approved Marketing Recommendation before creating a CRR
 - **Repository role:** Tablet `ommc2027-tablet` only. No Portal changes.
-- **State:** `ACTIVE`
+- **State:** `READY_FOR_TERMINAL_REVIEW`
 - **Design basis:** Bounded in-chat design approved 2026-10-27 ("implement").
   Human directive: reverse the current prerequisite — remove the
   CRR-before-Marketing gate, and require a Marketing Recommendation to be
-  approved before a CRR can be created.
+  approved before a CRR can be created. Follow-up approved 2026-10-28 ("yes"):
+  the CRR create sales-call picker lists only sales calls with a locally
+  persisted RAC-approved Marketing Recommendation.
 - **Related Work:** `OMMC-20261015-tablet-salescall-form-requirements`
   (introduced the CRR-before-Marketing gate; superseded here for that gate),
   `OMMC-20261016-tablet-salescall-required-forms-reduction` (kept the gate
@@ -25,6 +27,10 @@
    with a reconnect instruction instead of falsely asking for a duplicate
    Marketing.
 4. Standalone CRRs and CRR edit mode remain unaffected.
+5. The CRR create sales-call picker lists only sales calls with a locally
+   persisted RAC-approved Marketing Recommendation from the same rep. A
+   sales call requested through `?salescall=` stays selectable so the
+   approval warning still opens for it; CRR edit mode keeps the full list.
 
 ## Human-authorized scope
 
@@ -37,19 +43,23 @@ Confirmed 2026-10-27:
 - Refresh and persist Marketing SPS/RAC status from the Portal pull; no new
   Portal endpoint or Portal code.
 - Keep the Portal untouched; Tablet-side enforcement only.
-- Implementation authorization: Human "implement" 2026-10-27.
-  Terminal authorization: **none**. No commit or push.
+- Follow-up 2026-10-28: filter the CRR create sales-call picker to sales
+  calls with a locally persisted approved Marketing; no extra Portal pull
+  when the form opens; preserve the requested-salescall warning and edit
+  behavior.
+- Implementation authorization: Human "implement" 2026-10-27 and "yes"
+  2026-10-28. Terminal authorization: **none** for the 2026-10-28 changes.
 
 ## Task-owned files
 
 - `app/Models/Forms/Marketing/Marketing.php` — approval helper.
 - `app/Services/Forms/MarketingService.php` — remove CRR gate; add status
-  refresh and approval-state lookup.
+  refresh, approval-state lookup, and locally approved sales-call IDs.
 - `app/Services/Forms/CrrService.php` — enforce approved Marketing on create.
 - `app/Filament/Pages/MarketingFormPage.php` — remove CRR-required state and
   gate.
-- `app/Filament/Pages/CrrFormPage.php` — approval-required warning and
-  pre-save refresh.
+- `app/Filament/Pages/CrrFormPage.php` — approval-required warning, pre-save
+  refresh, and approved-Marketing create-list filter.
 - `resources/views/filament/pages/marketing-form-page.blade.php` — remove the
   Create-CRR-first warning.
 - `resources/views/filament/pages/crr-form-page.blade.php` — add the
@@ -84,10 +94,22 @@ Confirmed 2026-10-27:
   the CRR form shows a reconnect/unknown state rather than a duplicate-create
   instruction.
 - The CRR save-layer guard is authoritative; the form warning is guidance.
+- Follow-up 2026-10-28: the create sales-call picker uses last-synced local
+  approval state only; it does not pull Marketing when the form opens.
+- A sales call named by `?salescall=` remains in the create picker even when
+  unapproved so the warning path stays reachable; edit mode keeps the full
+  sales-call list.
 
 ## Validation evidence
 
-Pending.
+- `php artisan test --compact tests/Feature/Forms` → 274 passed
+  (1535 assertions).
+- `php artisan test --compact tests/Feature/Forms/CrrFormPageTest.php` →
+  22 passed (96 assertions) after Pint.
+- `vendor/bin/pint --dirty --format agent` → passed.
+- The full suite was not completed on 2026-10-28 per Human direction
+  ("specific test only"). An earlier attempt hit the 128 MB memory limit in
+  the unrelated `CustomerCreatePageDiagnosticTest`.
 
 ## Manual acceptance
 
@@ -100,12 +122,18 @@ Pending. Requires the Human to confirm in runtime:
   approval-required warning.
 - A CRR opens and saves after the Marketing is RAC-approved.
 - Standalone CRRs and CRR edits still work.
+- The CRR create sales-call list shows only sales calls with a locally
+  approved Marketing; an unapproved sales call opened through the sales-call
+  page still shows its existing warning.
 
 ## Blockers and remaining work
 
-- Implementation in progress.
+- No blockers for the 2026-10-28 follow-up.
 - Terminal delivery awaits separate explicit Human authorization.
 
 ## Delivery evidence status
 
-None. Local implementation only; no commits, pushes, or database mutations.
+The prior implementation was committed by the Human in `99cd29f`
+("Fixes: Change of Business Rules", 2026-10-27), which includes this Work
+note. The 2026-10-28 follow-up remains local and uncommitted; no push or
+database mutations were performed.
