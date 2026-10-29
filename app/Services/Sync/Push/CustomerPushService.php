@@ -102,10 +102,7 @@ final class CustomerPushService
     private function pendingCustomerPushQuery(): Builder
     {
         return Customer::with(['tradeProfile', 'categoryHistories', 'categoryEvents'])
-            ->where(function (Builder $query): void {
-                $query->where('sync_status', 'pending')
-                    ->orWhere(fn ($retry) => $retry->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
-            });
+            ->whereIn('sync_status', ['pending', 'failed']);
     }
 
     private function releaseStaleCustomerPushClaims(): void
@@ -170,9 +167,7 @@ final class CustomerPushService
         $claim = Customer::query()->whereKey($customer->id)
             ->where('sync_status', $customer->sync_status)
             ->where('sync_attempts', $customer->sync_attempts)
-            ->where(fn (Builder $query) => $query->where('sync_status', 'pending')
-                ->orWhere(fn (Builder $retry) => $retry->where('sync_status', 'failed')->where('sync_attempts', '<', 3))
-                ->when($allowExhausted, fn (Builder $retry) => $retry->orWhere(fn (Builder $exhausted) => $exhausted->where('sync_status', 'failed')->where('sync_attempts', '>=', 3))))
+            ->whereIn('sync_status', ['pending', 'failed'])
             ->update(['sync_status' => 'syncing', 'updated_at' => now()]);
 
         if ($claim !== 1) {
@@ -220,9 +215,7 @@ final class CustomerPushService
             $this->recorder->recordCustomerPushErrorHistory($customer, $previousError);
             $this->recorder->rememberFailedCustomerPayload($customer, $fingerprint);
 
-            $retryable = (int) $customer->sync_attempts < 3 ? 1 : 0;
-
-            return SyncResult::fail($portalError, 'push_failed', 0, 1, $retryable, ['portal_rejected']);
+            return SyncResult::fail($portalError, 'push_failed', 0, 1, 1, ['portal_rejected']);
         } catch (Throwable $exception) {
             $previousError = $customer->sync_error;
             $this->recorder->recordUnexpectedItemFailure($customer, $exception, 'customer:unexpected');
@@ -231,9 +224,7 @@ final class CustomerPushService
                 $this->recorder->rememberFailedCustomerPayload($customer, $fingerprint);
             }
 
-            $retryable = (int) $customer->sync_attempts < 3 ? 1 : 0;
-
-            return SyncResult::fail($retryable ? 'Customer push failed and will retry on the next sync.' : 'Customer push failed and reached the automatic retry limit. Correct and save the Customer before using Retry Customer.', 'push_failed', 0, 1, $retryable, ['unexpected_sync_error']);
+            return SyncResult::fail('Customer push failed and will retry on the next sync.', 'push_failed', 0, 1, 1, ['unexpected_sync_error']);
         }
     }
 

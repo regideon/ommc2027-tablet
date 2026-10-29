@@ -121,6 +121,7 @@
         },
 
         async startSync() {
+            if (this.syncStatus === 'syncing') return;
             await this.checkConnectivity();
             if (!this.isOnline) return;
             this.syncStatus = 'syncing';
@@ -1292,9 +1293,10 @@
             </div>
             <button
                 @click="startSync()"
+                :disabled="syncStatus === 'syncing'"
                 :title="syncButtonTitle"
                 :class="syncButtonClass"
-                class="material-symbols-outlined mat-fill transition-colors ml-2 shrink-0"
+                class="material-symbols-outlined mat-fill transition-colors ml-2 shrink-0 disabled:opacity-50"
                 x-text="syncButtonIcon">
             </button>
             <button
@@ -1375,9 +1377,10 @@
                 @endif
                 <button
                     @click="startSync()"
+                    :disabled="syncStatus === 'syncing'"
                     :class="syncButtonClass"
                     :title="syncButtonTitle"
-                    class="material-symbols-outlined mat-fill transition-colors"
+                    class="material-symbols-outlined mat-fill transition-colors disabled:opacity-50"
                     x-text="syncButtonIcon">
                 </button>
                 <button

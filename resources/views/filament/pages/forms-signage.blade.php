@@ -41,7 +41,7 @@
                 <p class="text-xs text-[#737685]">Your CRR Signages</p>
             </div>
             <div class="flex shrink-0 items-center gap-2 ml-auto">
-                <button type="button" wire:click="syncNow" @disabled($syncing) class="flex h-9 items-center gap-1.5 rounded-full bg-[#890f00] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#6f0c00] disabled:opacity-50" title="Sync pending CRR Signages and refresh the list">
+                <button type="button" wire:click="syncNow" @disabled($syncing) wire:loading.attr="disabled" wire:target="syncNow" class="flex h-9 items-center gap-1.5 rounded-full bg-[#890f00] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#6f0c00] disabled:opacity-50" title="Sync pending CRR Signages and refresh the list">
                     <span class="material-symbols-outlined text-lg {{ $syncing ? 'animate-spin' : '' }}">{{ $syncing ? 'sync' : 'refresh' }}</span>
                     <span class="hidden sm:inline">{{ $syncing ? 'Syncing…' : 'Sync' }}</span>
                 </button>

@@ -2,6 +2,17 @@
     <div
         x-data="{
             giveawaySaving: false,
+            addPhotoFile(file) {
+                if (! file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    $wire.stagePhoto({
+                        data: event.target.result,
+                        original_name: file.name,
+                    });
+                };
+                reader.readAsDataURL(file);
+            },
             async saveGiveawayForm() {
                 if (this.giveawaySaving) return;
                 if (! this.$refs.giveawayEntryForm.reportValidity()) return;
@@ -19,6 +30,10 @@
             </div>
             <button type="button" wire:click="cancel" class="h-10 px-4 rounded-xl border border-gray-200 text-[#434654] font-bold">Back</button>
         </div>
+
+        @if ($templateLoadError !== '')
+            <div role="alert" class="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">{{ $templateLoadError }}</div>
+        @endif
 
         <form x-ref="giveawayEntryForm" @submit.prevent="saveGiveawayForm()" class="space-y-4">
             <div>
@@ -42,106 +57,103 @@
             </div>
 
             <div class="space-y-3">
-                <div class="flex items-center justify-between">
-                    <h2 class="text-xs font-black text-[#737685] uppercase tracking-wider">Items</h2>
-                    <button type="button" wire:click="addItemRow" class="inline-flex items-center gap-1 rounded-full bg-[#890f00] px-3 py-1.5 text-xs font-semibold text-white">
-                        <span class="material-symbols-outlined text-base">add</span>
-                        <span>Add Item</span>
-                    </button>
-                </div>
-
                 <p class="field-error">{{ $formErrors['items'][0] ?? '' }}</p>
 
+                @php($activeCategory = null)
                 @foreach ($items as $index => $item)
-                    <div wire:key="giveaway-item-{{ $item['key'] }}" class="space-y-3 border border-gray-200 rounded-xl p-3 bg-white">
-                        <div class="flex items-start justify-between gap-3">
-                            <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Item {{ $index + 1 }}</p>
-                            <button type="button" wire:click="removeItemRow('{{ $item['key'] }}')" class="text-red-400 shrink-0" title="Remove item">
-                                <span class="material-symbols-outlined text-lg">delete</span>
-                            </button>
-                        </div>
+                    @if ($activeCategory !== $item['category_label'])
+                        @php($activeCategory = $item['category_label'])
+                        <h2 class="pt-2 text-xs font-black text-[#737685] uppercase tracking-wider">{{ $item['category_label'] }}</h2>
+                    @endif
 
-                        <div class="grid grid-cols-2 gap-3">
-                            <div>
-                                <label class="field-label">Category <span class="text-red-500">*</span></label>
-                                <select wire:model="items.{{ $index }}.category" class="field-input bg-white">
-                                    @foreach ($categories as $value => $label)
-                                        <option value="{{ $value }}">{{ $label }}</option>
-                                    @endforeach
-                                </select>
-                                <p class="field-error">{{ $formErrors["items.{$index}.category"][0] ?? '' }}</p>
-                            </div>
-                            <div>
-                                <label class="field-label">Quantity</label>
-                                <input type="text" wire:model="items.{{ $index }}.answer" class="field-input" placeholder="Optional">
-                                <p class="field-error">{{ $formErrors["items.{$index}.answer"][0] ?? '' }}</p>
-                            </div>
-                        </div>
-
-                        <div>
-                            <label class="field-label">Item Name <span class="text-red-500">*</span></label>
-                            <input type="text" wire:model="items.{{ $index }}.name" class="field-input" placeholder="e.g. Gift Check">
-                            <p class="field-error">{{ $formErrors["items.{$index}.name"][0] ?? '' }}</p>
-                        </div>
-
-                        @php($signature = $item['signature'] ?? null)
-
-                        <div x-data="giveawaySignaturePad('{{ $item['key'] }}')" class="space-y-2 p-3 bg-gray-50 border border-gray-200 rounded-xl">
-                            <div class="flex items-center justify-between gap-3">
-                                <div>
-                                    <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Signature <span class="text-red-500">*</span></p>
-                                    <p class="text-xs text-[#737685] mt-1">Required · have the recipient sign below</p>
-                                </div>
-                                <button type="button" @click="clearPad()" class="text-xs text-[#890f00] font-medium">Clear</button>
-                            </div>
-
-                            <canvas
-                                x-ref="signatureCanvas"
-                                style="touch-action: none; height: 160px;"
-                                class="w-full border-2 border-dashed border-gray-300 rounded-xl bg-white cursor-crosshair"
-                                @mousedown.prevent="padStart($event)"
-                                @mousemove.prevent="padDraw($event)"
-                                @mouseup="padEnd()"
-                                @mouseleave="padEnd()"
-                                @touchstart.prevent="padStart($event)"
-                                @touchmove.prevent="padDraw($event)"
-                                @touchend="padEnd()">
-                            </canvas>
-
-                            <div x-show="captured" class="flex items-center gap-1 text-xs text-green-600 font-medium">
-                                <span class="material-symbols-outlined text-base mat-fill">check_circle</span> Signature captured
-                            </div>
-
-                            @if (($signature['source'] ?? null) === 'existing')
-                                <div x-show="! captured" class="flex items-center gap-3 border border-gray-200 rounded-xl p-3 bg-white">
-                                    <div class="w-10 h-10 rounded-lg bg-gray-50 border border-gray-200 flex items-center justify-center shrink-0 overflow-hidden">
-                                        @if (! empty($signature['url']))
-                                            <img src="{{ $signature['url'] }}" class="w-full h-full object-cover" alt="Saved signature">
-                                        @else
-                                            <span class="material-symbols-outlined text-[#737685] text-xl">draw</span>
-                                        @endif
-                                    </div>
-                                    <span class="flex-1 min-w-0 text-xs font-medium text-[#191c1e] truncate">Saved signature — draw above to replace</span>
-                                </div>
-                            @endif
-
-                            <p class="field-error">{{ $formErrors["items.{$index}.signature_id"][0] ?? '' }}</p>
-                        </div>
+                    <div wire:key="giveaway-item-{{ $item['key'] }}" class="flex flex-nowrap items-center justify-between gap-4 rounded-xl border border-gray-200 bg-white p-3">
+                        <span class="whitespace-nowrap text-sm font-medium text-[#191c1e]">{{ $item['name'] }}</span>
+                        <input type="number" min="0" wire:model="items.{{ $index }}.answer" class="field-input shrink-0 text-right" style="width: 7rem;" placeholder="0">
                     </div>
+                    <p class="field-error -mt-2">{{ $formErrors["items.{$index}.answer"][0] ?? '' }}</p>
                 @endforeach
             </div>
 
-            <div class="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">This Giveaway and its signatures will be saved locally and remain pending synchronization.</div>
+            <div class="space-y-3 rounded-2xl border border-gray-200 bg-white p-4">
+                <div>
+                    <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Photos</p>
+                    <p class="text-xs text-[#737685] mt-1">One photo per giveaway · optional</p>
+                </div>
+
+                <input type="file" x-ref="giveawayPhotoInput" accept="image/jpeg,image/png,image/*" class="hidden" @change="addPhotoFile($event.target.files[0]); $event.target.value = ''">
+                <input type="file" x-ref="giveawayPhotoCameraInput" accept="image/jpeg,image/png" capture="environment" class="hidden" @change="addPhotoFile($event.target.files[0]); $event.target.value = ''">
+
+                <div class="grid grid-cols-2 gap-2">
+                    <button type="button" @click="if (document.body.classList.contains('nativephp-android') || document.body.classList.contains('nativephp-ios')) { $wire.takePhoto(); } else { $refs.giveawayPhotoCameraInput.click(); }" class="attachment-button"><span class="material-symbols-outlined text-xl">photo_camera</span><span>Take Photo</span></button>
+                    <button type="button" @click="if (document.body.classList.contains('nativephp-android') || document.body.classList.contains('nativephp-ios')) { $wire.pickPhotoFromGallery(); } else { $refs.giveawayPhotoInput.click(); }" class="attachment-button"><span class="material-symbols-outlined text-xl">photo_library</span><span>Photo Library</span></button>
+                </div>
+
+                @if ($photo !== null)
+                    <div class="flex items-center gap-3 rounded-xl border border-gray-200 bg-gray-50 p-3">
+                        @if (! empty($photo['url']) && ($photo['mime_type'] ?? '') !== 'application/pdf')
+                            <img src="{{ $photo['url'] }}" alt="{{ $photo['original_name'] ?? 'Photo' }}" class="h-14 w-14 rounded-lg border border-gray-200 object-cover">
+                        @else
+                            <span class="material-symbols-outlined text-[#737685] text-2xl">image</span>
+                        @endif
+                        <span class="flex-1 min-w-0 truncate text-xs font-medium text-[#191c1e]">{{ $photo['original_name'] ?? 'Photo' }}</span>
+                        <button type="button" wire:click="removePhoto" class="text-red-400"><span class="material-symbols-outlined text-lg">delete</span></button>
+                    </div>
+                @endif
+                <p class="field-error">{{ $formErrors['photo_id'][0] ?? '' }}</p>
+            </div>
+
+            <div x-data="giveawaySignaturePad()" class="space-y-2 rounded-2xl border border-gray-200 bg-white p-4">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <p class="text-xs font-black text-[#737685] uppercase tracking-wider">Signature of recipient <span class="text-red-500">*</span></p>
+                        <p class="text-xs text-[#737685] mt-1">One recipient signature per giveaway</p>
+                    </div>
+                    <button type="button" @click="clearPad()" class="text-xs text-[#890f00] font-medium">Clear</button>
+                </div>
+
+                <canvas
+                    x-ref="signatureCanvas"
+                    style="touch-action: none; height: 160px;"
+                    class="w-full border-2 border-dashed border-gray-300 rounded-xl bg-white cursor-crosshair"
+                    @mousedown.prevent="padStart($event)"
+                    @mousemove.prevent="padDraw($event)"
+                    @mouseup="padEnd()"
+                    @mouseleave="padEnd()"
+                    @touchstart.prevent="padStart($event)"
+                    @touchmove.prevent="padDraw($event)"
+                    @touchend="padEnd()">
+                </canvas>
+
+                <div x-show="captured" class="flex items-center gap-1 text-xs text-green-600 font-medium">
+                    <span class="material-symbols-outlined text-base mat-fill">check_circle</span> Signature captured
+                </div>
+
+                @if (($signature['source'] ?? null) === 'existing')
+                    <div x-show="! captured" class="flex items-center gap-3 rounded-xl border border-gray-200 bg-gray-50 p-3">
+                        @if (! empty($signature['url']))
+                            <img src="{{ $signature['url'] }}" class="h-12 w-20 rounded-lg border border-gray-200 object-cover" alt="Saved signature">
+                        @else
+                            <span class="material-symbols-outlined text-[#737685]">draw</span>
+                        @endif
+                        <span class="flex-1 min-w-0 text-xs font-medium text-[#191c1e]">Saved signature — draw above to replace</span>
+                    </div>
+                @endif
+
+                <p class="field-error">{{ $formErrors['signature_id'][0] ?? '' }}</p>
+            </div>
+
+            <div class="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">This Giveaway, its photo, and signature will be saved locally and remain pending synchronization.</div>
             @if (isset($formErrors['giveaway']))
                 <div class="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">{{ $formErrors['giveaway'][0] }}</div>
             @endif
             @if (isset($formErrors['form']))
                 <div class="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">{{ $formErrors['form'][0] }}</div>
             @endif
+
             <div class="grid grid-cols-2 gap-3 pt-1">
                 <button type="button" wire:click="cancel" class="h-12 rounded-xl border border-gray-200 text-[#434654] font-bold">Cancel</button>
                 <button type="submit" :disabled="giveawaySaving" class="h-12 rounded-xl bg-[#890f00] text-white font-bold disabled:opacity-50">
-                    <span x-show="! giveawaySaving">Save Locally</span>
+                    <span x-show="! giveawaySaving">Save</span>
                     <span x-show="giveawaySaving">Saving…</span>
                 </button>
             </div>
@@ -152,12 +164,13 @@
         .field-label { display: block; margin-bottom: .25rem; font-size: .75rem; font-weight: 700; color: #737685; }
         .field-input { width: 100%; border: 1px solid #e5e7eb; border-radius: .75rem; padding: .625rem .75rem; font-size: .875rem; }
         .field-error { margin-top: .25rem; font-size: .75rem; color: #dc2626; }
+        .attachment-button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .25rem; padding: .75rem; border: 2px solid #e5e7eb; border-radius: .75rem; color: #434654; font-size: .625rem; font-weight: 700; }
     </style>
 </x-filament-panels::page>
 
 @once
     <script>
-        window.giveawaySignaturePad = function (key) {
+        window.giveawaySignaturePad = function () {
             return {
                 canvas: null,
                 context: null,
@@ -214,7 +227,7 @@
 
                 stage() {
                     if (! this.canvas) return;
-                    this.$wire.stageSignature(key, {
+                    this.$wire.stageSignature({
                         data: this.canvas.toDataURL('image/png'),
                         original_name: 'signature.png',
                     });
@@ -226,7 +239,7 @@
                         this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
                     }
                     this.captured = false;
-                    this.$wire.removeSignature(key);
+                    this.$wire.removeSignature();
                 },
             };
         };

@@ -378,6 +378,31 @@ test('pending historical Petty Cash syncs as PCV while retaining its old remarks
         ->and($expense->fresh()->payment_remarks)->toBe('Legacy pending remarks');
 });
 
+test('Expense validation messages use friendly field names', function () {
+    $salescall = omExpenseReadCreateSalescall($this->customer, $this->user, 901);
+    $lodging = ExpenseType::query()->where('code', 'lodging')->firstOrFail();
+
+    Livewire::withQueryParams([
+        'salescall' => $salescall->id,
+        'type' => $lodging->code,
+    ])->test(ExpenseCreatePage::class)
+        ->call('saveExpense', [])
+        ->assertReturned(function (array $result): bool {
+            $errors = $result['errors'] ?? [];
+            $messages = implode(' ', array_merge(...array_values($errors)));
+
+            return $result['ok'] === false
+                && ($errors['amount'][0] ?? null) === 'The amount field is required.'
+                && ($errors['date_filed'][0] ?? null) === 'The date filed field is required.'
+                && ($errors['payment_type'][0] ?? null) === 'The payment type field is required.'
+                && ($errors['invoice_number'][0] ?? null) === 'The invoice number field is required.'
+                && ($errors['establishment'][0] ?? null) === 'The establishment field is required.'
+                && ($errors['location'][0] ?? null) === 'The location field is required.'
+                && ($errors['purpose'][0] ?? null) === 'The purpose field is required.'
+                && ! str_contains($messages, '.0');
+        });
+});
+
 test('submitting an Expense pushes it immediately and marks it synced only after Portal acknowledgment', function () {
     config(['sync.server_url' => 'https://portal.example.test']);
     $this->customer->update(['server_id' => 550, 'sync_status' => 'synced']);

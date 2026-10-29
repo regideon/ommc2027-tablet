@@ -13,6 +13,7 @@ use App\Models\Forms\CRR\CrrAttachment;
 use App\Models\Forms\CRRSignage\Signage;
 use App\Models\Forms\CRRSignage\SignageAttachment;
 use App\Models\Forms\Giveaway\Giveaway;
+use App\Models\Forms\Giveaway\GiveawayPhoto;
 use App\Models\Forms\Giveaway\GiveawaySignature;
 use App\Models\Forms\Marketing\Marketing;
 use App\Models\Forms\Repair\Repair;
@@ -94,8 +95,8 @@ class SyncService
             || $pendingOrRetryable(SalescallBrand::query())->exists()
             || $pendingOrRetryable(SalescallCategory::query())->exists()
             || $pendingOrFailed(SalescallImage::query())->exists()
-            || $pendingOrRetryable(CustomerProfile::query())->exists()
-            || $pendingOrRetryable(CustomerProfileAttachment::query())->exists()
+            || $pendingOrFailed(CustomerProfile::query())->exists()
+            || $pendingOrFailed(CustomerProfileAttachment::query())->exists()
             || $pendingOrRetryable(Expense::query())->exists()
             || $pendingOrRetryable(ExpenseAttachment::query())->exists()
             || $pendingOrRetryable(Crr::query())->exists()
@@ -105,6 +106,7 @@ class SyncService
             || $pendingOrRetryable(TradeCheckAttachment::query())->exists()
             || $pendingOrRetryable(Giveaway::query())->exists()
             || $pendingOrRetryable(GiveawaySignature::query())->exists()
+            || $pendingOrRetryable(GiveawayPhoto::query())->exists()
             || $pendingOrRetryable(Repair::query())->exists()
             || $pendingOrRetryable(RepairAttachment::query())->exists()
             || $pendingOrRetryable(Signage::query())->exists()
@@ -113,7 +115,7 @@ class SyncService
             || $pendingOrRetryable(TradeRequestAttachment::query())->exists()
             || $pendingOrRetryable(Training::query())->exists()
             || $pendingOrRetryable(TrainingAttachment::query())->exists()
-            || $pendingOrRetryable(CustomerNote::query())->exists();
+            || $pendingOrFailed(CustomerNote::query())->exists();
     }
 
     public function retryFailedExpenseAttachment(int $attachmentId): SyncResult
@@ -1992,6 +1994,14 @@ class SyncService
         return $this->readGiveawaysWithStatus()['giveaways'];
     }
 
+    /** @return array{master_items: array<int, array<string, mixed>>, failed: bool} */
+    public function readGiveawayMasterDataWithStatus(): array
+    {
+        $result = $this->requestFormRows('/api/forms/giveaway/master-data', 'items');
+
+        return ['master_items' => $result['rows'], 'failed' => $result['failed']];
+    }
+
     /** @return array{repairs: array<int, array<string, mixed>>, failed: bool} */
     public function readRepairsWithStatus(): array
     {
@@ -2129,6 +2139,21 @@ class SyncService
     }
 
     public function push(): SyncResult
+    {
+        $lock = Cache::lock('sync:push', 900);
+
+        if (! $lock->get()) {
+            return SyncResult::fail('A sync is already in progress. Please wait for it to finish.', 'sync_in_progress');
+        }
+
+        try {
+            return $this->performPush();
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private function performPush(): SyncResult
     {
         $user = auth()->user() ?? User::whereNotNull('api_token')->first();
 
@@ -2380,6 +2405,7 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/crr/push", [
                         'server_id' => $crr->server_id,
+                        'client_uuid' => $crr->local_uuid,
                         'salescall_uuid' => $crr->salescall?->local_uuid,
                         'crr_program_id' => $crr->program->server_id,
                         'date_implemented' => $crr->date_implemented,
@@ -2459,6 +2485,7 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/marketing/push", [
                         'server_id' => $marketing->server_id,
+                        'client_uuid' => $marketing->local_uuid,
                         'salescall_uuid' => $marketing->salescall?->local_uuid,
                         'program_id' => $marketing->program->server_id,
                         'region_type_id' => $marketing->region_type_id,
@@ -2515,7 +2542,7 @@ class SyncService
                 }
             }
 
-            $pendingTradeChecks = TradeCheck::with(['group.items.answerItem', 'salescall'])
+            $pendingTradeChecks = TradeCheck::with(['group.subgroups.items.answerItem', 'salescall'])
                 ->where(function ($q) {
                     $q->where('sync_status', 'pending')
                         ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
@@ -2526,6 +2553,7 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/trade-check/push", [
                         'server_id' => $tradeCheck->server_id,
+                        'client_uuid' => $tradeCheck->local_uuid,
                         'salescall_uuid' => $tradeCheck->salescall?->local_uuid,
                         'name' => $tradeCheck->name,
                         'groups' => $tradeCheck->group
@@ -2536,18 +2564,27 @@ class SyncService
                                 'category' => $group->category->value,
                                 'description' => $group->description,
                                 'order' => $group->order,
-                                'items' => $group->items
+                                'subgroups' => $group->subgroups
                                     ->sortBy('order')
                                     ->values()
-                                    ->map(fn ($item): array => [
-                                        'name' => $item->name,
-                                        'description' => $item->description,
-                                        'type' => $item->type->value,
-                                        'is_required' => $item->is_required,
-                                        'is_image_required' => $item->is_image_required,
-                                        'options' => $item->options,
-                                        'order' => $item->order,
-                                        'answer' => $item->answerItem?->answer,
+                                    ->map(fn ($subgroup): array => [
+                                        'name' => $subgroup->name,
+                                        'description' => $subgroup->description,
+                                        'is_image_required' => $subgroup->is_image_required,
+                                        'order' => $subgroup->order,
+                                        'items' => $subgroup->items
+                                            ->sortBy('order')
+                                            ->values()
+                                            ->map(fn ($item): array => [
+                                                'name' => $item->name,
+                                                'description' => $item->description,
+                                                'type' => $item->type->value,
+                                                'is_required' => $item->is_required,
+                                                'options' => $item->options,
+                                                'order' => $item->order,
+                                                'answer' => $item->answerItem?->answer,
+                                            ])
+                                            ->all(),
                                     ])
                                     ->all(),
                             ])
@@ -2583,7 +2620,7 @@ class SyncService
                 }
             }
 
-            $pendingTradeCheckAttachments = TradeCheckAttachment::with(['tradeCheck', 'item'])
+            $pendingTradeCheckAttachments = TradeCheckAttachment::with(['tradeCheck', 'subgroup.group'])
                 ->where(function ($q) {
                     $q->where('sync_status', 'pending')
                         ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
@@ -2610,7 +2647,7 @@ class SyncService
                 }
             }
 
-            $pendingGiveaways = Giveaway::with(['items.answerItem', 'salescall'])
+            $pendingGiveaways = Giveaway::with(['items.item', 'items.answerItem', 'salescall'])
                 ->where(function ($q) {
                     $q->where('sync_status', 'pending')
                         ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
@@ -2621,14 +2658,14 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/giveaway/push", [
                         'server_id' => $giveaway->server_id,
+                        'client_uuid' => $giveaway->local_uuid,
                         'salescall_uuid' => $giveaway->salescall?->local_uuid,
                         'name' => $giveaway->name,
                         'items' => $giveaway->items
                             ->sortBy('id')
                             ->values()
                             ->map(fn ($item): array => [
-                                'category' => $item->category->value,
-                                'name' => $item->name,
+                                'giveaway_item_id' => $item->item?->server_id,
                                 'answer' => $item->answerItem?->answer,
                             ])
                             ->all(),
@@ -2663,7 +2700,7 @@ class SyncService
                 }
             }
 
-            $pendingGiveawaySignatures = GiveawaySignature::with(['giveaway', 'answer.item'])
+            $pendingGiveawaySignatures = GiveawaySignature::with(['giveaway'])
                 ->where(function ($q) {
                     $q->where('sync_status', 'pending')
                         ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
@@ -2690,6 +2727,33 @@ class SyncService
                 }
             }
 
+            $pendingGiveawayPhotos = GiveawayPhoto::with('giveaway')
+                ->where(function ($q) {
+                    $q->where('sync_status', 'pending')
+                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
+                })
+                ->get();
+
+            foreach ($pendingGiveawayPhotos as $photo) {
+                if (! $photo->giveaway?->server_id) {
+                    continue; // wait for the Giveaway to sync first
+                }
+
+                $result = $this->pushGiveawayPhotoItem($client, $photo);
+
+                if ($result instanceof SyncResult) {
+                    return SyncResult::fail($result->message, $result->errorCode, $pushed + $result->syncedCount, $failed + $result->failedCount, $retryable + $result->retryableCount, array_values(array_unique([...array_keys($failureReasons), ...$result->failureReasons])));
+                }
+
+                if ($result['success']) {
+                    $pushed++;
+                } else {
+                    $failed++;
+                    $retryable++;
+                    $failureReasons[$result['reason']] = true;
+                }
+            }
+
             $pendingRepairs = Repair::with('salescall')
                 ->where(function ($q) {
                     $q->where('sync_status', 'pending')
@@ -2701,6 +2765,7 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/repair/push", [
                         'server_id' => $repair->server_id,
+                        'client_uuid' => $repair->local_uuid,
                         'salescall_uuid' => $repair->salescall?->local_uuid,
                         'plate_number' => $repair->plate_number,
                         'invoice_number' => $repair->invoice_number,
@@ -2776,6 +2841,7 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/crr-signage/push", [
                         'server_id' => $signage->server_id,
+                        'client_uuid' => $signage->local_uuid,
                         'salescall_uuid' => $signage->salescall?->local_uuid,
                         'product_id' => $signage->product?->server_id,
                         'type_id' => $signage->type?->server_id,
@@ -2850,6 +2916,7 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/trade-request/push", [
                         'server_id' => $tradeRequest->server_id,
+                        'client_uuid' => $tradeRequest->local_uuid,
                         'salescall_uuid' => $tradeRequest->salescall?->local_uuid,
                         'product_id' => $tradeRequest->product?->server_id,
                         'items' => $tradeRequest->items
@@ -2931,6 +2998,7 @@ class SyncService
                 try {
                     $response = $client->post("{$this->serverUrl}/api/forms/training/push", [
                         'server_id' => $training->server_id,
+                        'client_uuid' => $training->local_uuid,
                         'salescall_uuid' => $training->salescall?->local_uuid,
                         'topic_id' => $training->topic?->server_id,
                         'other_topic' => $training->other_topic,
@@ -3129,10 +3197,7 @@ class SyncService
             }
 
             $pendingAttachments = CustomerProfileAttachment::with('salescall')
-                ->where(function ($q) {
-                    $q->where('sync_status', 'pending')
-                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
-                })
+                ->whereIn('sync_status', ['pending', 'failed'])
                 ->get();
 
             foreach ($pendingAttachments as $attachment) {
@@ -3156,10 +3221,7 @@ class SyncService
             }
 
             $pendingProfiles = CustomerProfile::with('salescall')
-                ->where(function ($q) {
-                    $q->where('sync_status', 'pending')
-                        ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
-                })
+                ->whereIn('sync_status', ['pending', 'failed'])
                 ->get();
 
             foreach ($pendingProfiles as $profile) {
@@ -3182,10 +3244,7 @@ class SyncService
                 }
             }
 
-            $pendingNotes = CustomerNote::where(function ($q) {
-                $q->where('sync_status', 'pending')
-                    ->orWhere(fn ($q2) => $q2->where('sync_status', 'failed')->where('sync_attempts', '<', 3));
-            })->get();
+            $pendingNotes = CustomerNote::whereIn('sync_status', ['pending', 'failed'])->get();
 
             foreach ($pendingNotes as $note) {
                 try {
@@ -3774,7 +3833,8 @@ class SyncService
                     ->attach('file', $stream, basename($attachment->local_path))
                     ->post("{$this->serverUrl}/api/forms/trade-check/attach", [
                         'server_id' => $attachment->tradeCheck->server_id,
-                        'item_ref' => $attachment->item?->name,
+                        'group_ref' => $attachment->subgroup?->group?->name,
+                        'subgroup_ref' => $attachment->subgroup?->name,
                     ]);
             } finally {
                 fclose($stream);
@@ -3820,6 +3880,79 @@ class SyncService
     /**
      * @return array{success: bool, reason?: string}|SyncResult
      */
+    private function pushGiveawayPhotoItem(PendingRequest $client, GiveawayPhoto $photo): array|SyncResult
+    {
+        try {
+            if (! $this->isReadableLocalFile($photo->local_path)) {
+                $this->recordItemFailure($photo, 'local_file_missing', 'local_file_missing: '.$this->displayPath($photo->local_path), [
+                    'stage' => 'giveaway-photo:local-file',
+                    'local_path' => $photo->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            $stream = fopen($photo->local_path, 'r');
+
+            if ($stream === false) {
+                $this->recordItemFailure($photo, 'local_file_missing', 'local_file_missing: unable to open '.$this->displayPath($photo->local_path), [
+                    'stage' => 'giveaway-photo:local-open',
+                    'local_path' => $photo->local_path,
+                ]);
+
+                return ['success' => false, 'reason' => 'local_file_missing'];
+            }
+
+            try {
+                $response = $client
+                    ->attach('file', $stream, basename($photo->local_path))
+                    ->post("{$this->serverUrl}/api/forms/giveaway/photo", [
+                        'server_id' => $photo->giveaway->server_id,
+                    ]);
+            } finally {
+                fclose($stream);
+            }
+
+            if ($response->status() === 401) {
+                return SyncResult::fail('Session expired. Please log out and log in again.', 'token_expired');
+            }
+
+            $serverId = $response->json('server_id') ?? $response->json('uploaded_file_id');
+            if (! $response->successful() || $serverId === null) {
+                $failure = $response->failed() && $response->status() >= 500
+                    ? 'portal_upload_failed'
+                    : 'portal_rejected';
+
+                $this->recordItemFailure($photo, $failure, $response->status().': '.$this->trimRemoteError($response->body()), [
+                    'stage' => 'giveaway-photo:portal',
+                    'endpoint' => '/api/forms/giveaway/photo',
+                    'http_status' => $response->status(),
+                ]);
+
+                return ['success' => false, 'reason' => $failure];
+            }
+
+            $this->markSynced($photo, [
+                'server_id' => $serverId,
+                'synced_at' => now(),
+            ]);
+
+            return ['success' => true];
+        } catch (Throwable $e) {
+            $classification = $this->classifyBinaryThrowable($e);
+            $this->recordThrowableFailure($photo, $classification, $e, [
+                'stage' => 'giveaway-photo:unexpected',
+                'endpoint' => '/api/forms/giveaway/photo',
+                'local_path' => $photo->local_path,
+            ]);
+
+            return ['success' => false, 'reason' => $classification];
+        }
+    }
+
+    /**
+     * @return array{success: bool, reason?: string}|SyncResult
+     */
     private function pushGiveawaySignatureItem(PendingRequest $client, GiveawaySignature $signature): array|SyncResult
     {
         try {
@@ -3848,7 +3981,6 @@ class SyncService
                     ->attach('file', $stream, basename($signature->local_path))
                     ->post("{$this->serverUrl}/api/forms/giveaway/attach", [
                         'server_id' => $signature->giveaway->server_id,
-                        'item_ref' => $signature->answer?->item?->name,
                     ]);
             } finally {
                 fclose($stream);

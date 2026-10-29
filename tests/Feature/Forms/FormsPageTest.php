@@ -29,6 +29,7 @@ use App\Services\Forms\TradeCheckService;
 use App\Services\Forms\TradeRequestService;
 use App\Services\Forms\TrainingService;
 use App\Services\StagedAttachmentService;
+use App\Services\SyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -56,6 +57,11 @@ function formsPageFakePortal(array $crrs = [], array $programs = [], array $trad
         str_contains($request->url(), '/api/forms/marketing/programs') => Http::response(['marketing_programs' => []], 200),
         str_contains($request->url(), '/api/forms/marketing/pull') => Http::response(['marketings' => []], 200),
         str_contains($request->url(), '/api/forms/trade-check/pull') => Http::response(['trade_checks' => $tradeChecks], 200),
+        str_contains($request->url(), '/api/forms/giveaway/master-data') => Http::response([
+            'items' => [
+                ['id' => 1, 'category' => 1, 'category_label' => 'Gift Certificates', 'name' => 'KFC GC', 'order' => 1],
+            ],
+        ], 200),
         str_contains($request->url(), '/api/forms/giveaway/pull') => Http::response(['giveaways' => []], 200),
         str_contains($request->url(), '/api/forms/repair/pull') => Http::response(['repairs' => []], 200),
         str_contains($request->url(), '/api/forms/crr-signage/products') => Http::response(['signage_products' => [['id' => 301, 'name' => 'Tarpaulin']]], 200),
@@ -90,36 +96,79 @@ function formsPageTradeCheckTemplates(): array
             'category' => 1,
             'description' => null,
             'order' => 1,
-            'items' => [
+            'subgroups' => [
                 [
-                    'id' => 101,
-                    'name' => 'DF Signage - Available',
+                    'id' => 11,
+                    'name' => 'DF Signage',
                     'description' => null,
-                    'type' => 1,
-                    'is_required' => true,
                     'is_image_required' => false,
-                    'options' => null,
                     'order' => 1,
-                    'answer' => null,
                     'attachments' => [],
-                ],
-                [
-                    'id' => 102,
-                    'name' => 'DF Signage - Condition',
-                    'description' => null,
-                    'type' => 4,
-                    'is_required' => false,
-                    'is_image_required' => false,
-                    'options' => ['Good', 'Bad'],
-                    'order' => 2,
-                    'answer' => null,
-                    'attachments' => [],
+                    'items' => [
+                        [
+                            'id' => 101,
+                            'name' => 'Available',
+                            'description' => null,
+                            'type' => 1,
+                            'is_required' => true,
+                            'options' => null,
+                            'order' => 1,
+                            'answer' => null,
+                        ],
+                        [
+                            'id' => 102,
+                            'name' => 'Good condition',
+                            'description' => null,
+                            'type' => 4,
+                            'is_required' => false,
+                            'options' => ['Good', 'Bad'],
+                            'order' => 2,
+                            'answer' => null,
+                        ],
+                    ],
                 ],
             ],
         ]],
         'answers' => [],
     ]];
 }
+
+test('the Forms page auto-sync action pushes pending submissions', function () {
+    $user = formsPageUser();
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+
+    $program = formsPageProgram();
+    $program->update(['server_id' => 1]);
+    app(CrrService::class)->create($user, [
+        'crr_program_id' => $program->id,
+        'date_implemented' => '2026-10-11',
+        'amount' => '1500.50',
+        'details' => 'Pending CRR',
+        'remarks' => null,
+        'salescall_uuid' => null,
+        'attachments' => [],
+    ]);
+
+    Http::fake([
+        '*/api/ping' => Http::response([], 200),
+        '*/api/forms/crr/programs' => Http::response(['crr_programs' => []], 200),
+        '*/api/forms/crr/pull' => Http::response(['crrs' => []], 200),
+        '*/api/forms/crr/push' => Http::response(['server_id' => 900], 200),
+        '*' => Http::response([], 200),
+    ]);
+
+    expect(Crr::query()->firstOrFail()->sync_status)->toBe('pending')
+        ->and(app(SyncService::class)->hasPendingChanges())->toBeTrue()
+        ->and(app(SyncService::class)->isReachable())->toBeTrue();
+
+    Livewire::test(FormsPage::class)
+        ->assertOk()
+        ->assertSet('selectedForm', 'crr')
+        ->call('syncNow');
+
+    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/api/forms/crr/push'));
+});
 
 test('the Forms page renders for an authenticated user', function () {
     $user = formsPageUser();
@@ -308,7 +357,7 @@ test('selecting Trade Check loads locally created submissions into the list and 
     formsPageFakePortal(tradeChecks: formsPageTradeCheckTemplates());
 
     $template = app(TradeCheckService::class)->programs()->firstOrFail();
-    $items = $template->group->flatMap->items;
+    $items = $template->group->first()->subgroups->first()->items;
 
     $submission = app(TradeCheckService::class)->create($user, [
         'trade_check_id' => $template->id,
@@ -334,7 +383,8 @@ test('selecting Trade Check loads locally created submissions into the list and 
         ->assertSet('selectedRowKey', $key)
         ->assertSee('Trade Check Details')
         ->assertSee('External')
-        ->assertSee('DF Signage - Available')
+        ->assertSee('DF Signage')
+        ->assertSee('Available')
         ->assertSee('Yes')
         ->assertSee('Good')
         ->assertSee('Edit Trade Check');
@@ -360,12 +410,16 @@ test('selecting Giveaway loads locally created submissions into the list and det
     config(['sync.server_url' => 'http://portal.test']);
     formsPageFakePortal();
 
-    $giveaway = app(GiveawayService::class)->create($user, [
+    $service = app(GiveawayService::class);
+    $master = $service->programs()->firstOrFail();
+
+    $giveaway = $service->create($user, [
         'salescall_uuid' => null,
         'name' => 'Store Giveaway',
         'items' => [
-            ['category' => 1, 'name' => 'Gift Check', 'answer' => '2', 'staged_signature_id' => formsPageGiveawaySignatureStagedId($user)],
+            ['giveaway_item_id' => $master->id, 'answer' => '2'],
         ],
+        'staged_signature_id' => formsPageGiveawaySignatureStagedId($user),
     ]);
 
     $component = Livewire::test(FormsPage::class)
@@ -384,7 +438,8 @@ test('selecting Giveaway loads locally created submissions into the list and det
     $component->call('selectRow', $key)
         ->assertSet('selectedRowKey', $key)
         ->assertSee('Giveaway Details')
-        ->assertSee('Gift Check')
+        ->assertSee('KFC GC')
+        ->assertSee('Proof')
         ->assertSee('Edit Giveaway');
 
     $component->call('editSelectedRow')
@@ -644,6 +699,42 @@ test('editing a non-editable CRR is refused', function () {
         ->call('editSelectedRow')
         ->assertNoRedirect()
         ->assertSet('actionError', '');
+});
+
+test('a server form row with a matching client_uuid opens the local pending row instead of adopting a duplicate', function () {
+    $user = formsPageUser();
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+
+    $program = CrrProgram::create(['name' => 'Price Support', 'server_id' => 55]);
+
+    $crr = app(CrrService::class)->create($user, [
+        'crr_program_id' => $program->id,
+        'date_implemented' => '2026-10-11',
+        'amount' => '100.00',
+        'details' => null,
+        'remarks' => null,
+        'salescall_uuid' => null,
+        'attachments' => [],
+    ]);
+
+    formsPageFakePortal(crrs: [[
+        'id' => 77,
+        'client_uuid' => $crr->local_uuid,
+        'crr_program_id' => 55,
+        'amount' => '100.00',
+        'rsm_status' => 1,
+        'sps_status' => 1,
+        'spm_status' => 1,
+        'attachments' => [],
+    ]]);
+
+    Livewire::test(FormsPage::class)
+        ->call('selectRow', 'server:77')
+        ->call('editSelectedRow')
+        ->assertRedirect(CrrFormPage::getUrl(['crr' => $crr->id]));
+
+    expect(Crr::query()->count())->toBe(1);
 });
 
 test('editing an editable CRR redirects to the CRR form', function () {

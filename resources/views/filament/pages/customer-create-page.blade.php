@@ -21,7 +21,7 @@
                 <ul class="list-disc space-y-1 pl-5">
                     @foreach($errors->messages() as $field => $messages)
                         @foreach($messages as $message)
-                            <li><strong>{{ str($field)->replace('.', ' ')->headline() }}:</strong> {{ $message }}</li>
+                            <li><strong>{{ str($field)->replaceMatches('/\.\d+/', '')->replace('.', ' ')->headline() }}:</strong> {{ $message }}</li>
                         @endforeach
                     @endforeach
                 </ul>

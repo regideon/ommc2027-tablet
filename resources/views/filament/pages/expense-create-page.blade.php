@@ -276,7 +276,7 @@
 
             <div class="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">This Expense and any attachments will be saved locally and remain pending synchronization.</div>
             <div x-show="expenseErrors.form" class="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700" x-text="expenseError('form')"></div>
-            <div class="grid grid-cols-2 gap-3 pt-1"><button type="button" @click="cancelExpense()" class="h-12 rounded-xl border border-gray-200 text-[#434654] font-bold">Cancel</button><button type="submit" :disabled="expenseSaving" class="h-12 rounded-xl bg-[#890f00] text-white font-bold disabled:opacity-50"><span x-show="!expenseSaving">Save Locally</span><span x-show="expenseSaving">Saving…</span></button></div>
+            <div class="grid grid-cols-2 gap-3 pt-1"><button type="button" @click="cancelExpense()" class="h-12 rounded-xl border border-gray-200 text-[#434654] font-bold">Cancel</button><button type="submit" :disabled="expenseSaving" class="h-12 rounded-xl bg-[#890f00] text-white font-bold disabled:opacity-50"><span x-show="!expenseSaving">Save</span><span x-show="expenseSaving">Saving…</span></button></div>
         </form>
     </div>
 

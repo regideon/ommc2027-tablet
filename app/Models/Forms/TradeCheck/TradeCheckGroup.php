@@ -20,8 +20,8 @@ class TradeCheckGroup extends Model
         return $this->belongsTo(TradeCheck::class);
     }
 
-    public function items(): HasMany
+    public function subgroups(): HasMany
     {
-        return $this->hasMany(TradeCheckItem::class, 'group_id');
+        return $this->hasMany(TradeCheckSubgroup::class, 'group_id');
     }
 }

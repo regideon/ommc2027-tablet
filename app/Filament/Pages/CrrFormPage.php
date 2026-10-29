@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Enums\FormKey;
 use App\Filament\Concerns\LocksRequestedSalescall;
+use App\Filament\Concerns\RedirectsWithFormSync;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrProgram;
 use App\Models\Salescall;
@@ -25,6 +26,7 @@ use Native\Mobile\Facades\Camera;
 class CrrFormPage extends Page
 {
     use LocksRequestedSalescall;
+    use RedirectsWithFormSync;
 
     protected string $view = 'filament.pages.crr-form-page';
 
@@ -164,7 +166,7 @@ class CrrFormPage extends Page
 
         Notification::make()->title($title)->success()->send();
 
-        $this->redirect(FormsPage::getUrl(['form' => FormKey::CRR->value]));
+        $this->redirectAfterFormSave(FormKey::CRR->value);
     }
 
     public function cancel(): void

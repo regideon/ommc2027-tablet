@@ -5,11 +5,13 @@ namespace App\Filament\Pages;
 use App\Enums\FormKey;
 use App\Enums\TradeCheck\FieldType;
 use App\Filament\Concerns\LocksRequestedSalescall;
+use App\Filament\Concerns\RedirectsWithFormSync;
 use App\Filament\Concerns\StagesAttachments;
 use App\Models\Forms\TradeCheck\TradeCheck;
 use App\Models\Forms\TradeCheck\TradeCheckAttachment;
 use App\Models\Forms\TradeCheck\TradeCheckGroup;
 use App\Models\Forms\TradeCheck\TradeCheckItem;
+use App\Models\Forms\TradeCheck\TradeCheckSubgroup;
 use App\Models\Salescall;
 use App\Services\Forms\TradeCheckService;
 use App\Support\NativeMediaPath;
@@ -29,6 +31,7 @@ use Throwable;
 class TradeCheckFormPage extends Page
 {
     use LocksRequestedSalescall;
+    use RedirectsWithFormSync;
     use StagesAttachments;
 
     protected string $view = 'filament.pages.trade-check-form-page';
@@ -53,7 +56,7 @@ class TradeCheckFormPage extends Page
     /** @var array<int|string, mixed> */
     public array $answers = [];
 
-    /** @var array<int|string, array<int, array{source: string, id: int, original_name: ?string, mime_type: ?string, url: ?string}>> */
+    /** @var array<int, array<int, array{source: string, id: int, original_name: ?string, mime_type: ?string, url: ?string}>> */
     public array $attachments = [];
 
     /** @var array<int, int> */
@@ -70,7 +73,7 @@ class TradeCheckFormPage extends Page
     /** @var array<string, int> */
     public array $pendingAttachment = [];
 
-    /** @var array<int, array{name: string, category_label: string, description: ?string, items: array<int, array{id: int, name: string, description: ?string, type: int, type_label: string, is_required: bool, is_image_required: bool, options: array<int, mixed>}>}> */
+    /** @var array<int, array{id: int, name: string, category_label: string, description: ?string, subgroups: array<int, array{id: int, name: string, description: ?string, is_image_required: bool, items: array<int, array{id: int, name: string, description: ?string, type: int, type_label: string, is_required: bool, options: array<int, mixed>}>}>}> */
     public array $groups = [];
 
     public function mount(TradeCheckService $service): void
@@ -105,7 +108,7 @@ class TradeCheckFormPage extends Page
 
         if ($submissionId !== false && $submissionId !== null) {
             $tradeCheck = TradeCheck::query()
-                ->with(['group.items.answerItem', 'answers', 'attachments', 'salescall'])
+                ->with(['group.subgroups.items.answerItem', 'answers', 'attachments', 'salescall'])
                 ->where('submitted_by', auth()->id())
                 ->find($submissionId);
 
@@ -117,13 +120,15 @@ class TradeCheckFormPage extends Page
                 $this->trade_check_id = $tradeCheck->id;
                 $this->salescall_uuid = $tradeCheck->salescall?->local_uuid;
 
-                $attachmentsByItem = $tradeCheck->attachments->groupBy('item_id');
+                $attachmentsBySubgroup = $tradeCheck->attachments->groupBy('subgroup_id');
                 $service = app(TradeCheckService::class);
 
-                foreach ($tradeCheck->group->flatMap->items as $item) {
+                foreach ($tradeCheck->group->flatMap->subgroups->flatMap->items as $item) {
                     $this->answers[$item->id] = $this->normalizeAnswer($item, $item->answerItem?->answer);
+                }
 
-                    $this->attachments[$item->id] = ($attachmentsByItem->get($item->id) ?? collect())
+                foreach ($tradeCheck->group->flatMap->subgroups as $subgroup) {
+                    $this->attachments[$subgroup->id] = ($attachmentsBySubgroup->get($subgroup->id) ?? collect())
                         ->map(fn (TradeCheckAttachment $attachment): array => [
                             'source' => 'existing',
                             'id' => $attachment->id,
@@ -146,15 +151,18 @@ class TradeCheckFormPage extends Page
         $templateId = filter_var(request()->query('template'), FILTER_VALIDATE_INT);
 
         $template = $templateId !== false && $templateId !== null
-            ? TradeCheck::query()->with('group.items')->find($templateId)
-            : TradeCheck::query()->with('group.items')->orderBy('id')->first();
+            ? TradeCheck::query()->with('group.subgroups.items')->find($templateId)
+            : TradeCheck::query()->with('group.subgroups.items')->orderBy('id')->first();
 
         if ($template instanceof TradeCheck) {
             $this->trade_check_id = $template->id;
 
-            foreach ($template->group->flatMap->items as $item) {
+            foreach ($template->group->flatMap->subgroups->flatMap->items as $item) {
                 $this->answers[$item->id] = '';
-                $this->attachments[$item->id] = [];
+            }
+
+            foreach ($template->group->flatMap->subgroups as $subgroup) {
+                $this->attachments[$subgroup->id] = [];
             }
 
             $this->groups = $this->mapGroups($template->group);
@@ -203,7 +211,7 @@ class TradeCheckFormPage extends Page
 
         Notification::make()->title($title)->success()->send();
 
-        $this->redirect(FormsPage::getUrl(['form' => FormKey::TRADE_CHECK->value]));
+        $this->redirectAfterFormSave(FormKey::TRADE_CHECK->value);
     }
 
     public function cancel(): void
@@ -212,29 +220,29 @@ class TradeCheckFormPage extends Page
         $this->redirect(FormsPage::getUrl(['form' => FormKey::TRADE_CHECK->value]));
     }
 
-    public function stageItemAttachment(int $itemId, array $payload): void
+    public function stageSubgroupAttachment(int $subgroupId, array $payload): void
     {
-        unset($this->formErrors['attachments.'.$itemId]);
+        unset($this->formErrors['attachments.'.$subgroupId]);
 
         $data = $payload['data'] ?? null;
         if (! is_string($data) || $data === '') {
             return;
         }
 
-        if (! $this->canStageMoreForItem($itemId)) {
+        if (! $this->canStageMoreForSubgroup($subgroupId)) {
             return;
         }
 
         $staged = $this->stageAttachmentFromDataUri($data, (string) ($payload['original_name'] ?? 'attachment'));
 
         if ($staged !== null) {
-            $this->attachments[$itemId][] = ['source' => 'staged', ...$staged];
+            $this->attachments[$subgroupId][] = ['source' => 'staged', ...$staged];
         }
     }
 
-    public function removeItemAttachment(int $itemId, int $index): void
+    public function removeSubgroupAttachment(int $subgroupId, int $index): void
     {
-        $attachment = $this->attachments[$itemId][$index] ?? null;
+        $attachment = $this->attachments[$subgroupId][$index] ?? null;
 
         if (is_array($attachment) && isset($attachment['id'])) {
             if (($attachment['source'] ?? null) === 'staged') {
@@ -244,30 +252,30 @@ class TradeCheckFormPage extends Page
             }
         }
 
-        unset($this->attachments[$itemId][$index]);
-        $this->attachments[$itemId] = array_values($this->attachments[$itemId] ?? []);
-        unset($this->formErrors['attachments.'.$itemId]);
+        unset($this->attachments[$subgroupId][$index]);
+        $this->attachments[$subgroupId] = array_values($this->attachments[$subgroupId] ?? []);
+        unset($this->formErrors['attachments.'.$subgroupId]);
     }
 
-    public function takeAttachmentPhoto(int $itemId): void
+    public function takeAttachmentPhoto(int $subgroupId): void
     {
         if (! function_exists('nativephp_call')) {
             return;
         }
 
         $capture = Camera::getPhoto();
-        $this->pendingAttachment[$capture->getId()] = $itemId;
+        $this->pendingAttachment[$capture->getId()] = $subgroupId;
         $capture->start();
     }
 
-    public function pickAttachmentFromGallery(int $itemId): void
+    public function pickAttachmentFromGallery(int $subgroupId): void
     {
         if (! function_exists('nativephp_call')) {
             return;
         }
 
         $picker = Camera::pickImages('image')->single();
-        $this->pendingAttachment[$picker->getId()] = $itemId;
+        $this->pendingAttachment[$picker->getId()] = $subgroupId;
         $picker->start();
     }
 
@@ -278,10 +286,10 @@ class TradeCheckFormPage extends Page
             return;
         }
 
-        $itemId = $this->pendingAttachment[$id];
+        $subgroupId = $this->pendingAttachment[$id];
         unset($this->pendingAttachment[$id]);
 
-        $this->stageCapturedAttachment($path, $itemId);
+        $this->stageCapturedAttachment($path, $subgroupId);
     }
 
     /** @param array<int, mixed> $files */
@@ -292,7 +300,7 @@ class TradeCheckFormPage extends Page
             return;
         }
 
-        $itemId = $this->pendingAttachment[$id];
+        $subgroupId = $this->pendingAttachment[$id];
         unset($this->pendingAttachment[$id]);
 
         if ($cancelled) {
@@ -315,7 +323,7 @@ class TradeCheckFormPage extends Page
             return;
         }
 
-        $this->stageCapturedAttachment($path, $itemId);
+        $this->stageCapturedAttachment($path, $subgroupId);
     }
 
     #[On('native:'.PhotoCancelled::class)]
@@ -339,7 +347,7 @@ class TradeCheckFormPage extends Page
 
     /**
      * @param  Collection<int, TradeCheckGroup>  $groups
-     * @return array<int, array{name: string, category_label: string, description: ?string, items: array<int, array{id: int, name: string, description: ?string, type: int, type_label: string, is_required: bool, is_image_required: bool, options: array<int, mixed>}>}>
+     * @return array<int, array{id: int, name: string, category_label: string, description: ?string, subgroups: array<int, array{id: int, name: string, description: ?string, is_image_required: bool, items: array<int, array{id: int, name: string, description: ?string, type: int, type_label: string, is_required: bool, options: array<int, mixed>}>}>}>
      */
     private function mapGroups(Collection $groups): array
     {
@@ -347,21 +355,31 @@ class TradeCheckFormPage extends Page
             ->sortBy('order')
             ->values()
             ->map(fn (TradeCheckGroup $group): array => [
+                'id' => $group->id,
                 'name' => $group->name,
                 'category_label' => (string) $group->category->meta('title'),
                 'description' => $group->description,
-                'items' => $group->items
+                'subgroups' => $group->subgroups
                     ->sortBy('order')
                     ->values()
-                    ->map(fn (TradeCheckItem $item): array => [
-                        'id' => $item->id,
-                        'name' => $item->name,
-                        'description' => $item->description,
-                        'type' => $item->type->value,
-                        'type_label' => (string) $item->type->meta('title'),
-                        'is_required' => $item->is_required,
-                        'is_image_required' => $item->is_image_required,
-                        'options' => $this->itemOptions($item),
+                    ->map(fn (TradeCheckSubgroup $subgroup): array => [
+                        'id' => $subgroup->id,
+                        'name' => $subgroup->name,
+                        'description' => $subgroup->description,
+                        'is_image_required' => $subgroup->is_image_required,
+                        'items' => $subgroup->items
+                            ->sortBy('order')
+                            ->values()
+                            ->map(fn (TradeCheckItem $item): array => [
+                                'id' => $item->id,
+                                'name' => $item->name,
+                                'description' => $item->description,
+                                'type' => $item->type->value,
+                                'type_label' => (string) $item->type->meta('title'),
+                                'is_required' => $item->is_required,
+                                'options' => $this->itemOptions($item),
+                            ])
+                            ->all(),
                     ])
                     ->all(),
             ])
@@ -404,9 +422,9 @@ class TradeCheckFormPage extends Page
         };
     }
 
-    private function stageCapturedAttachment(string $sourcePath, int $itemId): void
+    private function stageCapturedAttachment(string $sourcePath, int $subgroupId): void
     {
-        if (! $this->canStageMoreForItem($itemId)) {
+        if (! $this->canStageMoreForSubgroup($subgroupId)) {
             return;
         }
 
@@ -414,14 +432,14 @@ class TradeCheckFormPage extends Page
         $staged = $this->stageAttachmentFromPath($path);
 
         if ($staged !== null) {
-            $this->attachments[$itemId][] = ['source' => 'staged', ...$staged];
+            $this->attachments[$subgroupId][] = ['source' => 'staged', ...$staged];
         }
     }
 
-    private function canStageMoreForItem(int $itemId): bool
+    private function canStageMoreForSubgroup(int $subgroupId): bool
     {
-        if (count($this->attachments[$itemId] ?? []) >= 10) {
-            $this->formErrors['attachments.'.$itemId] = ['A Trade Check item may have at most 10 attachments.'];
+        if (count($this->attachments[$subgroupId] ?? []) >= 10) {
+            $this->formErrors['attachments.'.$subgroupId] = ['A Trade Check subgroup may have at most 10 attachments.'];
 
             return false;
         }
@@ -430,22 +448,22 @@ class TradeCheckFormPage extends Page
     }
 
     /**
-     * @return array<int|string, array<int, int>>
+     * @return array<int, array<int, int>>
      */
     private function stagedAttachmentIds(): array
     {
         $ids = [];
 
-        foreach ($this->attachments as $itemId => $list) {
-            $itemIds = array_values(array_filter(array_map(
+        foreach ($this->attachments as $subgroupId => $list) {
+            $stagedIds = array_values(array_filter(array_map(
                 static fn (mixed $attachment): int => ($attachment['source'] ?? null) === 'staged'
                     ? (int) ($attachment['id'] ?? 0)
                     : 0,
                 is_array($list) ? $list : [],
             )));
 
-            if ($itemIds !== []) {
-                $ids[$itemId] = $itemIds;
+            if ($stagedIds !== []) {
+                $ids[$subgroupId] = $stagedIds;
             }
         }
 

@@ -3,24 +3,34 @@
 namespace App\Filament\Pages;
 
 use App\Enums\FormKey;
-use App\Enums\Giveaway\GiveawayCategory;
 use App\Filament\Concerns\LocksRequestedSalescall;
+use App\Filament\Concerns\RedirectsWithFormSync;
 use App\Filament\Concerns\StagesAttachments;
 use App\Models\Forms\Giveaway\Giveaway;
 use App\Models\Forms\Giveaway\GiveawayItem;
+use App\Models\Forms\Giveaway\GiveawayPhoto;
 use App\Models\Forms\Giveaway\GiveawaySignature;
+use App\Models\Forms\Giveaway\GiveawaySubmissionItem;
 use App\Models\Salescall;
 use App\Services\Forms\GiveawayService;
+use App\Support\NativeMediaPath;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Livewire\Attributes\On;
+use Native\Mobile\Events\Camera\PermissionDenied;
+use Native\Mobile\Events\Camera\PhotoCancelled;
+use Native\Mobile\Events\Camera\PhotoTaken;
+use Native\Mobile\Events\Gallery\MediaSelected;
+use Native\Mobile\Facades\Camera;
 use Throwable;
 
 class GiveawayFormPage extends Page
 {
     use LocksRequestedSalescall;
+    use RedirectsWithFormSync;
     use StagesAttachments;
 
     protected string $view = 'filament.pages.giveaway-form-page';
@@ -39,23 +49,39 @@ class GiveawayFormPage extends Page
 
     public ?string $salescall_uuid = null;
 
-    /** @var array<int, array{key: string, id: ?int, category: ?int, name: string, answer: string, signature: array{source: string, id: int, original_name: ?string, mime_type: ?string, url: ?string}|null, existing_signature: array{source: string, id: int, original_name: ?string, mime_type: ?string, url: ?string}|null}> */
+    /** @var array<int, array{key: string, id: ?int, giveaway_item_id: int, category: int, category_label: string, name: string, answer: string}> */
     public array $items = [];
 
     /** @var array<int, array{uuid: ?string, label: string}> */
     public array $salescalls = [];
 
-    /** @var array<int, string> */
-    public array $categories = [];
-
     /** @var array<string, array<int, string>> */
     public array $formErrors = [];
 
-    public function mount(): void
+    /** @var array{source: string, id: int, original_name: ?string, mime_type: ?string, url: ?string}|null */
+    public ?array $signature = null;
+
+    /** @var array{source: string, id: int, original_name: ?string, mime_type: ?string, url: ?string}|null */
+    public ?array $existingSignature = null;
+
+    /** @var array{source: string, id: int, original_name: ?string, mime_type: ?string, url: ?string}|null */
+    public ?array $photo = null;
+
+    /** @var array{source: string, id: int, original_name: ?string, mime_type: ?string, url: ?string}|null */
+    public ?array $existingPhoto = null;
+
+    public bool $removePhoto = false;
+
+    public string $templateLoadError = '';
+
+    public ?string $pendingPhotoCapture = null;
+
+    public function mount(GiveawayService $service): void
     {
-        $this->categories = collect(GiveawayCategory::cases())
-            ->mapWithKeys(fn (GiveawayCategory $category): array => [$category->value => (string) $category->meta('title')])
-            ->all();
+        $masterItems = $service->programs();
+        $this->templateLoadError = $service->programReadFailed()
+            ? 'Giveaway items could not be loaded. Reconnect and reopen this form.'
+            : '';
 
         $this->salescalls = Salescall::query()
             ->with('customer')
@@ -75,7 +101,7 @@ class GiveawayFormPage extends Page
 
         if ($submissionId !== false && $submissionId !== null) {
             $giveaway = Giveaway::query()
-                ->with(['items.answerItem', 'answers.signature', 'salescall'])
+                ->with(['items.item', 'items.answerItem', 'signature', 'photo', 'salescall'])
                 ->where('submitted_by', auth()->id())
                 ->find($submissionId);
 
@@ -86,71 +112,37 @@ class GiveawayFormPage extends Page
                 $this->isEdit = true;
                 $this->name = $giveaway->name;
                 $this->salescall_uuid = $giveaway->salescall?->local_uuid;
-
-                $answers = $giveaway->answers->keyBy('item_id');
-                $service = app(GiveawayService::class);
-
-                $this->items = $giveaway->items
-                    ->sortBy('id')
-                    ->values()
-                    ->map(function (GiveawayItem $item) use ($answers, $service): array {
-                        $signature = $answers->get($item->id)?->signature;
-                        $existing = $signature instanceof GiveawaySignature ? [
-                            'source' => 'existing',
-                            'id' => $signature->id,
-                            'original_name' => $signature->original_name,
-                            'mime_type' => $signature->mime_type,
-                            'url' => $service->signatureUrl($signature),
-                        ] : null;
-
-                        return [
-                            'key' => 'item-'.$item->id,
-                            'id' => $item->id,
-                            'category' => $item->category->value,
-                            'name' => $item->name,
-                            'answer' => (string) ($item->answerItem?->answer ?? ''),
-                            'signature' => $existing,
-                            'existing_signature' => $existing,
-                        ];
-                    })
-                    ->all();
-
-                if ($this->items === []) {
-                    $this->items = [$this->blankItemRow()];
-                }
+                $this->items = $this->buildRows($masterItems, $giveaway);
+                $this->signature = $this->signaturePayload($giveaway->signature);
+                $this->existingSignature = $this->signature;
+                $this->photo = $this->photoPayload($giveaway->photo);
+                $this->existingPhoto = $this->photo;
 
                 return;
             }
         }
 
         $this->applyRequestedSalescallLock();
-
-        $this->items = [$this->blankItemRow()];
+        $this->items = $this->buildRows($masterItems, null);
     }
 
     public function save(GiveawayService $service): void
     {
         $this->formErrors = [];
 
-        $items = [];
-
-        foreach (array_values($this->items) as $row) {
-            $signature = is_array($row['signature'] ?? null) ? $row['signature'] : null;
-
-            $items[] = [
-                'id' => $row['id'] ?? null,
-                'category' => $row['category'] ?? null,
-                'name' => $row['name'] ?? '',
-                'answer' => $row['answer'] ?? null,
-                'signature_id' => ($signature['source'] ?? null) === 'existing' ? ($signature['id'] ?? null) : null,
-                'staged_signature_id' => ($signature['source'] ?? null) === 'staged' ? ($signature['id'] ?? null) : null,
-            ];
-        }
-
         $input = [
             'name' => $this->name,
             'salescall_uuid' => $this->salescall_uuid,
-            'items' => $items,
+            'items' => collect($this->items)->map(fn (array $row): array => [
+                'id' => $row['id'],
+                'giveaway_item_id' => $row['giveaway_item_id'],
+                'answer' => $row['answer'],
+            ])->all(),
+            'signature_id' => ($this->signature['source'] ?? null) === 'existing' ? ($this->signature['id'] ?? null) : null,
+            'staged_signature_id' => ($this->signature['source'] ?? null) === 'staged' ? ($this->signature['id'] ?? null) : null,
+            'photo_id' => ($this->photo['source'] ?? null) === 'existing' ? ($this->photo['id'] ?? null) : null,
+            'staged_photo_id' => ($this->photo['source'] ?? null) === 'staged' ? ($this->photo['id'] ?? null) : null,
+            'remove_photo' => $this->removePhoto,
         ];
 
         try {
@@ -181,67 +173,22 @@ class GiveawayFormPage extends Page
 
         Notification::make()->title($title)->success()->send();
 
-        $this->redirect(FormsPage::getUrl(['form' => FormKey::GIVEAWAY->value]));
+        $this->redirectAfterFormSave(FormKey::GIVEAWAY->value);
     }
 
     public function cancel(): void
     {
-        foreach ($this->items as $row) {
-            if (is_array($row)) {
-                $this->discardRowSignature($row);
-            }
-        }
-
+        $this->discardStagedPhoto();
+        $this->discardStagedSignature();
         $this->redirect(FormsPage::getUrl(['form' => FormKey::GIVEAWAY->value]));
-    }
-
-    public function addItemRow(): void
-    {
-        $this->items[] = $this->blankItemRow();
-    }
-
-    public function removeItemRow(string $key): void
-    {
-        $index = $this->rowIndex($key);
-
-        if ($index === null) {
-            return;
-        }
-
-        $this->discardRowStagedSignature($index);
-
-        unset($this->items[$index]);
-        $this->items = array_values($this->items);
-
-        $this->formErrors = [];
-    }
-
-    public function removeSignature(string $key): void
-    {
-        $index = $this->rowIndex($key);
-
-        if ($index === null) {
-            return;
-        }
-
-        $this->discardRowStagedSignature($index);
-        $this->items[$index]['signature'] = $this->items[$index]['existing_signature'] ?? null;
-
-        unset($this->formErrors['items.'.$index.'.signature_id']);
     }
 
     /**
      * @param  array{data?: string, original_name?: string}  $payload
      */
-    public function stageSignature(string $key, array $payload): void
+    public function stageSignature(array $payload): void
     {
-        $index = $this->rowIndex($key);
-
-        if ($index === null) {
-            return;
-        }
-
-        unset($this->formErrors['items.'.$index.'.signature_id']);
+        unset($this->formErrors['signature_id']);
 
         $data = $payload['data'] ?? null;
 
@@ -255,55 +202,210 @@ class GiveawayFormPage extends Page
             return;
         }
 
-        $this->discardRowStagedSignature($index);
-        $this->items[$index]['signature'] = ['source' => 'staged', ...$staged];
+        $this->discardStagedSignature();
+        $this->signature = ['source' => 'staged', ...$staged];
     }
 
-    private function rowIndex(string $key): ?int
+    public function removeSignature(): void
     {
-        foreach ($this->items as $index => $row) {
-            if (($row['key'] ?? null) === $key) {
-                return $index;
-            }
-        }
-
-        return null;
-    }
-
-    private function discardRowStagedSignature(int $index): void
-    {
-        $row = $this->items[$index] ?? null;
-
-        if (is_array($row)) {
-            $this->discardRowSignature($row);
-        }
+        $this->discardStagedSignature();
+        $this->signature = $this->existingSignature;
     }
 
     /**
-     * @return array{key: string, id: ?int, category: int, name: string, answer: string, signature: null, existing_signature: null}
+     * @param  array{data?: string, original_name?: string}  $payload
      */
-    private function blankItemRow(): array
+    public function stagePhoto(array $payload): void
     {
+        unset($this->formErrors['photo_id']);
+
+        $data = $payload['data'] ?? null;
+
+        if (! is_string($data) || $data === '') {
+            return;
+        }
+
+        $staged = $this->stageAttachmentFromDataUri($data, (string) ($payload['original_name'] ?? 'photo.png'));
+
+        if ($staged === null) {
+            return;
+        }
+
+        $this->discardStagedPhoto();
+        $this->photo = ['source' => 'staged', ...$staged];
+        $this->removePhoto = false;
+    }
+
+    public function removePhoto(): void
+    {
+        $this->discardStagedPhoto();
+        $this->photo = null;
+        $this->removePhoto = true;
+        unset($this->formErrors['photo_id']);
+    }
+
+    public function takePhoto(): void
+    {
+        if (! function_exists('nativephp_call')) {
+            return;
+        }
+
+        $capture = Camera::getPhoto();
+        $this->pendingPhotoCapture = $capture->getId();
+        $capture->start();
+    }
+
+    public function pickPhotoFromGallery(): void
+    {
+        if (! function_exists('nativephp_call')) {
+            return;
+        }
+
+        $picker = Camera::pickImages('image')->single();
+        $this->pendingPhotoCapture = $picker->getId();
+        $picker->start();
+    }
+
+    #[On('native:'.PhotoTaken::class)]
+    public function onPhotoTaken(string $path, string $mimeType = 'image/jpeg', ?string $id = null): void
+    {
+        if ($id === null || $id !== $this->pendingPhotoCapture) {
+            return;
+        }
+
+        $this->pendingPhotoCapture = null;
+        $this->stagePhotoFromPath($path);
+    }
+
+    /** @param array<int, mixed> $files */
+    #[On('native:'.MediaSelected::class)]
+    public function onPhotoSelected(bool $success, array $files = [], int $count = 0, ?string $error = null, bool $cancelled = false, ?string $id = null): void
+    {
+        if ($id === null || $id !== $this->pendingPhotoCapture) {
+            return;
+        }
+
+        $this->pendingPhotoCapture = null;
+
+        if ($cancelled) {
+            return;
+        }
+
+        if (! $success || empty($files)) {
+            Notification::make()->title($error ?: 'Could not import the selected photo.')->danger()->send();
+
+            return;
+        }
+
+        $path = NativeMediaPath::resolve($files[0]);
+
+        if ($path === null) {
+            Notification::make()->title('Selected photo path is invalid.')->danger()->send();
+
+            return;
+        }
+
+        $this->stagePhotoFromPath($path);
+    }
+
+    #[On('native:'.PhotoCancelled::class)]
+    public function onPhotoCancelled(?string $id = null): void
+    {
+        if ($id === $this->pendingPhotoCapture) {
+            $this->pendingPhotoCapture = null;
+        }
+    }
+
+    #[On('native:'.PermissionDenied::class)]
+    public function onPhotoPermissionDenied(?string $id = null): void
+    {
+        if ($id === $this->pendingPhotoCapture) {
+            $this->pendingPhotoCapture = null;
+        }
+
+        Notification::make()->title('Camera permission is required to add a photo.')->danger()->send();
+    }
+
+    /**
+     * @param  Collection<int, GiveawayItem>  $masterItems
+     * @return array<int, array{key: string, id: ?int, giveaway_item_id: int, category: int, category_label: string, name: string, answer: string}>
+     */
+    private function buildRows(Collection $masterItems, ?Giveaway $giveaway): array
+    {
+        $submissionItems = $giveaway?->items->keyBy('giveaway_item_id') ?? collect();
+
+        return $masterItems
+            ->sortBy(fn (GiveawayItem $item): string => sprintf('%02d-%05d', $item->category->value, $item->order))
+            ->values()
+            ->map(function (GiveawayItem $master, int $index) use ($submissionItems): array {
+                $submission = $submissionItems->get($master->id);
+
+                return [
+                    'key' => 'master-'.$master->id,
+                    'id' => $submission instanceof GiveawaySubmissionItem ? $submission->id : null,
+                    'giveaway_item_id' => $master->id,
+                    'category' => $master->category->value,
+                    'category_label' => (string) $master->category->meta('title'),
+                    'name' => $master->name,
+                    'answer' => (string) ($submission?->answerItem?->answer ?? ''),
+                ];
+            })
+            ->all();
+    }
+
+    private function signaturePayload(?GiveawaySignature $signature): ?array
+    {
+        if (! $signature instanceof GiveawaySignature) {
+            return null;
+        }
+
         return [
-            'key' => 'new-'.Str::uuid(),
-            'id' => null,
-            'category' => GiveawayCategory::GC->value,
-            'name' => '',
-            'answer' => '',
-            'signature' => null,
-            'existing_signature' => null,
+            'source' => 'existing',
+            'id' => $signature->id,
+            'original_name' => $signature->original_name,
+            'mime_type' => $signature->mime_type,
+            'url' => app(GiveawayService::class)->signatureUrl($signature),
         ];
     }
 
-    /**
-     * @param  array<string, mixed>  $row
-     */
-    private function discardRowSignature(array $row): void
+    private function photoPayload(?GiveawayPhoto $photo): ?array
     {
-        $signature = $row['signature'] ?? null;
+        if (! $photo instanceof GiveawayPhoto) {
+            return null;
+        }
 
-        if (is_array($signature) && ($signature['source'] ?? null) === 'staged' && isset($signature['id'])) {
-            $this->discardStagedAttachment((int) $signature['id']);
+        return [
+            'source' => 'existing',
+            'id' => $photo->id,
+            'original_name' => $photo->original_name,
+            'mime_type' => $photo->mime_type,
+            'url' => app(GiveawayService::class)->photoUrl($photo),
+        ];
+    }
+
+    private function stagePhotoFromPath(string $sourcePath): void
+    {
+        $path = NativeMediaPath::resolve($sourcePath) ?? $sourcePath;
+        $staged = $this->stageAttachmentFromPath($path);
+
+        if ($staged !== null) {
+            $this->discardStagedPhoto();
+            $this->photo = ['source' => 'staged', ...$staged];
+            $this->removePhoto = false;
+        }
+    }
+
+    private function discardStagedSignature(): void
+    {
+        if (($this->signature['source'] ?? null) === 'staged' && isset($this->signature['id'])) {
+            $this->discardStagedAttachment((int) $this->signature['id']);
+        }
+    }
+
+    private function discardStagedPhoto(): void
+    {
+        if (($this->photo['source'] ?? null) === 'staged' && isset($this->photo['id'])) {
+            $this->discardStagedAttachment((int) $this->photo['id']);
         }
     }
 }

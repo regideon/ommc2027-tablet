@@ -20,11 +20,6 @@ class GiveawaySignature extends Model
         return $this->belongsTo(Giveaway::class);
     }
 
-    public function answer(): BelongsTo
-    {
-        return $this->belongsTo(GiveawayAnswer::class, 'answer_id');
-    }
-
     public function salescall(): BelongsTo
     {
         return $this->belongsTo(Salescall::class);

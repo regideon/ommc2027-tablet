@@ -16,12 +16,11 @@ class TradeCheckItem extends Model
         'options' => 'array',
         'type' => FieldType::class,
         'is_required' => 'boolean',
-        'is_image_required' => 'boolean',
     ];
 
-    public function group(): BelongsTo
+    public function subgroup(): BelongsTo
     {
-        return $this->belongsTo(TradeCheckGroup::class, 'group_id');
+        return $this->belongsTo(TradeCheckSubgroup::class, 'subgroup_id');
     }
 
     public function answers(): HasMany
@@ -32,10 +31,5 @@ class TradeCheckItem extends Model
     public function answerItem(): HasOne
     {
         return $this->hasOne(TradeCheckAnswerItems::class, 'item_id');
-    }
-
-    public function attachments(): HasMany
-    {
-        return $this->hasMany(TradeCheckAttachment::class, 'item_id');
     }
 }

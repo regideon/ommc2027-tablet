@@ -12,18 +12,19 @@ use App\Models\Forms\TradeCheck\TradeCheckAnswerItems;
 use App\Models\Forms\TradeCheck\TradeCheckAttachment;
 use App\Models\Forms\TradeCheck\TradeCheckGroup;
 use App\Models\Forms\TradeCheck\TradeCheckItem;
+use App\Models\Forms\TradeCheck\TradeCheckSubgroup;
 use App\Models\Salescall;
 use App\Models\StagedAttachment;
 use App\Models\User;
 use App\Services\StagedAttachmentService;
 use App\Services\SyncService;
+use App\Support\Forms\TradeCheckSubmissionRules;
 use Closure;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
-use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
@@ -100,8 +101,8 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
 
         $local = TradeCheck::query()
             ->with([
-                'group.items.answerItem',
-                'group.items.attachments',
+                'group.subgroups.items.answerItem',
+                'group.subgroups.attachments',
                 'salescall.customer',
                 'answers' => fn ($query) => $query->where('submitted_by', $viewer->id),
             ])
@@ -132,9 +133,9 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
      */
     public function create(User $user, array $input): TradeCheck
     {
-        $validated = Validator::make($input, $this->rules())->validate();
+        $validated = TradeCheckSubmissionRules::validate($input);
 
-        $tradeCheck = TradeCheck::query()->with('group.items')->find($validated['trade_check_id']);
+        $tradeCheck = TradeCheck::query()->with(['group.subgroups.items', 'group.subgroups.attachments'])->find($validated['trade_check_id']);
 
         if (! $tradeCheck) {
             throw ValidationException::withMessages([
@@ -143,7 +144,12 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
         }
 
         $this->assertRequiredAnswers($tradeCheck, $validated['answers'] ?? []);
-        $attachments = $this->normalizeItemAttachments($input['attachments'] ?? []);
+        $this->assertRequiredSubgroupPhotos(
+            $tradeCheck,
+            $input['attachments'] ?? [],
+            $validated['remove_attachments'] ?? [],
+        );
+        $attachments = $this->normalizeSubgroupAttachments($input['attachments'] ?? []);
         $storedPaths = [];
 
         try {
@@ -166,7 +172,7 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
             throw $exception;
         }
 
-        return $tradeCheck->fresh(['group.items.answerItem', 'answers']);
+        return $tradeCheck->fresh(['group.subgroups.items.answerItem', 'group.subgroups.attachments', 'answers']);
     }
 
     /**
@@ -186,10 +192,17 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
             ]);
         }
 
-        $validated = Validator::make($input, $this->rules(includeTemplate: false))->validate();
+        $validated = TradeCheckSubmissionRules::validate($input, includeTemplate: false);
 
-        $this->assertRequiredAnswers($tradeCheck->load('group.items'), $validated['answers'] ?? []);
-        $attachments = $this->normalizeItemAttachments($input['attachments'] ?? []);
+        $tradeCheck->loadMissing(['group.subgroups.items', 'group.subgroups.attachments']);
+
+        $this->assertRequiredAnswers($tradeCheck, $validated['answers'] ?? []);
+        $this->assertRequiredSubgroupPhotos(
+            $tradeCheck,
+            $input['attachments'] ?? [],
+            $validated['remove_attachments'] ?? [],
+        );
+        $attachments = $this->normalizeSubgroupAttachments($input['attachments'] ?? []);
         $storedPaths = [];
 
         try {
@@ -211,7 +224,7 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
             throw $exception;
         }
 
-        return $tradeCheck->fresh(['group.items.answerItem', 'answers']);
+        return $tradeCheck->fresh(['group.subgroups.items.answerItem', 'group.subgroups.attachments', 'answers']);
     }
 
     /**
@@ -262,7 +275,16 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
                 continue;
             }
 
-            $tradeCheck = TradeCheck::query()->firstOrNew(['server_id' => $row['id']]);
+            $clientUuid = is_string($row['client_uuid'] ?? null) && $row['client_uuid'] !== '' ? $row['client_uuid'] : null;
+            $tradeCheck = $clientUuid !== null
+                ? TradeCheck::query()->where('local_uuid', $clientUuid)->first()
+                : null;
+            $tradeCheck ??= TradeCheck::query()->firstOrNew(['server_id' => $row['id']]);
+
+            // Never overwrite local work that has not been pushed yet.
+            if ($tradeCheck->exists && $tradeCheck->sync_status !== 'synced') {
+                continue;
+            }
 
             if (! $tradeCheck->exists) {
                 $tradeCheck->local_uuid = (string) Str::uuid();
@@ -291,25 +313,43 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
                     ],
                 );
 
-                foreach ($groupRow['items'] ?? [] as $itemRow) {
-                    if (! isset($itemRow['name'])) {
+                foreach ($groupRow['subgroups'] ?? [] as $subgroupRow) {
+                    if (! isset($subgroupRow['name'])) {
                         continue;
                     }
 
-                    TradeCheckItem::updateOrCreate(
+                    $subgroup = TradeCheckSubgroup::updateOrCreate(
                         [
+                            'trade_check_id' => $tradeCheck->id,
                             'group_id' => $group->id,
-                            'name' => $itemRow['name'],
+                            'name' => $subgroupRow['name'],
                         ],
                         [
-                            'description' => $itemRow['description'] ?? null,
-                            'type' => (int) ($itemRow['type'] ?? 1),
-                            'is_required' => (bool) ($itemRow['is_required'] ?? false),
-                            'is_image_required' => (bool) ($itemRow['is_image_required'] ?? false),
-                            'options' => $itemRow['options'] ?? null,
-                            'order' => (int) ($itemRow['order'] ?? 0),
+                            'description' => $subgroupRow['description'] ?? null,
+                            'is_image_required' => (bool) ($subgroupRow['is_image_required'] ?? false),
+                            'order' => (int) ($subgroupRow['order'] ?? 0),
                         ],
                     );
+
+                    foreach ($subgroupRow['items'] ?? [] as $itemRow) {
+                        if (! isset($itemRow['name'])) {
+                            continue;
+                        }
+
+                        TradeCheckItem::updateOrCreate(
+                            [
+                                'subgroup_id' => $subgroup->id,
+                                'name' => $itemRow['name'],
+                            ],
+                            [
+                                'description' => $itemRow['description'] ?? null,
+                                'type' => (int) ($itemRow['type'] ?? 1),
+                                'is_required' => (bool) ($itemRow['is_required'] ?? false),
+                                'options' => $itemRow['options'] ?? null,
+                                'order' => (int) ($itemRow['order'] ?? 0),
+                            ],
+                        );
+                    }
                 }
             }
         }
@@ -340,19 +380,37 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
             $itemIds = [];
 
             foreach ($row['group'] ?? [] as $groupRow) {
-                foreach ($groupRow['items'] ?? [] as $itemRow) {
-                    if (! isset($itemRow['name'])) {
+                foreach ($groupRow['subgroups'] ?? [] as $subgroupRow) {
+                    $subgroupName = $subgroupRow['name'] ?? null;
+
+                    if (! $subgroupName) {
                         continue;
                     }
 
-                    $localItemId = TradeCheckItem::query()
-                        ->whereHas('group', fn ($query) => $query->where('trade_check_id', $tradeCheck->id))
-                        ->where('name', $itemRow['name'])
+                    $localSubgroupId = TradeCheckSubgroup::query()
+                        ->where('trade_check_id', $tradeCheck->id)
+                        ->where('name', $subgroupName)
                         ->value('id');
 
-                    if ($localItemId) {
-                        $itemValues[$itemRow['name']] = $itemRow['answer'] ?? null;
-                        $itemIds[$itemRow['name']] = $localItemId;
+                    if (! $localSubgroupId) {
+                        continue;
+                    }
+
+                    foreach ($subgroupRow['items'] ?? [] as $itemRow) {
+                        if (! isset($itemRow['name'])) {
+                            continue;
+                        }
+
+                        $localItemId = TradeCheckItem::query()
+                            ->where('subgroup_id', $localSubgroupId)
+                            ->where('name', $itemRow['name'])
+                            ->value('id');
+
+                        if ($localItemId) {
+                            $key = $subgroupName.'|'.$itemRow['name'];
+                            $itemValues[$key] = $itemRow['answer'] ?? null;
+                            $itemIds[$key] = $localItemId;
+                        }
                     }
                 }
             }
@@ -363,15 +421,17 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
                 }
 
                 $itemName = $answerRow['item']['name'] ?? null;
+                $subgroupName = $answerRow['item']['subgroup_name'] ?? null;
+                $key = $subgroupName !== null && $itemName !== null ? $subgroupName.'|'.$itemName : null;
 
-                if (! $itemName || ! isset($itemIds[$itemName])) {
+                if ($key === null || ! isset($itemIds[$key])) {
                     continue;
                 }
 
                 TradeCheckAnswer::updateOrCreate(
                     [
                         'trade_check_id' => $tradeCheck->id,
-                        'item_id' => $itemIds[$itemName],
+                        'item_id' => $itemIds[$key],
                         'submitted_by' => $viewer->id,
                     ],
                     [
@@ -385,9 +445,9 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
                 TradeCheckAnswerItems::updateOrCreate(
                     [
                         'trade_check_id' => $tradeCheck->id,
-                        'item_id' => $itemIds[$itemName],
+                        'item_id' => $itemIds[$key],
                     ],
-                    ['answer' => $itemValues[$itemName] ?? null],
+                    ['answer' => $itemValues[$key] ?? null],
                 );
             }
         }
@@ -422,7 +482,7 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
      */
     private function persistAnswers(TradeCheck $tradeCheck, User $user, array $answers): void
     {
-        foreach ($tradeCheck->group->flatMap->items as $item) {
+        foreach ($tradeCheck->group->flatMap->subgroups->flatMap->items as $item) {
             $value = array_key_exists($item->id, $answers) ? $answers[$item->id] : null;
             $value = is_string($value) ? trim($value) : $value;
             $value = $value === '' ? null : $value;
@@ -457,7 +517,7 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
     {
         $errors = [];
 
-        foreach ($tradeCheck->group->flatMap->items as $item) {
+        foreach ($tradeCheck->group->flatMap->subgroups->flatMap->items as $item) {
             $value = $answers[$item->id] ?? null;
             $value = is_string($value) ? trim($value) : $value;
 
@@ -500,14 +560,53 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
     }
 
     /**
-     * @param  array<int|string, mixed>  $attachments  item id => list of staged attachment ids
-     * @return array<int, array{item_id: int, staged_ids: array<int, int>}>
+     * Every image-required subgroup must keep at least one existing or staged
+     * photo after the submitted removals.
+     *
+     * @param  array<int|string, mixed>  $attachments  subgroup id => list of staged attachment ids
+     * @param  array<int, mixed>  $removeIds
      */
-    private function normalizeItemAttachments(array $attachments): array
+    private function assertRequiredSubgroupPhotos(TradeCheck $tradeCheck, array $attachments, array $removeIds): void
+    {
+        $stagedSubgroupIds = collect($this->normalizeSubgroupAttachments($attachments))
+            ->pluck('subgroup_id')
+            ->all();
+
+        $removedIds = array_values(array_filter(array_map(
+            static fn (mixed $id): int => (int) $id,
+            $removeIds,
+        ), static fn (int $id): bool => $id > 0));
+
+        $errors = [];
+
+        foreach ($tradeCheck->group->flatMap->subgroups as $subgroup) {
+            if (! $subgroup->is_image_required) {
+                continue;
+            }
+
+            $hasExistingPhoto = $subgroup->attachments
+                ->whereNotIn('id', $removedIds)
+                ->isNotEmpty();
+
+            if (! $hasExistingPhoto && ! in_array($subgroup->id, $stagedSubgroupIds, true)) {
+                $errors['attachments.'.$subgroup->id] = ['This Trade Check subgroup requires at least one photo.'];
+            }
+        }
+
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
+    }
+
+    /**
+     * @param  array<int|string, mixed>  $attachments  subgroup id => list of staged attachment ids
+     * @return array<int, array{subgroup_id: int, staged_ids: array<int, int>}>
+     */
+    private function normalizeSubgroupAttachments(array $attachments): array
     {
         $normalized = [];
 
-        foreach ($attachments as $itemId => $ids) {
+        foreach ($attachments as $subgroupId => $ids) {
             if (! is_array($ids)) {
                 continue;
             }
@@ -522,7 +621,7 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
             }
 
             $normalized[] = [
-                'item_id' => (int) $itemId,
+                'subgroup_id' => (int) $subgroupId,
                 'staged_ids' => $stagedIds,
             ];
         }
@@ -531,20 +630,20 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
     }
 
     /**
-     * @param  array<int, array{item_id: int, staged_ids: array<int, int>}>  $attachments
+     * @param  array<int, array{subgroup_id: int, staged_ids: array<int, int>}>  $attachments
      * @param  list<string>  $storedPaths
      */
     private function persistAttachments(TradeCheck $tradeCheck, User $user, array $attachments, array &$storedPaths): void
     {
-        $validItemIds = $tradeCheck->group->flatMap->items->pluck('id')->all();
+        $validSubgroupIds = $tradeCheck->group->flatMap->subgroups->pluck('id')->all();
         $stagedService = app(StagedAttachmentService::class);
 
-        foreach ($attachments as $group) {
-            if (! in_array($group['item_id'], $validItemIds, true)) {
+        foreach ($attachments as $subgroup) {
+            if (! in_array($subgroup['subgroup_id'], $validSubgroupIds, true)) {
                 continue;
             }
 
-            foreach ($group['staged_ids'] as $stagedId) {
+            foreach ($subgroup['staged_ids'] as $stagedId) {
                 $staged = $stagedService->findForUser($user, $stagedId);
 
                 if (! $staged instanceof StagedAttachment) {
@@ -559,7 +658,7 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
                 TradeCheckAttachment::create([
                     'local_uuid' => (string) Str::uuid(),
                     'trade_check_id' => $tradeCheck->id,
-                    'item_id' => $group['item_id'],
+                    'subgroup_id' => $subgroup['subgroup_id'],
                     'local_path' => $metadata['local_path'],
                     'original_name' => $metadata['original_name'],
                     'mime_type' => $metadata['mime_type'],
@@ -711,22 +810,16 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
                         'category' => $group->category->value,
                         'category_label' => $group->category->meta('title'),
                         'description' => $group->description,
-                        'items' => $group->items
+                        'subgroups' => $group->subgroups
                             ->sortBy('order')
                             ->values()
-                            ->map(function (TradeCheckItem $item) use ($answers): array {
+                            ->map(function (TradeCheckSubgroup $subgroup) use ($answers): array {
                                 return [
-                                    'id' => $item->id,
-                                    'name' => $item->name,
-                                    'description' => $item->description,
-                                    'type' => $item->type->value,
-                                    'type_label' => $item->type->meta('title'),
-                                    'is_required' => $item->is_required,
-                                    'is_image_required' => $item->is_image_required,
-                                    'options' => $item->options ?? [],
-                                    'answer' => $item->answerItem?->answer,
-                                    'has_answer' => $answers->has($item->id),
-                                    'attachments' => $item->attachments
+                                    'id' => $subgroup->id,
+                                    'name' => $subgroup->name,
+                                    'description' => $subgroup->description,
+                                    'is_image_required' => $subgroup->is_image_required,
+                                    'attachments' => $subgroup->attachments
                                         ->map(fn (TradeCheckAttachment $attachment): array => [
                                             'id' => $attachment->id,
                                             'server_id' => $attachment->server_id,
@@ -735,6 +828,23 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
                                             'url' => $this->attachmentUrl($attachment),
                                         ])
                                         ->values()
+                                        ->all(),
+                                    'items' => $subgroup->items
+                                        ->sortBy('order')
+                                        ->values()
+                                        ->map(function (TradeCheckItem $item) use ($answers): array {
+                                            return [
+                                                'id' => $item->id,
+                                                'name' => $item->name,
+                                                'description' => $item->description,
+                                                'type' => $item->type->value,
+                                                'type_label' => $item->type->meta('title'),
+                                                'is_required' => $item->is_required,
+                                                'options' => $item->options ?? [],
+                                                'answer' => $item->answerItem?->answer,
+                                                'has_answer' => $answers->has($item->id),
+                                            ];
+                                        })
                                         ->all(),
                                 ];
                             })
@@ -753,23 +863,5 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
         }
 
         return $salescall->customer?->name ?? ('Salescall #'.$salescall->id);
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function rules(bool $includeTemplate = true): array
-    {
-        $rules = [
-            'salescall_uuid' => ['nullable', 'string', 'max:36'],
-            'answers' => ['nullable', 'array'],
-            'remove_attachments' => ['nullable', 'array'],
-        ];
-
-        if ($includeTemplate) {
-            $rules['trade_check_id'] = ['required', 'integer', 'exists:trade_checks,id'];
-        }
-
-        return $rules;
     }
 }

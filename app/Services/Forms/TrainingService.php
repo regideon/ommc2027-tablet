@@ -17,13 +17,13 @@ use App\Models\StagedAttachment;
 use App\Models\User;
 use App\Services\StagedAttachmentService;
 use App\Services\SyncService;
+use App\Support\Forms\TrainingRules;
 use Closure;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
-use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
@@ -150,7 +150,7 @@ class TrainingService extends AbstractFormService implements FormSubmissionServi
      */
     public function create(User $user, array $input): Training
     {
-        $validated = Validator::make($input, $this->rules())->validate();
+        $validated = TrainingRules::validate($input);
 
         $topic = $this->normalizeTopic($validated['topic_id'] ?? null, $validated['other_topic'] ?? null);
         $participants = $this->normalizeParticipants($validated['participants'] ?? []);
@@ -210,7 +210,7 @@ class TrainingService extends AbstractFormService implements FormSubmissionServi
             ]);
         }
 
-        $validated = Validator::make($input, $this->rules())->validate();
+        $validated = TrainingRules::validate($input);
 
         $topic = $this->normalizeTopic($validated['topic_id'] ?? null, $validated['other_topic'] ?? null);
         $participants = $this->normalizeParticipants($validated['participants'] ?? []);
@@ -407,7 +407,11 @@ class TrainingService extends AbstractFormService implements FormSubmissionServi
                 continue;
             }
 
-            $training = $existingByServerId->get((int) $row['id'])
+            $clientUuid = is_string($row['client_uuid'] ?? null) && $row['client_uuid'] !== '' ? $row['client_uuid'] : null;
+            $training = $clientUuid !== null
+                ? Training::query()->where('local_uuid', $clientUuid)->first()
+                : null;
+            $training ??= $existingByServerId->get((int) $row['id'])
                 ?? new Training(['server_id' => $row['id']]);
 
             // Never overwrite local work that has not been pushed yet.
@@ -821,31 +825,5 @@ class TrainingService extends AbstractFormService implements FormSubmissionServi
         }
 
         return $salescall->customer?->name ?? ('Salescall #'.$salescall->id);
-    }
-
-    /**
-     * Local user-input rules. The Portal push request remains the final
-     * server-side validator.
-     *
-     * @return array<string, mixed>
-     */
-    private function rules(): array
-    {
-        return [
-            'salescall_uuid' => ['nullable', 'string', 'max:36'],
-            'topic_id' => ['nullable', 'integer', 'exists:training_topics,id'],
-            'other_topic' => ['nullable', 'string', 'max:255'],
-            'preferred_at' => ['required', 'date'],
-            'omcc_volume' => ['nullable', 'integer'],
-            'competitor_volume' => ['nullable', 'integer'],
-            'participants' => ['nullable', 'array'],
-            'participants.*.name' => ['required_with:participants', 'string', 'max:255'],
-            'participants.*.position_id' => ['required_with:participants', 'integer', 'exists:training_positions,id'],
-            'staged_attachments' => ['nullable', 'array'],
-            'staged_attachments.*.type' => ['required_with:staged_attachments', 'integer', 'in:'.implode(',', TrainingAttachmentType::values())],
-            'staged_attachments.*.staged_id' => ['required_with:staged_attachments', 'integer'],
-            'remove_attachments' => ['nullable', 'array'],
-            'remove_attachments.*' => ['integer'],
-        ];
     }
 }

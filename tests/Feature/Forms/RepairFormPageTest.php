@@ -85,6 +85,25 @@ test('saving without an attachment reports an error and creates nothing', functi
     $component->assertNoRedirect();
 });
 
+test('Repair validation messages use friendly field names', function () {
+    Storage::fake('local');
+    $user = repairFormPageUser();
+    $this->actingAs($user);
+
+    $component = Livewire::test(RepairFormPage::class)
+        ->assertOk()
+        ->call('save');
+
+    $errors = $component->get('formErrors');
+
+    expect($errors['plate_number'][0])->toBe('The plate number field is required.')
+        ->and($errors['details'][0])->toBe('The details field is required.')
+        ->and($errors['amount'][0])->toBe('The amount field is required.')
+        ->and(collect($errors)->flatten()->implode(' '))->not->toMatch('/\.\d+\./');
+
+    $component->assertNoRedirect();
+});
+
 test('saving with a staged attachment creates the Repair and redirects', function () {
     Storage::fake('local');
     $user = repairFormPageUser();

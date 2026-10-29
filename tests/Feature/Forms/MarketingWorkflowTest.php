@@ -265,8 +265,9 @@ test('pushing a Marketing recommendation posts the mapped payload and stores the
 
     app(SyncService::class)->push();
 
-    Http::assertSent(function ($request) use ($program) {
+    Http::assertSent(function ($request) use ($marketing, $program) {
         return str_ends_with($request->url(), '/api/forms/marketing/push')
+            && $request['client_uuid'] === $marketing->local_uuid
             && $request['program_id'] === $program->server_id
             && $request['name'] === 'Branch Expansion Support'
             && count($request['volumes']) === 1

@@ -15,10 +15,10 @@ use App\Models\RegionType;
 use App\Models\Salescall;
 use App\Models\User;
 use App\Services\SyncService;
+use App\Support\Forms\MarketingRules;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
@@ -206,7 +206,7 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
      */
     public function create(User $user, array $input): Marketing
     {
-        $validated = Validator::make($input, $this->rules())->validate();
+        $validated = MarketingRules::validate($input);
 
         $salescallId = $this->resolveSalescall($validated['salescall_uuid'] ?? null);
 
@@ -255,7 +255,7 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
             ]);
         }
 
-        $validated = Validator::make($input, $this->rules())->validate();
+        $validated = MarketingRules::validate($input);
 
         DB::transaction(function () use ($marketing, $validated): void {
             $marketing->update([
@@ -515,6 +515,7 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
         return [
             'id' => null,
             'server_id' => $serverMarketing['id'],
+            'client_uuid' => $serverMarketing['client_uuid'] ?? null,
             'local_uuid' => null,
             'name' => $serverMarketing['name'] ?? 'Marketing',
             'program_id' => (int) ($serverMarketing['program_id'] ?? 0),
@@ -640,39 +641,5 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
             return ! $approvedOnly
                 || (int) ($row['rac_status'] ?? 0) === RACStatus::APPROVED->value;
         });
-    }
-
-    /**
-     * Local user-input rules. The Portal push request remains the final
-     * server-side validator.
-     *
-     * @return array<string, mixed>
-     */
-    private function rules(): array
-    {
-        return [
-            'program_id' => ['required', 'integer', 'exists:marketing_programs,id'],
-            'region_type_id' => ['required', 'integer', 'exists:region_types,id'],
-            'duration_start_at' => ['required', 'date'],
-            'duration_end_at' => ['required', 'date'],
-            'objective' => ['required', 'string'],
-            'name' => ['required', 'string', 'max:255'],
-            'mechanics_description' => ['required', 'string'],
-            'submitted_at' => ['nullable', 'date'],
-            'salescall_uuid' => ['nullable', 'string', 'max:36'],
-            'volumes' => ['nullable', 'array'],
-            'volumes.*.before_program' => ['required_with:volumes', 'numeric'],
-            'volumes.*.during_program' => ['required_with:volumes', 'numeric'],
-            'volumes.*.volume' => ['nullable', 'numeric'],
-            'realizations' => ['nullable', 'array'],
-            'realizations.*.stage' => ['required_with:realizations', 'integer', 'in:'.implode(',', RealizationStage::values())],
-            'realizations.*.start_at' => ['required_with:realizations', 'date'],
-            'realizations.*.end_at' => ['required_with:realizations', 'date'],
-            'realizations.*.volume' => ['required_with:realizations', 'numeric'],
-            'mechanics' => ['nullable', 'array'],
-            'mechanics.*.period' => ['required_with:mechanics', 'date'],
-            'mechanics.*.unit_price' => ['required_with:mechanics', 'numeric'],
-            'mechanics.*.sub_total' => ['required_with:mechanics', 'numeric'],
-        ];
     }
 }

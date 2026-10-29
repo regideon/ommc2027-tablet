@@ -3,43 +3,43 @@
 namespace App\Services\Forms;
 
 use App\Contracts\FormSubmissionService;
-use App\Enums\Giveaway\GiveawayCategory;
 use App\Enums\RSMStatus;
 use App\Models\Forms\Giveaway\Giveaway;
-use App\Models\Forms\Giveaway\GiveawayAnswer;
+use App\Models\Forms\Giveaway\GiveAwayAnswer;
 use App\Models\Forms\Giveaway\GiveawayAnswerItem;
 use App\Models\Forms\Giveaway\GiveawayItem;
+use App\Models\Forms\Giveaway\GiveawayPhoto;
 use App\Models\Forms\Giveaway\GiveawaySignature;
+use App\Models\Forms\Giveaway\GiveawaySubmissionItem;
 use App\Models\Salescall;
 use App\Models\StagedAttachment;
 use App\Models\User;
 use App\Services\StagedAttachmentService;
 use App\Services\SyncService;
+use App\Support\Forms\GiveawayRules;
 use Closure;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
-use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 use Throwable;
 
 /**
- * The Giveaway form's single service: reads the current user's submissions
- * (local rows cached from a live Portal pull) and creates/edits them
- * offline-first. Each item carries one uploaded signature image.
- *
- * Portal caveat (accepted): a push force-recreates the submission's items, so
- * a local edit re-marks signature rows pending to re-attach after the rebuild.
+ * Giveaway submissions are built from Portal-managed item masterdata. A
+ * submission carries one recipient signature and one optional photo.
  */
 class GiveawayService extends AbstractFormService implements FormSubmissionService
 {
     private bool $globalReadFailed = false;
 
     private bool $programReadFailed = false;
+
+    /** @var array{master_items: array<int, array<string, mixed>>, failed: bool}|null */
+    private ?array $masterPullCache = null;
 
     /** @var array{giveaways: array<int, array<string, mixed>>, failed: bool}|null */
     private ?array $pullCache = null;
@@ -53,13 +53,21 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
     */
 
     /**
-     * Giveaway has no master data; the contract method returns an empty set.
-     *
-     * @return Collection<int, Giveaway>
+     * @return Collection<int, GiveawayItem>
      */
     public function programs(): Collection
     {
-        return collect();
+        $result = $this->masterPull();
+        $this->programReadFailed = $result['failed'];
+
+        if (! $result['failed']) {
+            $this->cacheMasterItems($result['master_items']);
+        }
+
+        return GiveawayItem::query()
+            ->orderBy('category')
+            ->orderBy('order')
+            ->get();
     }
 
     public function programReadFailed(): bool
@@ -68,8 +76,6 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
     }
 
     /**
-     * The current user's Giveaway submissions, newest first.
-     *
      * @return Collection<int, array<string, mixed>>
      */
     public function submissions(): Collection
@@ -78,20 +84,30 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
 
         abort_unless($viewer instanceof User, 401);
 
+        $masterResult = $this->masterPull();
+
+        if (! $masterResult['failed']) {
+            $this->cacheMasterItems($masterResult['master_items']);
+        }
+
         $result = $this->pull();
         $this->globalReadFailed = $result['failed'];
 
         if (! $result['failed']) {
             $this->cacheDefinitions($result['giveaways']);
             $this->cacheAnswers($result['giveaways'], $viewer);
+            $this->cacheAttachments($result['giveaways']);
             $this->reconcileDeleted($result['giveaways']);
         }
 
         $local = Giveaway::query()
             ->with([
+                'items.item',
                 'items.answerItem',
+                'answers' => fn ($query) => $query->where('submitted_by', $viewer->id),
+                'signature',
+                'photo',
                 'salescall.customer',
-                'answers' => fn ($query) => $query->where('submitted_by', $viewer->id)->with('signature'),
             ])
             ->where('submitted_by', $viewer->id)
             ->get();
@@ -121,10 +137,10 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
      */
     public function create(User $user, array $input): Giveaway
     {
-        $validated = Validator::make($input, $this->rules())->validate();
-
+        $validated = GiveawayRules::validate($input);
         $items = $this->normalizeItems($validated['items'] ?? []);
         $this->assertItems($items);
+        $this->assertSignature(null, $validated);
         $storedPaths = [];
         $giveaway = null;
 
@@ -140,15 +156,17 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
                     'sync_error' => null,
                 ]);
 
-                foreach ($items as $index => $row) {
-                    $item = GiveawayItem::create([
+                foreach ($items as $row) {
+                    $item = GiveawaySubmissionItem::create([
                         'giveaway_id' => $giveaway->id,
-                        'category' => $row['category'],
-                        'name' => $row['name'],
+                        'giveaway_item_id' => $row['giveaway_item_id'],
                     ]);
 
-                    $this->persistAnswerForItem($giveaway, $user, $item, $row, $index, $storedPaths);
+                    $this->persistAnswerForItem($giveaway, $user, $item, $row);
                 }
+
+                $this->replaceSignature($giveaway, $user, $validated, $storedPaths);
+                $this->replacePhoto($giveaway, $user, $validated, $storedPaths);
             });
         } catch (Throwable $exception) {
             $this->cleanupStoredPaths($storedPaths);
@@ -156,7 +174,7 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
             throw $exception;
         }
 
-        return $giveaway->fresh(['items.answerItem', 'answers.signature']);
+        return $giveaway->fresh(['items.item', 'answers.answerItem', 'signature', 'photo']);
     }
 
     /**
@@ -176,10 +194,10 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
             ]);
         }
 
-        $validated = Validator::make($input, $this->rules())->validate();
-
+        $validated = GiveawayRules::validate($input);
         $items = $this->normalizeItems($validated['items'] ?? []);
         $this->assertItems($items);
+        $this->assertSignature($giveaway, $validated);
         $storedPaths = [];
 
         try {
@@ -200,31 +218,31 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
 
                 $keptItemIds = [];
 
-                foreach ($items as $index => $row) {
-                    $item = $row['id'] !== null
-                        ? GiveawayItem::query()->where('giveaway_id', $giveaway->id)->find($row['id'])
-                        : null;
+                foreach ($items as $row) {
+                    $item = GiveawaySubmissionItem::query()
+                        ->where('giveaway_id', $giveaway->id)
+                        ->where('giveaway_item_id', $row['giveaway_item_id'])
+                        ->first();
 
-                    if ($item instanceof GiveawayItem) {
-                        $item->update([
-                            'category' => $row['category'],
-                            'name' => $row['name'],
-                        ]);
-                    } else {
-                        $item = GiveawayItem::create([
+                    if (! $item instanceof GiveawaySubmissionItem) {
+                        $item = GiveawaySubmissionItem::create([
                             'giveaway_id' => $giveaway->id,
-                            'category' => $row['category'],
-                            'name' => $row['name'],
+                            'giveaway_item_id' => $row['giveaway_item_id'],
                         ]);
                     }
 
                     $keptItemIds[] = $item->id;
-
-                    $this->persistAnswerForItem($giveaway, $user, $item, $row, $index, $storedPaths);
+                    $this->persistAnswerForItem($giveaway, $user, $item, $row);
                 }
 
-                $this->removeDroppedItems($giveaway, $keptItemIds);
-                $this->resetSignatureSyncState($giveaway);
+                GiveawaySubmissionItem::query()
+                    ->where('giveaway_id', $giveaway->id)
+                    ->whereNotIn('id', $keptItemIds)
+                    ->get()
+                    ->each(fn (GiveawaySubmissionItem $item) => $item->delete());
+
+                $this->replaceSignature($giveaway, $user, $validated, $storedPaths);
+                $this->replacePhoto($giveaway, $user, $validated, $storedPaths);
             });
         } catch (Throwable $exception) {
             $this->cleanupStoredPaths($storedPaths);
@@ -232,7 +250,7 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
             throw $exception;
         }
 
-        return $giveaway->fresh(['items.answerItem', 'answers.signature']);
+        return $giveaway->fresh(['items.item', 'answers.answerItem', 'signature', 'photo']);
     }
 
     /**
@@ -255,26 +273,12 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
 
     public function signatureUrl(GiveawaySignature $signature): ?string
     {
-        if (! $signature->local_path || ! is_file($signature->local_path)) {
-            return null;
-        }
+        return $this->localFileUrl($signature->local_path, $signature->local_uuid, (string) $signature->id, 'giveaway_signatures');
+    }
 
-        $extension = strtolower(pathinfo($signature->local_path, PATHINFO_EXTENSION)) ?: 'bin';
-        $identity = $signature->local_uuid ?: (string) $signature->id;
-        $relativePath = "giveaway_signatures/{$identity}.{$extension}";
-        $previewPath = public_path($relativePath);
-
-        try {
-            File::ensureDirectoryExists(dirname($previewPath));
-        } catch (Throwable) {
-            return null;
-        }
-
-        if (! is_file($previewPath) && @copy($signature->local_path, $previewPath) === false) {
-            return null;
-        }
-
-        return '/_assets/'.$relativePath;
+    public function photoUrl(GiveawayPhoto $photo): ?string
+    {
+        return $this->localFileUrl($photo->local_path, $photo->local_uuid, (string) $photo->id, 'giveaway_photos');
     }
 
     /*
@@ -289,6 +293,35 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
     private function pull(): array
     {
         return $this->pullCache ??= $this->syncService->readGiveawaysWithStatus();
+    }
+
+    /**
+     * @return array{master_items: array<int, array<string, mixed>>, failed: bool}
+     */
+    private function masterPull(): array
+    {
+        return $this->masterPullCache ??= $this->syncService->readGiveawayMasterDataWithStatus();
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $rows
+     */
+    private function cacheMasterItems(array $rows): void
+    {
+        foreach ($rows as $row) {
+            if (! isset($row['id'], $row['name'], $row['category'])) {
+                continue;
+            }
+
+            GiveawayItem::updateOrCreate(
+                ['server_id' => (int) $row['id']],
+                [
+                    'category' => (int) $row['category'],
+                    'name' => (string) $row['name'],
+                    'order' => (int) ($row['order'] ?? 0),
+                ],
+            );
+        }
     }
 
     /**
@@ -307,9 +340,12 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
                 continue;
             }
 
-            $giveaway = Giveaway::query()->firstOrNew(['server_id' => $row['id']]);
+            $clientUuid = is_string($row['client_uuid'] ?? null) && $row['client_uuid'] !== '' ? $row['client_uuid'] : null;
+            $giveaway = $clientUuid !== null
+                ? Giveaway::query()->where('local_uuid', $clientUuid)->first()
+                : null;
+            $giveaway ??= Giveaway::query()->firstOrNew(['server_id' => $row['id']]);
 
-            // Never overwrite local work that has not been pushed yet.
             if ($giveaway->exists && $giveaway->sync_status !== 'synced') {
                 continue;
             }
@@ -325,18 +361,22 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
             $giveaway->save();
 
             foreach ($row['items'] ?? [] as $itemRow) {
-                if (! is_array($itemRow) || ! isset($itemRow['name'])) {
+                if (! is_array($itemRow) || ! isset($itemRow['id'], $itemRow['giveaway_item_id'])) {
                     continue;
                 }
 
-                GiveawayItem::updateOrCreate(
+                $master = GiveawayItem::query()->where('server_id', (int) $itemRow['giveaway_item_id'])->first();
+
+                if (! $master instanceof GiveawayItem) {
+                    continue;
+                }
+
+                GiveawaySubmissionItem::updateOrCreate(
                     [
                         'giveaway_id' => $giveaway->id,
-                        'name' => $itemRow['name'],
+                        'giveaway_item_id' => $master->id,
                     ],
-                    [
-                        'category' => (int) ($itemRow['category'] ?? GiveawayCategory::GC->value),
-                    ],
+                    ['server_id' => (int) $itemRow['id']],
                 );
             }
         }
@@ -347,8 +387,6 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
      */
     private function cacheAnswers(array $rows, User $viewer): void
     {
-        // The Portal identifies the submitter by its own user id; match it via
-        // the server id stored at login rather than the local user id.
         $serverUserId = (int) ($viewer->server_id ?? 0);
 
         if ($serverUserId <= 0) {
@@ -358,39 +396,28 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
         foreach ($rows as $row) {
             $giveaway = Giveaway::query()->where('server_id', $row['id'] ?? null)->first();
 
-            // Never overwrite local work that has not been pushed yet.
             if (! $giveaway || $giveaway->sync_status !== 'synced') {
                 continue;
             }
-
-            $itemNames = collect($row['items'] ?? [])
-                ->filter(fn (mixed $item): bool => is_array($item) && isset($item['id'], $item['name']))
-                ->mapWithKeys(fn (array $item): array => [(int) $item['id'] => (string) $item['name']]);
 
             foreach ($row['answers'] ?? [] as $answerRow) {
                 if (! is_array($answerRow) || (int) ($answerRow['submitted_by'] ?? 0) !== $serverUserId) {
                     continue;
                 }
 
-                $itemName = $itemNames->get((int) ($answerRow['item_id'] ?? 0));
-
-                if ($itemName === null) {
-                    continue;
-                }
-
-                $localItemId = GiveawayItem::query()
+                $item = GiveawaySubmissionItem::query()
                     ->where('giveaway_id', $giveaway->id)
-                    ->where('name', $itemName)
-                    ->value('id');
+                    ->where('server_id', (int) ($answerRow['item_id'] ?? 0))
+                    ->first();
 
-                if (! $localItemId) {
+                if (! $item instanceof GiveawaySubmissionItem) {
                     continue;
                 }
 
-                GiveawayAnswer::updateOrCreate(
+                GiveAwayAnswer::updateOrCreate(
                     [
                         'giveaway_id' => $giveaway->id,
-                        'item_id' => $localItemId,
+                        'item_id' => $item->id,
                         'submitted_by' => $viewer->id,
                     ],
                     [
@@ -404,10 +431,48 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
                 GiveawayAnswerItem::updateOrCreate(
                     [
                         'giveaway_id' => $giveaway->id,
-                        'item_id' => $localItemId,
+                        'item_id' => $item->id,
                     ],
                     ['answer' => is_array($answerItem) ? ($answerItem['answer'] ?? null) : null],
                 );
+            }
+        }
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $rows
+     */
+    private function cacheAttachments(array $rows): void
+    {
+        foreach ($rows as $row) {
+            $giveaway = Giveaway::query()->where('server_id', $row['id'] ?? null)->first();
+
+            if (! $giveaway || $giveaway->sync_status !== 'synced') {
+                continue;
+            }
+
+            if (is_array($row['signature'] ?? null)) {
+                $signature = GiveawaySignature::firstOrNew(['giveaway_id' => $giveaway->id]);
+                $signature->local_uuid ??= (string) Str::uuid();
+                $signature->fill([
+                    'server_id' => $row['signature']['id'] ?? null,
+                    'sync_status' => 'synced',
+                    'sync_attempts' => 0,
+                    'sync_error' => null,
+                    'synced_at' => now(),
+                ])->save();
+            }
+
+            if (is_array($row['photo'] ?? null)) {
+                $photo = GiveawayPhoto::firstOrNew(['giveaway_id' => $giveaway->id]);
+                $photo->local_uuid ??= (string) Str::uuid();
+                $photo->fill([
+                    'server_id' => $row['photo']['id'] ?? null,
+                    'sync_status' => 'synced',
+                    'sync_attempts' => 0,
+                    'sync_error' => null,
+                    'synced_at' => now(),
+                ])->save();
             }
         }
     }
@@ -428,8 +493,12 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
             ->whereNotIn('server_id', $serverIds)
             ->get()
             ->each(function (Giveaway $giveaway): void {
-                foreach ($giveaway->signatures ?? collect() as $signature) {
-                    $this->deleteSignatureFile($signature);
+                if ($giveaway->signature instanceof GiveawaySignature) {
+                    $this->deleteSignatureFile($giveaway->signature);
+                }
+
+                if ($giveaway->photo instanceof GiveawayPhoto) {
+                    $this->deletePhotoFile($giveaway->photo);
                 }
 
                 $giveaway->delete();
@@ -437,12 +506,11 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
     }
 
     /**
-     * @param  array{id: ?int, category: ?int, name: string, answer: ?string, signature_id: ?int, staged_signature_id: ?int}  $row
-     * @param  list<string>  $storedPaths
+     * @param  array{id: ?int, giveaway_item_id: int, answer: ?string}  $row
      */
-    private function persistAnswerForItem(Giveaway $giveaway, User $user, GiveawayItem $item, array $row, int $index, array &$storedPaths): void
+    private function persistAnswerForItem(Giveaway $giveaway, User $user, GiveawaySubmissionItem $item, array $row): void
     {
-        $answer = GiveawayAnswer::updateOrCreate(
+        GiveAwayAnswer::updateOrCreate(
             [
                 'giveaway_id' => $giveaway->id,
                 'item_id' => $item->id,
@@ -461,41 +529,39 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
             ],
             ['answer' => $row['answer']],
         );
-
-        if ($row['staged_signature_id'] !== null) {
-            $this->replaceSignature($giveaway, $answer, $user, $row['staged_signature_id'], $index, $storedPaths);
-        }
     }
 
     /**
+     * @param  array<string, mixed>  $input
      * @param  list<string>  $storedPaths
      */
-    private function replaceSignature(Giveaway $giveaway, GiveawayAnswer $answer, User $user, int $stagedId, int $index, array &$storedPaths): void
+    private function replaceSignature(Giveaway $giveaway, User $user, array $input, array &$storedPaths): void
     {
-        $stagedService = app(StagedAttachmentService::class);
-        $staged = $stagedService->findForUser($user, $stagedId);
+        $stagedId = isset($input['staged_signature_id']) ? (int) $input['staged_signature_id'] : null;
+
+        if ($stagedId === null) {
+            return;
+        }
+
+        $staged = app(StagedAttachmentService::class)->findForUser($user, $stagedId);
 
         if (! $staged instanceof StagedAttachment) {
             throw ValidationException::withMessages([
-                "items.$index.signature_id" => ['A staged signature is no longer available. Re-upload the signature and try again.'],
+                'signature_id' => ['A staged signature is no longer available. Re-upload the signature and try again.'],
             ]);
         }
 
-        GiveawaySignature::query()
-            ->where('answer_id', $answer->id)
-            ->get()
-            ->each(function (GiveawaySignature $existing): void {
-                $this->deleteSignatureFile($existing);
-                $existing->delete();
-            });
+        if ($giveaway->signature instanceof GiveawaySignature) {
+            $this->deleteSignatureFile($giveaway->signature);
+            $giveaway->signature->delete();
+        }
 
-        $metadata = $stagedService->consume($user, $staged, 'giveaway_signatures');
+        $metadata = app(StagedAttachmentService::class)->consume($user, $staged, 'giveaway_signatures');
         $storedPaths[] = $metadata['local_path'];
 
         GiveawaySignature::create([
             'local_uuid' => (string) Str::uuid(),
             'giveaway_id' => $giveaway->id,
-            'answer_id' => $answer->id,
             'salescall_id' => $giveaway->salescall_id,
             'local_path' => $metadata['local_path'],
             'original_name' => $metadata['original_name'],
@@ -509,44 +575,86 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
     }
 
     /**
-     * @param  array<int, mixed>  $keptItemIds
+     * @param  array<string, mixed>  $input
+     * @param  list<string>  $storedPaths
      */
-    private function removeDroppedItems(Giveaway $giveaway, array $keptItemIds): void
+    private function replacePhoto(Giveaway $giveaway, User $user, array $input, array &$storedPaths): void
     {
-        $dropped = GiveawayItem::query()
-            ->where('giveaway_id', $giveaway->id)
-            ->whereNotIn('id', $keptItemIds)
-            ->get();
+        $stagedId = isset($input['staged_photo_id']) ? (int) $input['staged_photo_id'] : null;
+        $remove = (bool) ($input['remove_photo'] ?? false);
 
-        foreach ($dropped as $item) {
-            $answerIds = GiveawayAnswer::query()
-                ->where('giveaway_id', $giveaway->id)
-                ->where('item_id', $item->id)
-                ->pluck('id');
+        if ($remove && $giveaway->photo instanceof GiveawayPhoto) {
+            $this->deletePhotoFile($giveaway->photo);
+            $giveaway->photo->delete();
+        }
 
-            GiveawaySignature::query()
-                ->whereIn('answer_id', $answerIds)
-                ->get()
-                ->each(function (GiveawaySignature $signature): void {
-                    $this->deleteSignatureFile($signature);
-                });
+        if ($stagedId === null) {
+            return;
+        }
 
-            $item->delete();
+        $staged = app(StagedAttachmentService::class)->findForUser($user, $stagedId);
+
+        if (! $staged instanceof StagedAttachment) {
+            throw ValidationException::withMessages([
+                'photo_id' => ['A staged photo is no longer available. Re-add the photo and try again.'],
+            ]);
+        }
+
+        if ($giveaway->photo instanceof GiveawayPhoto) {
+            $this->deletePhotoFile($giveaway->photo);
+            $giveaway->photo->delete();
+        }
+
+        $metadata = app(StagedAttachmentService::class)->consume($user, $staged, 'giveaway_photos');
+        $storedPaths[] = $metadata['local_path'];
+
+        GiveawayPhoto::create([
+            'local_uuid' => (string) Str::uuid(),
+            'giveaway_id' => $giveaway->id,
+            'local_path' => $metadata['local_path'],
+            'original_name' => $metadata['original_name'],
+            'mime_type' => $metadata['mime_type'],
+            'extension' => $metadata['extension'],
+            'byte_size' => $metadata['byte_size'],
+            'sync_status' => 'pending',
+            'sync_attempts' => 0,
+            'sync_error' => null,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     */
+    private function assertSignature(?Giveaway $giveaway, array $input): void
+    {
+        $hasExisting = $giveaway?->signature instanceof GiveawaySignature
+            || ! empty($input['signature_id']);
+        $hasStaged = ! empty($input['staged_signature_id']);
+
+        if (! $hasExisting && ! $hasStaged) {
+            throw ValidationException::withMessages([
+                'signature_id' => ['The recipient signature is required.'],
+            ]);
         }
     }
 
     /**
-     * The Portal rebuilds items on every push (cascading its signatures), so
-     * local signatures are re-queued to attach again after the rebuild.
+     * @param  array<int, array{id: ?int, giveaway_item_id: int, answer: ?string}>  $items
      */
-    private function resetSignatureSyncState(Giveaway $giveaway): void
+    private function assertItems(array $items): void
     {
-        foreach ($giveaway->signatures()->get() as $signature) {
-            if ($signature->local_path && is_file($signature->local_path)) {
-                $signature->update([
-                    'sync_status' => 'pending',
-                    'sync_attempts' => 0,
-                    'sync_error' => null,
+        if ($items === []) {
+            throw ValidationException::withMessages([
+                'items' => ['Add at least one Giveaway item.'],
+            ]);
+        }
+
+        $validIds = GiveawayItem::query()->pluck('id')->all();
+
+        foreach ($items as $index => $row) {
+            if (! in_array($row['giveaway_item_id'], $validIds, true)) {
+                throw ValidationException::withMessages([
+                    "items.$index.giveaway_item_id" => ['The selected Giveaway item is not available locally.'],
                 ]);
             }
         }
@@ -554,14 +662,14 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
 
     /**
      * @param  array<int|string, mixed>  $items
-     * @return array<int, array{id: ?int, category: ?int, name: string, answer: ?string, signature_id: ?int, staged_signature_id: ?int}>
+     * @return array<int, array{id: ?int, giveaway_item_id: int, answer: ?string}>
      */
     private function normalizeItems(array $items): array
     {
         $normalized = [];
 
-        foreach (array_values($items) as $row) {
-            if (! is_array($row)) {
+        foreach ($items as $row) {
+            if (! is_array($row) || ! isset($row['giveaway_item_id'])) {
                 continue;
             }
 
@@ -570,52 +678,12 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
 
             $normalized[] = [
                 'id' => isset($row['id']) ? (int) $row['id'] : null,
-                'category' => isset($row['category']) ? (int) $row['category'] : null,
-                'name' => trim((string) ($row['name'] ?? '')),
-                'answer' => $answer === '' || $answer === null ? null : (string) $answer,
-                'signature_id' => isset($row['signature_id']) ? (int) $row['signature_id'] : null,
-                'staged_signature_id' => isset($row['staged_signature_id']) ? (int) $row['staged_signature_id'] : null,
+                'giveaway_item_id' => (int) $row['giveaway_item_id'],
+                'answer' => $answer === '' ? null : $answer,
             ];
         }
 
         return $normalized;
-    }
-
-    /**
-     * @param  array<int, array{id: ?int, category: ?int, name: string, answer: ?string, signature_id: ?int, staged_signature_id: ?int}>  $items
-     */
-    private function assertItems(array $items): void
-    {
-        $errors = [];
-        $names = [];
-
-        if ($items === []) {
-            $errors['items'] = ['Add at least one Giveaway item.'];
-        }
-
-        foreach ($items as $index => $row) {
-            $name = $row['name'];
-
-            if ($name === '') {
-                $errors["items.$index.name"] = ['This Giveaway item requires a name.'];
-            } elseif (in_array(mb_strtolower($name), $names, true)) {
-                $errors["items.$index.name"] = ['Item names must be unique within a Giveaway.'];
-            } else {
-                $names[] = mb_strtolower($name);
-            }
-
-            if ($row['category'] === null || ! in_array($row['category'], GiveawayCategory::values(), true)) {
-                $errors["items.$index.category"] = ['Choose a valid Giveaway category.'];
-            }
-
-            if ($row['signature_id'] === null && $row['staged_signature_id'] === null) {
-                $errors["items.$index.signature_id"] = ['This Giveaway item requires a signature.'];
-            }
-        }
-
-        if ($errors !== []) {
-            throw ValidationException::withMessages($errors);
-        }
     }
 
     /**
@@ -630,10 +698,6 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
         }
     }
 
-    /**
-     * Retry a local write on transient SQLite open/lock errors (CANTOPEN, busy,
-     * disk I/O) before surfacing the failure.
-     */
     private function attemptTransaction(Closure $callback): mixed
     {
         for ($attempt = 1; ; $attempt++) {
@@ -658,15 +722,49 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
             || str_contains($message, 'disk I/O error');
     }
 
-    private function deleteSignatureFile(GiveawaySignature $signature): void
+    private function localFileUrl(?string $localPath, ?string $localUuid, string $fallbackIdentity, string $directory): ?string
     {
-        if ($signature->local_path && is_file($signature->local_path)) {
-            @unlink($signature->local_path);
+        if (! $localPath || ! is_file($localPath)) {
+            return null;
         }
 
-        $extension = strtolower(pathinfo((string) $signature->local_path, PATHINFO_EXTENSION)) ?: 'bin';
-        $identity = $signature->local_uuid ?: (string) $signature->id;
-        $previewPath = public_path("giveaway_signatures/{$identity}.{$extension}");
+        $extension = strtolower(pathinfo($localPath, PATHINFO_EXTENSION)) ?: 'bin';
+        $identity = $localUuid ?: $fallbackIdentity;
+        $relativePath = "{$directory}/{$identity}.{$extension}";
+        $previewPath = public_path($relativePath);
+
+        try {
+            File::ensureDirectoryExists(dirname($previewPath));
+        } catch (Throwable) {
+            return null;
+        }
+
+        if (! is_file($previewPath) && @copy($localPath, $previewPath) === false) {
+            return null;
+        }
+
+        return '/_assets/'.$relativePath;
+    }
+
+    private function deleteSignatureFile(GiveawaySignature $signature): void
+    {
+        $this->deleteLocalFile($signature->local_path, $signature->local_uuid, (string) $signature->id, 'giveaway_signatures');
+    }
+
+    private function deletePhotoFile(GiveawayPhoto $photo): void
+    {
+        $this->deleteLocalFile($photo->local_path, $photo->local_uuid, (string) $photo->id, 'giveaway_photos');
+    }
+
+    private function deleteLocalFile(?string $localPath, ?string $localUuid, string $fallbackIdentity, string $directory): void
+    {
+        if ($localPath && is_file($localPath)) {
+            @unlink($localPath);
+        }
+
+        $extension = strtolower(pathinfo((string) $localPath, PATHINFO_EXTENSION)) ?: 'bin';
+        $identity = $localUuid ?: $fallbackIdentity;
+        $previewPath = public_path("{$directory}/{$identity}.{$extension}");
 
         if (is_file($previewPath)) {
             @unlink($previewPath);
@@ -678,7 +776,7 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
      */
     private function mapLocal(Giveaway $giveaway, User $viewer): array
     {
-        $answers = $giveaway->answers->keyBy('item_id');
+        $answers = $giveaway->answers->where('submitted_by', $viewer->id)->keyBy('item_id');
         $firstAnswer = $answers->first();
 
         return [
@@ -689,29 +787,38 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
             'sales_call' => $this->salesCallLabel($giveaway->salescall),
             'salescall_uuid' => $giveaway->salescall?->local_uuid,
             'rsm_status' => $firstAnswer?->rsm_status?->value ?? RSMStatus::PENDING->value,
-            'has_submission' => $answers->isNotEmpty(),
             'is_editable' => $giveaway->isEditableBy($viewer->id),
             'sync_status' => $giveaway->sync_status,
             'items' => $giveaway->items
                 ->sortBy('id')
                 ->values()
-                ->map(function (GiveawayItem $item) use ($answers): array {
-                    $signature = $answers->get($item->id)?->signature;
-
-                    return [
-                        'id' => $item->id,
-                        'name' => $item->name,
-                        'category' => $item->category->value,
-                        'category_label' => $item->category->meta('title'),
-                        'answer' => $item->answerItem?->answer,
-                        'signature' => $signature instanceof GiveawaySignature ? [
-                            'id' => $signature->id,
-                            'original_name' => $signature->original_name,
-                            'url' => $this->signatureUrl($signature),
-                        ] : null,
-                    ];
-                })
+                ->map(fn (GiveawaySubmissionItem $item): array => [
+                    'id' => $item->id,
+                    'giveaway_item_id' => $item->giveaway_item_id,
+                    'category' => $item->item?->category?->value,
+                    'category_label' => $item->item?->category?->meta('title'),
+                    'name' => $item->item?->name,
+                    'answer' => $item->answerItem?->answer,
+                ])
                 ->all(),
+            'signature' => $giveaway->signature === null
+                ? null
+                : [
+                    'id' => $giveaway->signature->id,
+                    'server_id' => $giveaway->signature->server_id,
+                    'original_name' => $giveaway->signature->original_name,
+                    'mime_type' => $giveaway->signature->mime_type,
+                    'url' => $this->signatureUrl($giveaway->signature),
+                ],
+            'photo' => $giveaway->photo === null
+                ? null
+                : [
+                    'id' => $giveaway->photo->id,
+                    'server_id' => $giveaway->photo->server_id,
+                    'original_name' => $giveaway->photo->original_name,
+                    'mime_type' => $giveaway->photo->mime_type,
+                    'url' => $this->photoUrl($giveaway->photo),
+                ],
             'created_at' => $giveaway->created_at?->toISOString(),
         ];
     }
@@ -723,26 +830,5 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
         }
 
         return $salescall->customer?->name ?? ('Salescall #'.$salescall->id);
-    }
-
-    /**
-     * Local user-input rules. The Portal push request remains the final
-     * server-side validator.
-     *
-     * @return array<string, mixed>
-     */
-    private function rules(): array
-    {
-        return [
-            'salescall_uuid' => ['nullable', 'string', 'max:36'],
-            'name' => ['required', 'string', 'max:255'],
-            'items' => ['nullable', 'array'],
-            'items.*.id' => ['nullable', 'integer'],
-            'items.*.category' => ['required', 'integer'],
-            'items.*.name' => ['required', 'string', 'max:255'],
-            'items.*.answer' => ['nullable', 'string'],
-            'items.*.signature_id' => ['nullable', 'integer'],
-            'items.*.staged_signature_id' => ['nullable', 'integer'],
-        ];
     }
 }
