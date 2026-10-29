@@ -56,16 +56,15 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
         $this->programReadFailed = $result['failed'];
 
         if (! $result['failed']) {
-            foreach ($result['programs'] as $program) {
-                if (! isset($program['id'], $program['name'])) {
-                    continue;
-                }
-
-                MarketingProgram::updateOrCreate(
-                    ['server_id' => $program['id']],
-                    ['name' => $program['name']],
-                );
-            }
+            $this->reconcileLookup(
+                MarketingProgram::class,
+                $result['programs'],
+                fn (array $program): array => [
+                    'server_id' => $program['id'],
+                    'name' => $program['name'],
+                ],
+                'marketings',
+            );
         }
 
         return MarketingProgram::query()->orderBy('name')->get();
@@ -249,9 +248,9 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
 
         $marketing = $submission;
 
-        if (! $marketing->isEditable()) {
+        if (! $marketing->is_editable) {
             throw ValidationException::withMessages([
-                'marketing' => ['Only Marketing Recommendations that are still pending can be edited.'],
+                'marketing' => ['Only Marketing Recommendations that have not synced or have been returned to the DRM can be edited.'],
             ]);
         }
 
@@ -475,7 +474,7 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
             'sps_status' => $marketing->sps_status->value,
             'rac_status' => $marketing->rac_status->value,
             'rac_return_count' => $marketing->rac_return_count,
-            'is_editable' => $marketing->isEditable(),
+            'is_editable' => $marketing->is_editable,
             'sync_status' => $marketing->sync_status,
             'volumes' => $marketing->volumes
                 ->map(fn (MarketingVolume $volume): array => [
@@ -532,7 +531,8 @@ class MarketingService extends AbstractFormService implements FormSubmissionServ
             'sps_status' => $sps,
             'rac_status' => $rac,
             'rac_return_count' => (int) ($serverMarketing['rac_return_count'] ?? 0),
-            'is_editable' => $sps === 1 && $rac === 1,
+            'is_editable' => $sps === SPSStatus::RETURNED->value
+                || $rac === RACStatus::RETURNED_TO_DRM->value,
             'sync_status' => 'synced',
             'volumes' => collect($serverMarketing['volumes'] ?? [])
                 ->map(fn (array $volume): array => [

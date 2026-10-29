@@ -113,7 +113,7 @@ class TradeCheckFormPage extends Page
                 ->find($submissionId);
 
             if ($tradeCheck instanceof TradeCheck) {
-                abort_unless($tradeCheck->isEditableBy((int) auth()->id()), 403);
+                abort_unless($tradeCheck->is_editable, 403);
 
                 $this->tradeCheck = $tradeCheck;
                 $this->isEdit = true;

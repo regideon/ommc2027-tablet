@@ -16,7 +16,7 @@ use Illuminate\Support\Str;
 uses(RefreshDatabase::class);
 
 test('the crr tables and key columns exist', function () {
-    expect(Schema::hasColumns('crr_programs', ['id', 'server_id', 'name']))->toBeTrue()
+    expect(Schema::hasColumns('crr_programs', ['id', 'server_id', 'name', 'is_marketing_required']))->toBeTrue()
         ->and(Schema::hasColumns('crrs', [
             'id', 'local_uuid', 'server_id', 'submitted_by', 'salescall_id',
             'crr_program_id', 'date_implemented', 'amount', 'details', 'remarks',
@@ -69,6 +69,17 @@ test('crr models expose enum casts and relationships', function () {
         ->and($program->crrs()->count())->toBe(1)
         ->and($fresh->attachments()->count())->toBe(1)
         ->and($attachment->crr->is($crr))->toBeTrue();
+});
+
+test('crr programs default to requiring Marketing and can be exempted', function () {
+    $required = CrrProgram::create(['name' => 'Price Support']);
+    $exempt = CrrProgram::create([
+        'name' => 'Battery Swap',
+        'is_marketing_required' => false,
+    ]);
+
+    expect($required->fresh()->is_marketing_required)->toBeTrue()
+        ->and($exempt->fresh()->is_marketing_required)->toBeFalse();
 });
 
 test('crr rules accept a valid payload and reject an invalid one', function () {

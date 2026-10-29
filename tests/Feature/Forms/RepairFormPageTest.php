@@ -10,6 +10,7 @@ use App\Models\StagedAttachment;
 use App\Models\User;
 use App\Services\Forms\RepairService;
 use App\Services\StagedAttachmentService;
+use Filament\Http\Middleware\Authenticate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
@@ -207,8 +208,25 @@ test('the edit route aborts 403 for a non-pending submission', function () {
 
     $repair = repairFormPageSubmission($user);
 
-    Repair::query()->update(['sps_status' => SPSStatus::RETURNED->value]);
+    Repair::query()->update(['sync_status' => 'synced']);
 
-    $this->get(RepairFormPage::getUrl(['submission' => $repair->id]))
+    $this->withoutMiddleware(Authenticate::class)
+        ->get(RepairFormPage::getUrl(['submission' => $repair->id]))
         ->assertForbidden();
+});
+
+test('the edit route allows a synced Repair returned to DRM', function () {
+    Storage::fake('local');
+    $user = repairFormPageUser();
+    $this->actingAs($user);
+
+    $repair = repairFormPageSubmission($user);
+    Repair::query()->update([
+        'sps_status' => SPSStatus::RETURNED->value,
+        'sync_status' => 'synced',
+    ]);
+
+    $this->withoutMiddleware(Authenticate::class)
+        ->get(RepairFormPage::getUrl(['submission' => $repair->id]))
+        ->assertOk();
 });

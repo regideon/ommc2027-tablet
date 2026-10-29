@@ -167,9 +167,9 @@ class RepairService extends AbstractFormService implements FormSubmissionService
 
         $repair = $submission;
 
-        if (! $repair->isEditable()) {
+        if (! $repair->is_editable) {
             throw ValidationException::withMessages([
-                'repair' => ['Only Repairs that are still pending can be edited.'],
+                'repair' => ['Only Repairs that have not synced or have been returned to the DRM can be edited.'],
             ]);
         }
 
@@ -529,7 +529,7 @@ class RepairService extends AbstractFormService implements FormSubmissionService
             'rsm_status' => $repair->rsm_status->value,
             'sps_status' => $repair->sps_status->value,
             'spm_status' => $repair->spm_status->value,
-            'is_editable' => $repair->isEditable(),
+            'is_editable' => $repair->is_editable,
             'sync_status' => $repair->sync_status,
             'attachments' => $repair->attachments
                 ->sortBy('id')

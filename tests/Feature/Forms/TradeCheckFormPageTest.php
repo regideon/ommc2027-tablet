@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\TDHStatus;
 use App\Enums\TradeCheck\FieldType;
 use App\Enums\TradeCheck\GroupCategory;
 use App\Filament\Pages\FormsPage;
@@ -17,6 +18,7 @@ use App\Models\Salescall;
 use App\Models\User;
 use App\Services\Forms\TradeCheckService;
 use App\Services\StagedAttachmentService;
+use Filament\Http\Middleware\Authenticate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -341,9 +343,35 @@ test('the edit route aborts 403 for a non-pending submission', function () {
     ]);
 
     TradeCheckAnswer::query()->update(['rsm_status' => 2]);
+    TradeCheck::query()
+        ->whereKey($template->id)
+        ->update(['sync_status' => 'synced']);
 
-    $this->get(TradeCheckFormPage::getUrl(['submission' => $template->id]))
+    $this->withoutMiddleware(Authenticate::class)
+        ->get(TradeCheckFormPage::getUrl(['submission' => $template->id]))
         ->assertForbidden();
+});
+
+test('the edit route allows a synced Trade Check returned to DRM', function () {
+    $user = tradeCheckFormPageUser();
+    $this->actingAs($user);
+
+    $template = tradeCheckFormPageTemplate();
+    $items = $template->group->first()->subgroups->first()->items;
+
+    app(TradeCheckService::class)->create($user, [
+        'trade_check_id' => $template->id,
+        'answers' => [$items[0]->id => 'Yes', $items[1]->id => 'Good'],
+    ]);
+
+    TradeCheck::query()
+        ->whereKey($template->id)
+        ->update(['sync_status' => 'synced']);
+    TradeCheckAnswer::query()->update(['tdh_status' => TDHStatus::RETURNED->value]);
+
+    $this->withoutMiddleware(Authenticate::class)
+        ->get(TradeCheckFormPage::getUrl(['submission' => $template->id]))
+        ->assertOk();
 });
 
 function tradeCheckFormPageSalescall(User $user): Salescall

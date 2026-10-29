@@ -117,14 +117,17 @@ test('updating a Marketing recommendation replaces the child snapshot idempotent
         ->and($marketing->fresh()->sync_status)->toBe('pending');
 });
 
-test('a Marketing recommendation can only be edited while SPS and RAC are pending', function () {
+test('a synced Marketing recommendation is read-only until it is returned to DRM', function () {
     $user = marketingWorkflowUser();
     $program = marketingWorkflowProgram();
     $region = marketingWorkflowRegion();
     $service = app(MarketingService::class);
 
     $marketing = $service->create($user, marketingValidInput($program, $region));
-    $marketing->update(['sps_status' => 3]);
+    $marketing->update([
+        'sps_status' => 3,
+        'sync_status' => 'synced',
+    ]);
 
     expect(fn () => $service->update($marketing->fresh(), marketingValidInput($program, $region)))
         ->toThrow(ValidationException::class);
@@ -176,8 +179,26 @@ test('the Marketing read service merges local and server rows with the server wi
     expect($rows)->toHaveCount(1)
         ->and($rows->first()['name'])->toBe('Server name')
         ->and($rows->first()['program'])->toBe('Price Support')
-        ->and($rows->first()['is_editable'])->toBeFalse()
+        ->and($rows->first()['is_editable'])->toBeTrue()
         ->and($rows->first()['volumes'])->toHaveCount(1);
+});
+
+test('a Marketing recommendation is editable before sync and after a return to DRM', function () {
+    $user = marketingWorkflowUser();
+    $program = marketingWorkflowProgram();
+    $region = marketingWorkflowRegion();
+
+    $marketing = app(MarketingService::class)->create($user, marketingValidInput($program, $region));
+
+    expect($marketing->fresh()->is_editable)->toBeTrue();
+
+    $marketing->update(['sync_status' => 'synced']);
+
+    expect($marketing->fresh()->is_editable)->toBeFalse();
+
+    $marketing->update(['rac_status' => RACStatus::RETURNED_TO_DRM->value]);
+
+    expect($marketing->fresh()->is_editable)->toBeTrue();
 });
 
 test('the Marketing read service keeps local rows when the pull fails', function () {

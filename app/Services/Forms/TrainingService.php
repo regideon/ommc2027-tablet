@@ -65,32 +65,30 @@ class TrainingService extends AbstractFormService implements FormSubmissionServi
         $this->programReadFailed = $topics['failed'];
 
         if (! $topics['failed']) {
-            foreach ($topics['topics'] as $topic) {
-                if (! isset($topic['id'], $topic['name'])) {
-                    continue;
-                }
-
-                TrainingTopic::updateOrCreate(
-                    ['server_id' => $topic['id']],
-                    ['name' => $topic['name']],
-                );
-            }
+            $this->reconcileLookup(
+                TrainingTopic::class,
+                $topics['topics'],
+                fn (array $topic): array => [
+                    'server_id' => $topic['id'],
+                    'name' => $topic['name'],
+                ],
+                'trainings',
+            );
         }
 
         $positions = $this->syncService->readTrainingPositionsWithStatus();
         $this->programReadFailed = $this->programReadFailed || $positions['failed'];
 
         if (! $positions['failed']) {
-            foreach ($positions['positions'] as $position) {
-                if (! isset($position['id'], $position['name'])) {
-                    continue;
-                }
-
-                TrainingPosition::updateOrCreate(
-                    ['server_id' => $position['id']],
-                    ['name' => $position['name']],
-                );
-            }
+            $this->reconcileLookup(
+                TrainingPosition::class,
+                $positions['positions'],
+                fn (array $position): array => [
+                    'server_id' => $position['id'],
+                    'name' => $position['name'],
+                ],
+                'participants',
+            );
         }
 
         return TrainingTopic::query()->orderBy('name')->get();
@@ -204,9 +202,9 @@ class TrainingService extends AbstractFormService implements FormSubmissionServi
 
         $training = $submission;
 
-        if (! $training->isEditable()) {
+        if (! $training->is_editable) {
             throw ValidationException::withMessages([
-                'training' => ['Only Trainings that are still pending can be edited.'],
+                'training' => ['Only Trainings that have not synced or have been returned to the DRM can be edited.'],
             ]);
         }
 
@@ -791,7 +789,7 @@ class TrainingService extends AbstractFormService implements FormSubmissionServi
             'rsm_status' => $training->rsm_status->value,
             'tdh_status' => $training->tdh_status->value,
             'tds_status' => $training->tds_status->value,
-            'is_editable' => $training->isEditable(),
+            'is_editable' => $training->is_editable,
             'sync_status' => $training->sync_status,
             'participants' => $training->participants
                 ->sortBy('id')

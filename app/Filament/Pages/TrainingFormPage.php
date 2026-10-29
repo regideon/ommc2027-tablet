@@ -130,7 +130,7 @@ class TrainingFormPage extends Page
                 ->find($submissionId);
 
             if ($training instanceof Training) {
-                abort_unless($training->isEditable(), 403);
+                abort_unless($training->is_editable, 403);
 
                 $this->training = $training;
                 $this->isEdit = true;

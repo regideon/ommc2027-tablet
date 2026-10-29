@@ -124,7 +124,7 @@ class TradeRequestFormPage extends Page
                 ->find($submissionId);
 
             if ($tradeRequest instanceof TradeRequest) {
-                abort_unless($tradeRequest->isEditable(), 403);
+                abort_unless($tradeRequest->is_editable, 403);
 
                 $this->tradeRequest = $tradeRequest;
                 $this->isEdit = true;

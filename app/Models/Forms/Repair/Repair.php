@@ -7,6 +7,7 @@ use App\Enums\SPMStatus;
 use App\Enums\SPSStatus;
 use App\Models\Salescall;
 use App\Models\User;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -39,13 +40,12 @@ class Repair extends Model
     }
 
     /**
-     * A repair may be edited only while it is still fully pending; once any
-     * approver has acted the tablet treats it as read-only.
+     * A repair is editable until it has synced, or again after SPS returns it
+     * to the DRM. A return to SPS is not a DRM edit.
      */
-    public function isEditable(): bool
+    protected function isEditable(): Attribute
     {
-        return $this->rsm_status === RSMStatus::PENDING
-            && $this->sps_status === SPSStatus::PENDING
-            && $this->spm_status === SPMStatus::PENDING;
+        return Attribute::get(fn (): bool => $this->sync_status !== 'synced'
+            || $this->sps_status === SPSStatus::RETURNED);
     }
 }

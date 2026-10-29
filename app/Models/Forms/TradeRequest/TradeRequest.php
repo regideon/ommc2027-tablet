@@ -7,6 +7,7 @@ use App\Enums\TDHStatus;
 use App\Enums\TDSStatus;
 use App\Models\Salescall;
 use App\Models\User;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -48,13 +49,12 @@ class TradeRequest extends Model
     }
 
     /**
-     * A trade request may be edited only while it is still fully pending; once
-     * any approver has acted the tablet treats it as read-only.
+     * A trade request is editable until it has synced, or again after TDH
+     * returns it to the DRM.
      */
-    public function isEditable(): bool
+    protected function isEditable(): Attribute
     {
-        return $this->rsm_status === RSMStatus::PENDING
-            && $this->tdh_status === TDHStatus::PENDING
-            && $this->tds_status === TDSStatus::PENDING;
+        return Attribute::get(fn (): bool => $this->sync_status !== 'synced'
+            || $this->tdh_status === TDHStatus::RETURNED);
     }
 }

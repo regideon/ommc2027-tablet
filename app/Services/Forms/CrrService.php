@@ -3,14 +3,12 @@
 namespace App\Services\Forms;
 
 use App\Contracts\FormSubmissionService;
-use App\Enums\RACStatus;
 use App\Enums\RSMStatus;
 use App\Enums\SPMStatus;
 use App\Enums\SPSStatus;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrAttachment;
 use App\Models\Forms\CRR\CrrProgram;
-use App\Models\Forms\Marketing\Marketing;
 use App\Models\Salescall;
 use App\Models\User;
 use App\Services\SyncService;
@@ -38,6 +36,9 @@ class CrrService extends AbstractFormService implements FormSubmissionService
 
     private bool $programReadFailed = false;
 
+    /** @var array<int, int> */
+    private array $currentProgramIds = [];
+
     public function __construct(
         private readonly SyncService $syncService,
         private readonly MarketingService $marketingService,
@@ -56,23 +57,31 @@ class CrrService extends AbstractFormService implements FormSubmissionService
      */
     public function programs(): Collection
     {
+        $this->currentProgramIds = [];
+
         $result = $this->syncService->readCrrProgramsWithStatus();
         $this->programReadFailed = $result['failed'];
 
         if (! $result['failed']) {
-            foreach ($result['programs'] as $program) {
-                if (! isset($program['id'], $program['name'])) {
-                    continue;
-                }
-
-                CrrProgram::updateOrCreate(
-                    ['server_id' => $program['id']],
-                    ['name' => $program['name']],
-                );
-            }
+            $this->currentProgramIds = $this->reconcileLookup(
+                CrrProgram::class,
+                $result['programs'],
+                fn (array $program): array => [
+                    'server_id' => $program['id'],
+                    'name' => $program['name'],
+                    'is_marketing_required' => (bool) ($program['is_marketing_required'] ?? true),
+                ],
+                'crrs',
+            );
         }
 
-        return CrrProgram::query()->orderBy('name')->get();
+        $query = CrrProgram::query();
+
+        if ($this->currentProgramIds !== []) {
+            $query->whereIn('id', $this->currentProgramIds);
+        }
+
+        return $query->orderBy('name')->get();
     }
 
     public function programReadFailed(): bool
@@ -106,6 +115,7 @@ class CrrService extends AbstractFormService implements FormSubmissionService
         $this->globalReadFailed = $this->globalReadFailed || $server['failed'];
 
         if (! $server['failed']) {
+            $this->persistApprovalStatuses($server['crrs']);
             $local = $this->reconcileDeletedFromServer($local, $server['crrs']);
         }
 
@@ -141,11 +151,10 @@ class CrrService extends AbstractFormService implements FormSubmissionService
     {
         $validated = CrrRules::validate($input);
         $salescallId = $this->resolveSalescall($validated['salescall_uuid'] ?? null);
+        $program = CrrProgram::query()->find($validated['crr_program_id']);
 
-        if ($salescallId !== null && ! $this->approvedMarketingExistsFor($salescallId, $user)) {
-            throw ValidationException::withMessages([
-                'salescall_uuid' => ['Create and get approval for a Marketing Recommendation for this sales call before creating a CRR.'],
-            ]);
+        if ($program instanceof CrrProgram) {
+            $this->ensureMarketingRequirement($program, $salescallId, $user);
         }
 
         $attachments = $this->normalizeAttachments($this->attachmentPayload($input));
@@ -192,20 +201,27 @@ class CrrService extends AbstractFormService implements FormSubmissionService
 
         $crr = $submission;
 
-        if (! $crr->isEditable()) {
+        if (! $crr->is_editable) {
             throw ValidationException::withMessages([
-                'crr' => ['Only CRRs that are still pending can be edited.'],
+                'crr' => ['Only CRRs that have not synced or have been returned to the DRM can be edited.'],
             ]);
         }
 
         $validated = CrrRules::validate($input);
+        $salescallId = $this->resolveSalescall($validated['salescall_uuid'] ?? null);
+        $program = CrrProgram::query()->find($validated['crr_program_id']);
+
+        if ($program instanceof CrrProgram && $crr->submittedBy instanceof User) {
+            $this->ensureMarketingRequirement($program, $salescallId, $crr->submittedBy);
+        }
+
         $attachments = $this->normalizeAttachments($this->attachmentPayload($input));
         $storedPaths = [];
 
         try {
-            DB::transaction(function () use ($crr, $validated, $attachments, &$storedPaths): void {
+            DB::transaction(function () use ($crr, $validated, $salescallId, $attachments, &$storedPaths): void {
                 $crr->update([
-                    'salescall_id' => $this->resolveSalescall($validated['salescall_uuid'] ?? null),
+                    'salescall_id' => $salescallId,
                     'crr_program_id' => $validated['crr_program_id'],
                     'date_implemented' => $validated['date_implemented'] ?? null,
                     'amount' => $validated['amount'],
@@ -316,7 +332,7 @@ class CrrService extends AbstractFormService implements FormSubmissionService
             'rsm_status' => $crr->rsm_status->value,
             'sps_status' => $crr->sps_status->value,
             'spm_status' => $crr->spm_status->value,
-            'is_editable' => $crr->isEditable(),
+            'is_editable' => $crr->is_editable,
             'sync_status' => $crr->sync_status,
             'attachments' => $crr->attachments
                 ->map(fn (CrrAttachment $attachment): array => [
@@ -360,7 +376,7 @@ class CrrService extends AbstractFormService implements FormSubmissionService
             'rsm_status' => $rsm,
             'sps_status' => $sps,
             'spm_status' => $spm,
-            'is_editable' => $rsm === 1 && $sps === 1 && $spm === 1,
+            'is_editable' => $sps === SPSStatus::RETURNED->value,
             'sync_status' => 'synced',
             'attachments' => collect($serverCrr['attachments'] ?? [])
                 ->map(fn (array $attachment): array => [
@@ -374,6 +390,37 @@ class CrrService extends AbstractFormService implements FormSubmissionService
                 ->all(),
             'created_at' => $serverCrr['created_at'] ?? null,
         ];
+    }
+
+    /**
+     * Persist Portal-owned approval fields on synced local rows without
+     * touching local work that has not been pushed yet.
+     *
+     * @param  array<int, array<string, mixed>>  $serverCrrs
+     */
+    private function persistApprovalStatuses(array $serverCrrs): void
+    {
+        foreach ($serverCrrs as $row) {
+            $serverId = $row['id'] ?? null;
+
+            if (! is_numeric($serverId)) {
+                continue;
+            }
+
+            $crr = Crr::query()
+                ->where('server_id', (int) $serverId)
+                ->first();
+
+            if (! $crr instanceof Crr || $crr->sync_status !== 'synced') {
+                continue;
+            }
+
+            $crr->update([
+                'rsm_status' => (int) ($row['rsm_status'] ?? $crr->rsm_status->value),
+                'sps_status' => (int) ($row['sps_status'] ?? $crr->sps_status->value),
+                'spm_status' => (int) ($row['spm_status'] ?? $crr->spm_status->value),
+            ]);
+        }
     }
 
     /**
@@ -438,6 +485,33 @@ class CrrService extends AbstractFormService implements FormSubmissionService
         return $salescall->customer?->name ?? ('Salescall #'.$salescall->id);
     }
 
+    private function ensureMarketingRequirement(CrrProgram $program, ?int $salescallId, User $user): void
+    {
+        if (! $program->is_marketing_required || $salescallId === null) {
+            return;
+        }
+
+        $salescall = Salescall::query()->find($salescallId);
+
+        if (! $salescall instanceof Salescall) {
+            return;
+        }
+
+        $state = $this->marketingService->approvalStateForSalescall($user, $salescall);
+
+        if ($state === 'approved') {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            'crr_program_id' => [match ($state) {
+                'pending' => 'The Marketing Recommendation for this sales call must be approved before saving a CRR with this program.',
+                'unknown' => 'Marketing approval could not be confirmed. Reconnect and try again.',
+                default => 'Create a Marketing Recommendation for this sales call before saving a CRR with this program.',
+            }],
+        ]);
+    }
+
     private function localAttachmentUrl(CrrAttachment $attachment): ?string
     {
         if (! $attachment->local_path || ! is_file($attachment->local_path)) {
@@ -460,28 +534,6 @@ class CrrService extends AbstractFormService implements FormSubmissionService
         }
 
         return '/_assets/'.$relativePath;
-    }
-
-    /**
-     * A CRR tied to a visit requires the rep's own RAC-approved Marketing
-     * Recommendation for that same visit.
-     */
-    private function approvedMarketingExistsFor(int $salescallId, User $user): bool
-    {
-        $approvedLocally = Marketing::query()
-            ->where('salescall_id', $salescallId)
-            ->where('submitted_by', $user->id)
-            ->where('rac_status', RACStatus::APPROVED->value)
-            ->exists();
-
-        if ($approvedLocally) {
-            return true;
-        }
-
-        $salescall = Salescall::query()->find($salescallId);
-
-        return $salescall instanceof Salescall
-            && $this->marketingService->approvalStateForSalescall($user, $salescall) === 'approved';
     }
 
     /**

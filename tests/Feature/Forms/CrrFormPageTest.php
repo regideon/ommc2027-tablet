@@ -4,7 +4,6 @@ use App\Enums\RACStatus;
 use App\Enums\SPSStatus;
 use App\Filament\Pages\CrrFormPage;
 use App\Filament\Pages\FormsPage;
-use App\Filament\Pages\MarketingFormPage;
 use App\Models\Customer;
 use App\Models\Forms\CRR\Crr;
 use App\Models\Forms\CRR\CrrProgram;
@@ -14,6 +13,7 @@ use App\Models\Itinerary;
 use App\Models\RegionType;
 use App\Models\Salescall;
 use App\Models\User;
+use Filament\Http\Middleware\Authenticate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Facades\Http;
@@ -45,9 +45,12 @@ function crrFormPageUser(): User
     return User::factory()->create(['api_token' => 'crr-form-test-token']);
 }
 
-function crrFormPageProgram(string $name = 'Price Support'): CrrProgram
+function crrFormPageProgram(string $name = 'Price Support', bool $isMarketingRequired = false): CrrProgram
 {
-    return CrrProgram::create(['name' => $name]);
+    return CrrProgram::create([
+        'name' => $name,
+        'is_marketing_required' => $isMarketingRequired,
+    ]);
 }
 
 test('the CRR create page renders for an authenticated user', function () {
@@ -194,8 +197,30 @@ test('the edit route aborts 403 for a non-pending CRR', function () {
     ]);
 
     $this->actingAs($user)
+        ->withoutMiddleware(Authenticate::class)
         ->get(CrrFormPage::getUrl(['crr' => $crr->id]))
         ->assertForbidden();
+});
+
+test('the edit route allows a synced CRR returned to DRM', function () {
+    $user = crrFormPageUser();
+    $program = crrFormPageProgram();
+
+    $crr = Crr::create([
+        'local_uuid' => (string) Str::uuid(),
+        'submitted_by' => $user->id,
+        'crr_program_id' => $program->id,
+        'amount' => '100.00',
+        'rsm_status' => 1,
+        'sps_status' => SPSStatus::RETURNED->value,
+        'spm_status' => 1,
+        'sync_status' => 'synced',
+    ]);
+
+    $this->actingAs($user)
+        ->withoutMiddleware(Authenticate::class)
+        ->get(CrrFormPage::getUrl(['crr' => $crr->id]))
+        ->assertOk();
 });
 
 test('the CRR form surfaces a warning when programs cannot be loaded', function () {
@@ -253,7 +278,7 @@ function crrFormPageMarketing(
     ]);
 }
 
-test('the create page lists only sales calls whose Marketing is locally approved', function () {
+test('the create page lists all of the rep\'s sales calls regardless of Marketing approval', function () {
     $user = crrFormPageUser();
     crrFormPageProgram();
     $this->actingAs($user);
@@ -264,7 +289,7 @@ test('the create page lists only sales calls whose Marketing is locally approved
     $pending = crrFormPageSalescall($user);
     crrFormPageMarketing($user, $pending, RACStatus::PENDING->value, SPSStatus::PENDING->value);
 
-    crrFormPageSalescall($user);
+    $withoutMarketing = crrFormPageSalescall($user);
 
     $otherUser = User::factory()->create();
     $otherRepsSalescall = crrFormPageSalescall($otherUser);
@@ -272,12 +297,16 @@ test('the create page lists only sales calls whose Marketing is locally approved
 
     $options = Livewire::test(CrrFormPage::class)->get('salescalls');
 
-    expect(collect($options)->pluck('uuid')->all())->toBe([$approved->local_uuid]);
+    expect(collect($options)->pluck('uuid')->all())->toBe([
+        $withoutMarketing->local_uuid,
+        $pending->local_uuid,
+        $approved->local_uuid,
+    ]);
 });
 
 test('opening the CRR form from a sales call with an approved Marketing preselects and locks that sales call', function () {
     $user = crrFormPageUser();
-    crrFormPageProgram();
+    $program = crrFormPageProgram(isMarketingRequired: true);
     $this->actingAs($user);
 
     $salescall = crrFormPageSalescall($user);
@@ -288,7 +317,10 @@ test('opening the CRR form from a sales call with an approved Marketing preselec
         ->assertOk()
         ->assertSet('salescall_uuid', $salescall->local_uuid, true)
         ->assertSet('salescallLocked', true, true)
+        ->assertSet('marketingApprovalState', 'not_required')
+        ->set('crr_program_id', $program->id)
         ->assertSet('marketingApprovalState', 'approved')
+        ->assertSet('saveBlocked', false)
         ->assertSee('Started from this Sales Call')
         ->assertSee('CRR Program')
         ->assertSeeHtml('wire:model="salescall_uuid" class="field-input bg-white" disabled');
@@ -297,7 +329,7 @@ test('opening the CRR form from a sales call with an approved Marketing preselec
 test('opening the CRR form accepts an approved Marketing submitted from another device', function () {
     $user = crrFormPageUser();
     $user->update(['server_id' => 77]);
-    crrFormPageProgram();
+    $program = crrFormPageProgram(isMarketingRequired: true);
     $this->actingAs($user);
 
     $salescall = crrFormPageSalescall($user);
@@ -319,7 +351,9 @@ test('opening the CRR form accepts an approved Marketing submitted from another 
     Livewire::withQueryParams(['salescall' => $salescall->local_uuid])
         ->test(CrrFormPage::class)
         ->assertOk()
+        ->set('crr_program_id', $program->id)
         ->assertSet('marketingApprovalState', 'approved')
+        ->assertSet('saveBlocked', false)
         ->assertSee('CRR Program')
         ->assertDontSee('Create a Marketing Recommendation for this sales call first');
 });
@@ -327,7 +361,7 @@ test('opening the CRR form accepts an approved Marketing submitted from another 
 test('saving a CRR accepts an approved Marketing submitted from another device', function () {
     $user = crrFormPageUser();
     $user->update(['server_id' => 77]);
-    $program = crrFormPageProgram();
+    $program = crrFormPageProgram(isMarketingRequired: true);
     $this->actingAs($user);
 
     $salescall = crrFormPageSalescall($user);
@@ -356,7 +390,7 @@ test('saving a CRR accepts an approved Marketing submitted from another device',
     expect(Crr::query()->first()->salescall_id)->toBe($salescall->id);
 });
 
-test('opening the CRR form from a sales call without a Marketing shows the create-Marketing warning', function () {
+test('opening the CRR form from a sales call without a Marketing opens the form', function () {
     $user = crrFormPageUser();
     crrFormPageProgram();
     $this->actingAs($user);
@@ -368,15 +402,16 @@ test('opening the CRR form from a sales call without a Marketing shows the creat
         ->assertOk()
         ->assertSet('salescall_uuid', $salescall->local_uuid, true)
         ->assertSet('salescallLocked', true, true)
-        ->assertSet('marketingApprovalState', 'none')
-        ->assertSee('Create a Marketing Recommendation for this sales call first')
-        ->assertSeeHtml('href="'.MarketingFormPage::getUrl(['salescall' => $salescall->local_uuid]).'"')
-        ->assertDontSee('CRR Program');
+        ->assertSet('marketingApprovalState', 'not_required')
+        ->assertSet('saveBlocked', false)
+        ->assertSee('Started from this Sales Call')
+        ->assertSee('CRR Program')
+        ->assertDontSee('Create a Marketing Recommendation for this sales call first');
 });
 
-test('opening the CRR form from a sales call with a Marketing that is not RAC-approved shows the approval warning', function (int $racStatus) {
+test('opening the CRR form with a requiring program and a Marketing that is not RAC-approved blocks save', function (int $racStatus) {
     $user = crrFormPageUser();
-    crrFormPageProgram();
+    $program = crrFormPageProgram(isMarketingRequired: true);
     $this->actingAs($user);
 
     $salescall = crrFormPageSalescall($user);
@@ -385,9 +420,11 @@ test('opening the CRR form from a sales call with a Marketing that is not RAC-ap
     Livewire::withQueryParams(['salescall' => $salescall->local_uuid])
         ->test(CrrFormPage::class)
         ->assertOk()
+        ->set('crr_program_id', $program->id)
         ->assertSet('marketingApprovalState', 'pending')
-        ->assertSee('must be approved before you can create a CRR')
-        ->assertDontSee('CRR Program');
+        ->assertSet('saveBlocked', true)
+        ->assertSee('Marketing approval required')
+        ->assertSee('CRR Program');
 })->with([
     'pending' => [RACStatus::PENDING->value],
     'returned to DRM' => [RACStatus::RETURNED_TO_DRM->value],
@@ -395,9 +432,9 @@ test('opening the CRR form from a sales call with a Marketing that is not RAC-ap
     'disapproved' => [RACStatus::DISAPPROVED->value],
 ]);
 
-test('opening the CRR form without a confirmable Marketing approval shows a reconnect warning', function () {
+test('opening the CRR form with a requiring program and no confirmable Marketing approval blocks save', function () {
     $user = crrFormPageUser();
-    crrFormPageProgram();
+    $program = crrFormPageProgram(isMarketingRequired: true);
     $this->actingAs($user);
 
     $salescall = crrFormPageSalescall($user);
@@ -410,9 +447,11 @@ test('opening the CRR form without a confirmable Marketing approval shows a reco
     Livewire::withQueryParams(['salescall' => $salescall->local_uuid])
         ->test(CrrFormPage::class)
         ->assertOk()
+        ->set('crr_program_id', $program->id)
         ->assertSet('marketingApprovalState', 'unknown')
+        ->assertSet('saveBlocked', true)
         ->assertSee('Marketing approval could not be confirmed')
-        ->assertDontSee('CRR Program');
+        ->assertSee('CRR Program');
 });
 
 test('opening the CRR form with an unknown sales call uuid does not preselect or lock', function () {
@@ -444,34 +483,13 @@ test('a sales call owned by another rep is ignored when opening the CRR form', f
         ->assertSet('marketingApprovalState', 'not_required');
 });
 
-test('saving a CRR linked to a sales call without an approved Marketing reports an error and creates nothing', function () {
+test('saving a CRR linked to a sales call without Marketing creates it for a non-requiring program', function () {
     $user = crrFormPageUser();
     $program = crrFormPageProgram();
     $this->actingAs($user);
 
     $salescall = crrFormPageSalescall($user);
     crrFormPageMarketing($user, $salescall, RACStatus::PENDING->value, SPSStatus::PENDING->value);
-
-    $component = Livewire::test(CrrFormPage::class)
-        ->set('crr_program_id', $program->id)
-        ->set('amount', '1500')
-        ->set('salescall_uuid', $salescall->local_uuid)
-        ->call('save');
-
-    expect($component->get('formErrors'))
-        ->toHaveKey('salescall_uuid')
-        ->and(Crr::query()->count())->toBe(0);
-
-    $component->assertNoRedirect();
-});
-
-test('saving a CRR linked to a sales call with an approved Marketing creates it', function () {
-    $user = crrFormPageUser();
-    $program = crrFormPageProgram();
-    $this->actingAs($user);
-
-    $salescall = crrFormPageSalescall($user);
-    crrFormPageMarketing($user, $salescall);
 
     Livewire::test(CrrFormPage::class)
         ->set('crr_program_id', $program->id)
@@ -483,9 +501,28 @@ test('saving a CRR linked to a sales call with an approved Marketing creates it'
     expect(Crr::query()->first()->salescall_id)->toBe($salescall->id);
 });
 
-test('a Marketing for another sales call or another rep does not unlock the CRR form', function () {
+test('saving a CRR linked to a sales call with an approved Marketing creates it for a requiring program', function () {
     $user = crrFormPageUser();
-    crrFormPageProgram();
+    $program = crrFormPageProgram(isMarketingRequired: true);
+    $this->actingAs($user);
+
+    $salescall = crrFormPageSalescall($user);
+    crrFormPageMarketing($user, $salescall);
+
+    Livewire::test(CrrFormPage::class)
+        ->set('crr_program_id', $program->id)
+        ->set('amount', '1500')
+        ->set('salescall_uuid', $salescall->local_uuid)
+        ->assertSet('saveBlocked', false)
+        ->call('save')
+        ->assertRedirect(FormsPage::getUrl(['form' => 'crr']));
+
+    expect(Crr::query()->first()->salescall_id)->toBe($salescall->id);
+});
+
+test('a Marketing for another sales call or another rep does not satisfy a requiring program', function () {
+    $user = crrFormPageUser();
+    $program = crrFormPageProgram(isMarketingRequired: true);
     $otherUser = User::factory()->create();
     $this->actingAs($user);
 
@@ -497,9 +534,55 @@ test('a Marketing for another sales call or another rep does not unlock the CRR 
     Livewire::withQueryParams(['salescall' => $salescall->local_uuid])
         ->test(CrrFormPage::class)
         ->assertOk()
+        ->set('crr_program_id', $program->id)
         ->assertSet('marketingApprovalState', 'none')
+        ->assertSet('saveBlocked', true)
         ->assertSee('Create a Marketing Recommendation for this sales call first')
-        ->assertDontSee('CRR Program');
+        ->assertSee('CRR Program');
+});
+
+test('selecting a requiring program without Marketing warns and blocks save', function () {
+    $user = crrFormPageUser();
+    $program = crrFormPageProgram(isMarketingRequired: true);
+    $this->actingAs($user);
+
+    $salescall = crrFormPageSalescall($user);
+
+    $component = Livewire::withQueryParams(['salescall' => $salescall->local_uuid])
+        ->test(CrrFormPage::class)
+        ->assertSet('programRequiresMarketing', false)
+        ->assertSet('saveBlocked', false)
+        ->set('crr_program_id', $program->id)
+        ->assertSet('programRequiresMarketing', true)
+        ->assertSet('marketingApprovalState', 'none')
+        ->assertSet('saveBlocked', true)
+        ->assertSee('Create a Marketing Recommendation for this sales call first')
+        ->assertSee('CRR Program');
+
+    $component->set('amount', '1500')->call('save');
+
+    expect($component->get('formErrors'))
+        ->toHaveKey('crr_program_id')
+        ->and(Crr::query()->count())->toBe(0);
+
+    $component->assertNoRedirect();
+});
+
+test('a standalone CRR with a requiring program saves without Marketing', function () {
+    $user = crrFormPageUser();
+    $program = crrFormPageProgram(isMarketingRequired: true);
+    $this->actingAs($user);
+
+    Livewire::test(CrrFormPage::class)
+        ->set('crr_program_id', $program->id)
+        ->assertSet('programRequiresMarketing', true)
+        ->assertSet('salescall_uuid', null)
+        ->assertSet('saveBlocked', false)
+        ->set('amount', '1500')
+        ->call('save')
+        ->assertRedirect(FormsPage::getUrl(['form' => 'crr']));
+
+    expect(Crr::query()->first()->salescall_id)->toBeNull();
 });
 
 test('editing an existing CRR does not require an approved Marketing', function () {
@@ -533,4 +616,79 @@ test('editing an existing CRR does not require an approved Marketing', function 
         ->assertRedirect(FormsPage::getUrl(['form' => 'crr']));
 
     expect((float) $crr->fresh()->amount)->toBe(250.75);
+});
+
+test('editing a CRR keeps its stale program visible when the Portal no longer lists it', function () {
+    $user = crrFormPageUser();
+    $staleProgram = crrFormPageProgram('Legacy Program');
+    crrFormPageProgram('Price Support');
+    $salescall = crrFormPageSalescall($user);
+
+    $crr = Crr::create([
+        'local_uuid' => (string) Str::uuid(),
+        'submitted_by' => $user->id,
+        'salescall_id' => $salescall->id,
+        'crr_program_id' => $staleProgram->id,
+        'amount' => '100.00',
+        'rsm_status' => 1,
+        'sps_status' => 1,
+        'spm_status' => 1,
+        'sync_status' => 'pending',
+    ]);
+
+    crrFormPageFake([
+        '*/api/forms/crr/programs' => Http::response([
+            'crr_programs' => [
+                ['id' => 500, 'name' => 'Price Support', 'is_marketing_required' => true],
+            ],
+        ], 200),
+        '*/api/forms/marketing/pull' => Http::response(['marketings' => []], 200),
+    ]);
+
+    $this->actingAs($user);
+
+    Livewire::withQueryParams(['crr' => $crr->id])
+        ->test(CrrFormPage::class)
+        ->assertOk()
+        ->assertSet('isEdit', true)
+        ->assertSet('crr_program_id', $staleProgram->id)
+        ->assertSee('Legacy Program');
+});
+
+test('editing a linked CRR cannot switch to a requiring program without Marketing approval', function () {
+    $user = crrFormPageUser();
+    $exemptProgram = crrFormPageProgram('Battery Swap');
+    $requiringProgram = crrFormPageProgram('Price Support', true);
+
+    $salescall = crrFormPageSalescall($user);
+
+    $crr = Crr::create([
+        'local_uuid' => (string) Str::uuid(),
+        'submitted_by' => $user->id,
+        'salescall_id' => $salescall->id,
+        'crr_program_id' => $exemptProgram->id,
+        'amount' => '100.00',
+        'rsm_status' => 1,
+        'sps_status' => 1,
+        'spm_status' => 1,
+        'sync_status' => 'pending',
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Livewire::withQueryParams(['crr' => $crr->id])
+        ->test(CrrFormPage::class)
+        ->assertOk()
+        ->assertSet('isEdit', true)
+        ->assertSet('programRequiresMarketing', false)
+        ->assertSet('saveBlocked', false)
+        ->set('crr_program_id', $requiringProgram->id)
+        ->assertSet('programRequiresMarketing', true)
+        ->assertSet('marketingApprovalState', 'none')
+        ->assertSet('saveBlocked', true)
+        ->set('amount', '250.75')
+        ->call('save');
+
+    expect($component->get('formErrors'))->toHaveKey('crr_program_id')
+        ->and($crr->fresh()->crr_program_id)->toBe($exemptProgram->id);
 });

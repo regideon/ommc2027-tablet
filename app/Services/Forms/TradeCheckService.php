@@ -186,9 +186,9 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
 
         $tradeCheck = $submission;
 
-        if (! $tradeCheck->isEditableBy((int) auth()->id())) {
+        if (! $tradeCheck->is_editable) {
             throw ValidationException::withMessages([
-                'trade_check' => ['Only Trade Checks that are still pending can be edited.'],
+                'trade_check' => ['Only Trade Checks that have not synced or have been returned to the DRM can be edited.'],
             ]);
         }
 
@@ -798,7 +798,7 @@ class TradeCheckService extends AbstractFormService implements FormSubmissionSer
             'rsm_status' => $rsm,
             'tdh_status' => $tdh,
             'has_submission' => $answers->isNotEmpty(),
-            'is_editable' => $tradeCheck->isEditableBy($viewer->id),
+            'is_editable' => $tradeCheck->is_editable,
             'sync_status' => $tradeCheck->sync_status,
             'groups' => $tradeCheck->group
                 ->sortBy('order')

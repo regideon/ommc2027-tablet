@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\Marketing\RealizationStage;
+use App\Enums\SPSStatus;
 use App\Filament\Pages\FormsPage;
 use App\Filament\Pages\MarketingFormPage;
 use App\Models\Customer;
@@ -13,6 +14,7 @@ use App\Models\Itinerary;
 use App\Models\RegionType;
 use App\Models\Salescall;
 use App\Models\User;
+use Filament\Http\Middleware\Authenticate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -319,11 +321,32 @@ test('the edit route aborts 403 for a non-pending Marketing recommendation', fun
     $region = marketingFormPageRegion();
 
     $marketing = marketingFormPageSubmission($user, $program, $region);
-    $marketing->update(['sps_status' => 2]);
+    $marketing->update([
+        'sps_status' => SPSStatus::ENDORSED->value,
+        'sync_status' => 'synced',
+    ]);
 
     $this->actingAs($user)
+        ->withoutMiddleware(Authenticate::class)
         ->get(MarketingFormPage::getUrl(['marketing' => $marketing->id]))
         ->assertForbidden();
+});
+
+test('the edit route allows a synced Marketing recommendation returned to DRM', function () {
+    $user = marketingFormPageUser();
+    $program = marketingFormPageProgram();
+    $region = marketingFormPageRegion();
+
+    $marketing = marketingFormPageSubmission($user, $program, $region);
+    $marketing->update([
+        'sps_status' => SPSStatus::RETURNED->value,
+        'sync_status' => 'synced',
+    ]);
+
+    $this->actingAs($user)
+        ->withoutMiddleware(Authenticate::class)
+        ->get(MarketingFormPage::getUrl(['marketing' => $marketing->id]))
+        ->assertOk();
 });
 
 function marketingFormPageSalescall(User $user): Salescall

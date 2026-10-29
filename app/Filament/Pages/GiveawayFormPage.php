@@ -106,7 +106,7 @@ class GiveawayFormPage extends Page
                 ->find($submissionId);
 
             if ($giveaway instanceof Giveaway) {
-                abort_unless($giveaway->isEditableBy((int) auth()->id()), 403);
+                abort_unless($giveaway->is_editable, 403);
 
                 $this->giveaway = $giveaway;
                 $this->isEdit = true;

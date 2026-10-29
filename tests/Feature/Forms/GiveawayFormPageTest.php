@@ -14,6 +14,7 @@ use App\Models\StagedAttachment;
 use App\Models\User;
 use App\Services\Forms\GiveawayService;
 use App\Services\StagedAttachmentService;
+use Filament\Http\Middleware\Authenticate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -171,6 +172,19 @@ test('editing loads the existing signature and photo and can remove the photo', 
 
     expect(GiveawayPhoto::query()->count())->toBe(0)
         ->and(GiveawaySignature::query()->count())->toBe(1);
+});
+
+test('the edit route blocks a synced Giveaway', function () {
+    Storage::fake('local');
+    $user = giveawayFormPageUser();
+    $this->actingAs($user);
+
+    $giveaway = giveawayFormPageSubmission($user);
+    Giveaway::query()->update(['sync_status' => 'synced']);
+
+    $this->withoutMiddleware(Authenticate::class)
+        ->get(GiveawayFormPage::getUrl(['submission' => $giveaway->id]))
+        ->assertForbidden();
 });
 
 test('the form renders exactly one recipient signature pad', function () {

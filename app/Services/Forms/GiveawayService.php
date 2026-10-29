@@ -188,9 +188,9 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
 
         $giveaway = $submission;
 
-        if (! $giveaway->isEditableBy((int) auth()->id())) {
+        if (! $giveaway->is_editable) {
             throw ValidationException::withMessages([
-                'giveaway' => ['Only Giveaways that are still pending can be edited.'],
+                'giveaway' => ['Only Giveaways that have not synced can be edited.'],
             ]);
         }
 
@@ -787,7 +787,7 @@ class GiveawayService extends AbstractFormService implements FormSubmissionServi
             'sales_call' => $this->salesCallLabel($giveaway->salescall),
             'salescall_uuid' => $giveaway->salescall?->local_uuid,
             'rsm_status' => $firstAnswer?->rsm_status?->value ?? RSMStatus::PENDING->value,
-            'is_editable' => $giveaway->isEditableBy($viewer->id),
+            'is_editable' => $giveaway->is_editable,
             'sync_status' => $giveaway->sync_status,
             'items' => $giveaway->items
                 ->sortBy('id')

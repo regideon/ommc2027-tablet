@@ -117,7 +117,7 @@ test('pulled trade requests are cached locally with their items and statuses', f
 
     expect($rows)->toHaveCount(1)
         ->and($rows->first()['product'])->toBe('Jacket')
-        ->and($rows->first()['is_editable'])->toBeTrue()
+        ->and($rows->first()['is_editable'])->toBeFalse()
         ->and($rows->first()['items'][0]['trade_type'])->toBe('Apparel')
         ->and($rows->first()['items'][0]['quantity'])->toBe(3)
         ->and($rows->first()['items'][0]['size_label'])->toBe('Large');
@@ -132,6 +132,36 @@ test('pulled trade requests are cached locally with their items and statuses', f
         ->and($tradeRequest->items()->count())->toBe(1)
         ->and($tradeRequest->items()->firstOrFail()->tradeType->name)->toBe('Apparel')
         ->and($tradeRequest->items()->firstOrFail()->size)->toBe(Size::LARGE);
+});
+
+test('a Trade Request is editable before sync and after TDH returns it to DRM', function () {
+    Storage::fake('local');
+    $user = tradeRequestWorkflowUser();
+    $this->actingAs($user);
+    tradeRequestFakePortal();
+
+    $service = app(TradeRequestService::class);
+    $service->programs();
+
+    $product = TradeProduct::query()->firstOrFail();
+    $type = TradeType::query()->firstOrFail();
+    $request = tradeRequestStagedAttachment($user);
+
+    $tradeRequest = $service->create($user, tradeRequestCreatePayload($product->id, [
+        ['trade_type_id' => $type->id, 'quantity' => 2, 'size' => Size::MEDIUM->value, 'description' => null],
+    ], [
+        ['type' => TradeRequestAttachmentType::REQUEST->value, 'staged_id' => $request->id],
+    ]));
+
+    expect($tradeRequest->fresh()->is_editable)->toBeTrue();
+
+    $tradeRequest->update(['sync_status' => 'synced']);
+
+    expect($tradeRequest->fresh()->is_editable)->toBeFalse();
+
+    $tradeRequest->update(['tdh_status' => TDHStatus::RETURNED->value]);
+
+    expect($tradeRequest->fresh()->is_editable)->toBeTrue();
 });
 
 test('creating a Trade Request requires at least one item', function () {
@@ -324,7 +354,7 @@ test('updating a Trade Request cannot remove the last Request attachment', funct
     expect(TradeRequestAttachment::query()->count())->toBe(1);
 });
 
-test('updating a Trade Request is blocked once an approver has acted', function () {
+test('updating a synced Trade Request is blocked until it is returned to DRM', function () {
     Storage::fake('local');
     $user = tradeRequestWorkflowUser();
     $this->actingAs($user);
@@ -343,7 +373,10 @@ test('updating a Trade Request is blocked once an approver has acted', function 
         ['type' => TradeRequestAttachmentType::REQUEST->value, 'staged_id' => $request->id],
     ]));
 
-    TradeRequest::query()->update(['tdh_status' => TDHStatus::APPROVED->value]);
+    TradeRequest::query()->update([
+        'tdh_status' => TDHStatus::APPROVED->value,
+        'sync_status' => 'synced',
+    ]);
 
     expect(fn () => $service->update(TradeRequest::query()->firstOrFail(), [
         'salescall_uuid' => null,
@@ -385,7 +418,7 @@ test('pulled status changes and item snapshots are cached for synced trade reque
     expect($result)->toHaveCount(1)
         ->and($result->first()['rsm_status'])->toBe(RSMStatus::APPROVED->value)
         ->and($result->first()['tdh_status'])->toBe(TDHStatus::RETURNED->value)
-        ->and($result->first()['is_editable'])->toBeFalse()
+        ->and($result->first()['is_editable'])->toBeTrue()
         ->and($result->first()['items'][0]['quantity'])->toBe(3)
         ->and($result->first()['items'][0]['size_label'])->toBe('Large');
 });

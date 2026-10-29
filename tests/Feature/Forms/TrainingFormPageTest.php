@@ -12,6 +12,7 @@ use App\Models\StagedAttachment;
 use App\Models\User;
 use App\Services\Forms\TrainingService;
 use App\Services\StagedAttachmentService;
+use Filament\Http\Middleware\Authenticate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -301,8 +302,28 @@ test('the edit route aborts 403 for a non-pending submission', function () {
 
     $training = trainingFormPageSubmission($user);
 
-    Training::query()->update(['tdh_status' => TDHStatus::APPROVED->value]);
+    Training::query()->update([
+        'tdh_status' => TDHStatus::APPROVED->value,
+        'sync_status' => 'synced',
+    ]);
 
-    $this->get(TrainingFormPage::getUrl(['submission' => $training->id]))
+    $this->withoutMiddleware(Authenticate::class)
+        ->get(TrainingFormPage::getUrl(['submission' => $training->id]))
         ->assertForbidden();
+});
+
+test('the edit route allows a synced Training returned to DRM', function () {
+    Storage::fake('local');
+    $user = trainingFormPageUser();
+    $this->actingAs($user);
+
+    $training = trainingFormPageSubmission($user);
+    Training::query()->update([
+        'tdh_status' => TDHStatus::RETURNED->value,
+        'sync_status' => 'synced',
+    ]);
+
+    $this->withoutMiddleware(Authenticate::class)
+        ->get(TrainingFormPage::getUrl(['submission' => $training->id]))
+        ->assertOk();
 });

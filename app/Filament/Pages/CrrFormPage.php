@@ -46,7 +46,11 @@ class CrrFormPage extends Page
      */
     public string $marketingApprovalState = 'not_required';
 
-    /** @var array<int, array{id: int, name: string}> */
+    public bool $programRequiresMarketing = false;
+
+    public bool $saveBlocked = false;
+
+    /** @var array<int, array{id: int, name: string, is_marketing_required: bool}> */
     public array $programs = [];
 
     public string $programLoadError = '';
@@ -81,6 +85,7 @@ class CrrFormPage extends Page
             ->map(fn (CrrProgram $program): array => [
                 'id' => $program->id,
                 'name' => $program->name,
+                'is_marketing_required' => $program->is_marketing_required,
             ])
             ->values()
             ->all();
@@ -93,13 +98,13 @@ class CrrFormPage extends Page
 
         $crr = $crrId !== false && $crrId !== null
             ? Crr::query()
-                ->with('salescall')
+                ->with(['salescall', 'program'])
                 ->where('submitted_by', auth()->id())
                 ->find($crrId)
             : null;
 
         if ($crr instanceof Crr) {
-            abort_unless($crr->isEditable(), 403);
+            abort_unless($crr->is_editable, 403);
 
             $this->salescalls = $this->salescallOptions();
             $this->crr = $crr;
@@ -111,18 +116,39 @@ class CrrFormPage extends Page
             $this->remarks = $crr->remarks;
             $this->salescall_uuid = $crr->salescall?->local_uuid;
 
+            $currentProgram = $crr->program;
+
+            if ($currentProgram instanceof CrrProgram && ! collect($this->programs)->contains('id', $currentProgram->id)) {
+                $this->programs[] = [
+                    'id' => $currentProgram->id,
+                    'name' => $currentProgram->name,
+                    'is_marketing_required' => $currentProgram->is_marketing_required,
+                ];
+
+                usort($this->programs, fn (array $first, array $second): int => strcmp($first['name'], $second['name']));
+            }
+
+            $this->refreshMarketingRequirement();
+
             return;
         }
 
-        $this->salescalls = $this->salescallOptions(approvedOnly: true);
+        $this->salescalls = $this->salescallOptions();
 
         $this->applyRequestedSalescallLock();
-
-        if ($this->salescallLocked) {
-            $this->marketingApprovalState = $this->marketingApprovalStateForSelectedSalescall();
-        }
+        $this->refreshMarketingRequirement();
 
         $this->date_implemented = now()->toDateString();
+    }
+
+    public function updatedCrrProgramId(): void
+    {
+        $this->refreshMarketingRequirement();
+    }
+
+    public function updatedSalescallUuid(): void
+    {
+        $this->refreshMarketingRequirement();
     }
 
     public function save(CrrService $service): void
@@ -299,26 +325,13 @@ class CrrFormPage extends Page
     /**
      * @return array<int, array{uuid: ?string, label: string}>
      */
-    private function salescallOptions(bool $approvedOnly = false): array
+    private function salescallOptions(): array
     {
         $user = auth()->user();
-        $query = Salescall::query()
+
+        return Salescall::query()
             ->with('customer')
-            ->where('created_by', $user?->id);
-
-        if ($approvedOnly && $user instanceof User) {
-            $requestedUuid = trim((string) request()->query('salescall'));
-
-            $query->where(function ($query) use ($user, $requestedUuid): void {
-                $query->whereIn('id', app(MarketingService::class)->locallyApprovedSalescallIdsFor($user));
-
-                if ($requestedUuid !== '') {
-                    $query->orWhere('local_uuid', $requestedUuid);
-                }
-            });
-        }
-
-        return $query
+            ->where('created_by', $user?->id)
             ->latest('id')
             ->get()
             ->map(fn (Salescall $salescall): array => [
@@ -349,6 +362,25 @@ class CrrFormPage extends Page
         }
 
         return app(MarketingService::class)->approvalStateForSalescall($user, $salescall);
+    }
+
+    private function refreshMarketingRequirement(): void
+    {
+        $program = $this->crr_program_id !== null
+            ? CrrProgram::query()->find($this->crr_program_id)
+            : null;
+
+        $this->programRequiresMarketing = $program?->is_marketing_required ?? false;
+
+        if (! $this->programRequiresMarketing || blank($this->salescall_uuid)) {
+            $this->marketingApprovalState = 'not_required';
+            $this->saveBlocked = false;
+
+            return;
+        }
+
+        $this->marketingApprovalState = $this->marketingApprovalStateForSelectedSalescall();
+        $this->saveBlocked = $this->marketingApprovalState !== 'approved';
     }
 
     private function dispatchAttachmentFromPath(string $sourcePath): void

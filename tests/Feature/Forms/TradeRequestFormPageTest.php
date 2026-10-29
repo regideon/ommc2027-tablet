@@ -16,6 +16,7 @@ use App\Models\StagedAttachment;
 use App\Models\User;
 use App\Services\Forms\TradeRequestService;
 use App\Services\StagedAttachmentService;
+use Filament\Http\Middleware\Authenticate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -249,10 +250,30 @@ test('the edit route aborts 403 for a non-pending submission', function () {
 
     $tradeRequest = tradeRequestFormPageSubmission($user);
 
-    TradeRequest::query()->update(['tdh_status' => TDHStatus::APPROVED->value]);
+    TradeRequest::query()->update([
+        'tdh_status' => TDHStatus::APPROVED->value,
+        'sync_status' => 'synced',
+    ]);
 
-    $this->get(TradeRequestFormPage::getUrl(['submission' => $tradeRequest->id]))
+    $this->withoutMiddleware(Authenticate::class)
+        ->get(TradeRequestFormPage::getUrl(['submission' => $tradeRequest->id]))
         ->assertForbidden();
+});
+
+test('the edit route allows a synced Trade Request returned to DRM', function () {
+    Storage::fake('local');
+    $user = tradeRequestFormPageUser();
+    $this->actingAs($user);
+
+    $tradeRequest = tradeRequestFormPageSubmission($user);
+    TradeRequest::query()->update([
+        'tdh_status' => TDHStatus::RETURNED->value,
+        'sync_status' => 'synced',
+    ]);
+
+    $this->withoutMiddleware(Authenticate::class)
+        ->get(TradeRequestFormPage::getUrl(['submission' => $tradeRequest->id]))
+        ->assertOk();
 });
 
 function tradeRequestFormPageSalescall(User $user): Salescall
