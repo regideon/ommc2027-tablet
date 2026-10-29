@@ -2,6 +2,7 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\Pages\Auth\ForgotPassword;
 use App\Filament\Pages\Auth\Login;
 use App\Filament\Pages\Auth\Profile;
 use App\Filament\Widgets\DashboardSalesrepWidget;
@@ -21,6 +22,7 @@ use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\HtmlString;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 
@@ -80,6 +82,9 @@ document.addEventListener("DOMContentLoaded", function () {
             )
 
             ->login(Login::class)
+            ->routes(function (): void {
+                Route::get('forgot-password', ForgotPassword::class)->name('forgot-password');
+            })
             // ->passwordReset() - hidden for now.
 
             ->brandLogo(asset('images/motolite-logo.png'))
