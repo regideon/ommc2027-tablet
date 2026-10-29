@@ -2,9 +2,9 @@
 
 namespace App\Models\Forms\TradeCheck;
 
-use App\Enums\RSMStatus;
 use App\Enums\TDHStatus;
 use App\Models\Salescall;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -48,8 +48,14 @@ class TradeCheck extends Model
     }
 
     /**
-     * Editable only while every one of the user's answer rows is still Pending.
+     * Editable until synced, or again after TDH returns the user's answers to
+     * the DRM.
      */
+    protected function isEditable(): Attribute
+    {
+        return Attribute::get(fn (): bool => $this->isEditableBy((int) auth()->id()));
+    }
+
     public function isEditableBy(int $userId): bool
     {
         $answers = $this->answers->where('submitted_by', $userId);
@@ -58,9 +64,12 @@ class TradeCheck extends Model
             return false;
         }
 
+        if ($this->sync_status !== 'synced') {
+            return true;
+        }
+
         return $answers->every(
-            fn (TradeCheckAnswer $answer): bool => $answer->rsm_status === RSMStatus::PENDING
-                && $answer->tdh_status === TDHStatus::PENDING
+            fn (TradeCheckAnswer $answer): bool => $answer->tdh_status === TDHStatus::RETURNED
         );
     }
 }

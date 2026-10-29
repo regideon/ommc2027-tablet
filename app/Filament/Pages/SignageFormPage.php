@@ -128,7 +128,7 @@ class SignageFormPage extends Page
                 ->find($submissionId);
 
             if ($signage instanceof Signage) {
-                abort_unless($signage->isEditable(), 403);
+                abort_unless($signage->is_editable, 403);
 
                 $this->signage = $signage;
                 $this->isEdit = true;

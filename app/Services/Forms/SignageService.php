@@ -64,32 +64,30 @@ class SignageService extends AbstractFormService implements FormSubmissionServic
         $this->programReadFailed = $products['failed'];
 
         if (! $products['failed']) {
-            foreach ($products['products'] as $product) {
-                if (! isset($product['id'], $product['name'])) {
-                    continue;
-                }
-
-                SignageProduct::updateOrCreate(
-                    ['server_id' => $product['id']],
-                    ['name' => $product['name']],
-                );
-            }
+            $this->reconcileLookup(
+                SignageProduct::class,
+                $products['products'],
+                fn (array $product): array => [
+                    'server_id' => $product['id'],
+                    'name' => $product['name'],
+                ],
+                'signages',
+            );
         }
 
         $types = $this->syncService->readSignageTypesWithStatus();
         $this->programReadFailed = $this->programReadFailed || $types['failed'];
 
         if (! $types['failed']) {
-            foreach ($types['types'] as $type) {
-                if (! isset($type['id'], $type['name'])) {
-                    continue;
-                }
-
-                SignageType::updateOrCreate(
-                    ['server_id' => $type['id']],
-                    ['name' => $type['name']],
-                );
-            }
+            $this->reconcileLookup(
+                SignageType::class,
+                $types['types'],
+                fn (array $type): array => [
+                    'server_id' => $type['id'],
+                    'name' => $type['name'],
+                ],
+                'signages',
+            );
         }
 
         return SignageProduct::query()->orderBy('name')->get();
@@ -198,9 +196,9 @@ class SignageService extends AbstractFormService implements FormSubmissionServic
 
         $signage = $submission;
 
-        if (! $signage->isEditable()) {
+        if (! $signage->is_editable) {
             throw ValidationException::withMessages([
-                'signage' => ['Only CRR Signages that are still pending can be edited.'],
+                'signage' => ['Only CRR Signages that have not synced or have been returned to the DRM can be edited.'],
             ]);
         }
 
@@ -604,7 +602,7 @@ class SignageService extends AbstractFormService implements FormSubmissionServic
             'rsm_status' => $signage->rsm_status->value,
             'tdh_status' => $signage->tdh_status->value,
             'tds_status' => $signage->tds_status->value,
-            'is_editable' => $signage->isEditable(),
+            'is_editable' => $signage->is_editable,
             'sync_status' => $signage->sync_status,
             'attachments' => $signage->attachments
                 ->sortBy('id')

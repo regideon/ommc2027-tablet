@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\FormKey;
+use App\Enums\SPSStatus;
 use App\Filament\Pages\CrrFormPage;
 use App\Filament\Pages\FormsPage;
 use App\Filament\Pages\GiveawayFormPage;
@@ -691,7 +692,7 @@ test('editing a non-editable CRR is refused', function () {
         'rsm_status' => 2,
         'sps_status' => 1,
         'spm_status' => 1,
-        'sync_status' => 'pending',
+        'sync_status' => 'synced',
     ]);
 
     Livewire::test(FormsPage::class)
@@ -724,7 +725,7 @@ test('a server form row with a matching client_uuid opens the local pending row 
         'crr_program_id' => 55,
         'amount' => '100.00',
         'rsm_status' => 1,
-        'sps_status' => 1,
+        'sps_status' => 2,
         'spm_status' => 1,
         'attachments' => [],
     ]]);
@@ -735,6 +736,80 @@ test('a server form row with a matching client_uuid opens the local pending row 
         ->assertRedirect(CrrFormPage::getUrl(['crr' => $crr->id]));
 
     expect(Crr::query()->count())->toBe(1);
+});
+
+test('a synced pending CRR hides the edit action', function () {
+    $user = formsPageUser();
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+
+    $program = formsPageProgram();
+    $crr = Crr::create([
+        'local_uuid' => (string) Str::uuid(),
+        'server_id' => 77,
+        'submitted_by' => $user->id,
+        'crr_program_id' => $program->id,
+        'amount' => '100.00',
+        'rsm_status' => 1,
+        'sps_status' => 1,
+        'spm_status' => 1,
+        'sync_status' => 'synced',
+    ]);
+
+    formsPageFakePortal(crrs: [[
+        'id' => 77,
+        'client_uuid' => $crr->local_uuid,
+        'crr_program_id' => 55,
+        'amount' => '100.00',
+        'rsm_status' => 1,
+        'sps_status' => 1,
+        'spm_status' => 1,
+        'attachments' => [],
+    ]]);
+
+    Livewire::test(FormsPage::class)
+        ->call('selectRow', 'server:77')
+        ->assertDontSee('Edit CRR')
+        ->call('editSelectedRow')
+        ->assertNoRedirect();
+});
+
+test('a synced CRR returned to DRM shows the edit action', function () {
+    $user = formsPageUser();
+    $this->actingAs($user);
+    config(['sync.server_url' => 'http://portal.test']);
+
+    $program = formsPageProgram();
+    $crr = Crr::create([
+        'local_uuid' => (string) Str::uuid(),
+        'server_id' => 77,
+        'submitted_by' => $user->id,
+        'crr_program_id' => $program->id,
+        'amount' => '100.00',
+        'rsm_status' => 1,
+        'sps_status' => 1,
+        'spm_status' => 1,
+        'sync_status' => 'synced',
+    ]);
+
+    formsPageFakePortal(crrs: [[
+        'id' => 77,
+        'client_uuid' => $crr->local_uuid,
+        'crr_program_id' => 55,
+        'amount' => '100.00',
+        'rsm_status' => 1,
+        'sps_status' => SPSStatus::RETURNED->value,
+        'spm_status' => 1,
+        'attachments' => [],
+    ]]);
+
+    Livewire::test(FormsPage::class)
+        ->call('selectRow', 'server:77')
+        ->assertSee('Edit CRR')
+        ->call('editSelectedRow')
+        ->assertRedirect(CrrFormPage::getUrl(['crr' => $crr->id]));
+
+    expect($crr->fresh()->sps_status)->toBe(SPSStatus::RETURNED);
 });
 
 test('editing an editable CRR redirects to the CRR form', function () {

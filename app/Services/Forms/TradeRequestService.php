@@ -66,32 +66,30 @@ class TradeRequestService extends AbstractFormService implements FormSubmissionS
         $this->programReadFailed = $products['failed'];
 
         if (! $products['failed']) {
-            foreach ($products['products'] as $product) {
-                if (! isset($product['id'], $product['name'])) {
-                    continue;
-                }
-
-                TradeProduct::updateOrCreate(
-                    ['server_id' => $product['id']],
-                    ['name' => $product['name']],
-                );
-            }
+            $this->reconcileLookup(
+                TradeProduct::class,
+                $products['products'],
+                fn (array $product): array => [
+                    'server_id' => $product['id'],
+                    'name' => $product['name'],
+                ],
+                'requests',
+            );
         }
 
         $types = $this->syncService->readTradeRequestTypesWithStatus();
         $this->programReadFailed = $this->programReadFailed || $types['failed'];
 
         if (! $types['failed']) {
-            foreach ($types['types'] as $type) {
-                if (! isset($type['id'], $type['name'])) {
-                    continue;
-                }
-
-                TradeType::updateOrCreate(
-                    ['server_id' => $type['id']],
-                    ['name' => $type['name']],
-                );
-            }
+            $this->reconcileLookup(
+                TradeType::class,
+                $types['types'],
+                fn (array $type): array => [
+                    'server_id' => $type['id'],
+                    'name' => $type['name'],
+                ],
+                'items',
+            );
         }
 
         return TradeProduct::query()->orderBy('name')->get();
@@ -200,9 +198,9 @@ class TradeRequestService extends AbstractFormService implements FormSubmissionS
 
         $tradeRequest = $submission;
 
-        if (! $tradeRequest->isEditable()) {
+        if (! $tradeRequest->is_editable) {
             throw ValidationException::withMessages([
-                'trade_request' => ['Only CRR - LSM that are still pending can be edited.'],
+                'trade_request' => ['Only CRR - LSM that have not synced or have been returned to the DRM can be edited.'],
             ]);
         }
 
@@ -770,7 +768,7 @@ class TradeRequestService extends AbstractFormService implements FormSubmissionS
             'rsm_status' => $tradeRequest->rsm_status->value,
             'tdh_status' => $tradeRequest->tdh_status->value,
             'tds_status' => $tradeRequest->tds_status->value,
-            'is_editable' => $tradeRequest->isEditable(),
+            'is_editable' => $tradeRequest->is_editable,
             'sync_status' => $tradeRequest->sync_status,
             'items' => $tradeRequest->items
                 ->sortBy('id')

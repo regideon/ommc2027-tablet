@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\TDHStatus;
 use App\Models\Forms\TradeCheck\TradeCheck;
 use App\Models\Forms\TradeCheck\TradeCheckAnswer;
 use App\Models\Forms\TradeCheck\TradeCheckAnswerItems;
@@ -143,6 +144,31 @@ test('submissions list every template with a has_submission flag', function () {
         ->and($rows->first()['groups'][0]['subgroups'][0]['items'][1]['answer'])->toBe('Good');
 });
 
+test('a Trade Check is editable before sync and after TDH returns it to DRM', function () {
+    $user = tradeCheckWorkflowUser();
+    $this->actingAs($user);
+    tradeCheckFakePull();
+
+    $service = app(TradeCheckService::class);
+    $template = $service->programs()->first();
+    $items = $template->group->first()->subgroups->first()->items;
+
+    $tradeCheck = $service->create($user, [
+        'trade_check_id' => $template->id,
+        'answers' => [$items[0]->id => 'Yes', $items[1]->id => 'Good'],
+    ]);
+
+    expect($tradeCheck->fresh()->is_editable)->toBeTrue();
+
+    $tradeCheck->update(['sync_status' => 'synced']);
+
+    expect($tradeCheck->fresh()->is_editable)->toBeFalse();
+
+    TradeCheckAnswer::query()->update(['tdh_status' => TDHStatus::RETURNED->value]);
+
+    expect($tradeCheck->fresh()->is_editable)->toBeTrue();
+});
+
 test('submission details map photos under their subgroup', function () {
     Storage::fake('local');
     $user = tradeCheckWorkflowUser();
@@ -226,7 +252,7 @@ test('a Trade Check answer must match the item options', function () {
     expect(TradeCheckAnswerItems::where('trade_check_id', $template->id)->where('item_id', $items[0]->id)->value('answer'))->toBe('Yes');
 });
 
-test('updating a Trade Check replaces its answers idempotently and is blocked once acted on', function () {
+test('updating a Trade Check replaces its answers idempotently and is blocked after sync', function () {
     $user = tradeCheckWorkflowUser();
     $this->actingAs($user);
     tradeCheckFakePull();
@@ -250,6 +276,9 @@ test('updating a Trade Check replaces its answers idempotently and is blocked on
     expect(TradeCheckAnswerItems::where('trade_check_id', $template->id)->count())->toBe(2)
         ->and(TradeCheckAnswerItems::where('trade_check_id', $template->id)->where('item_id', $items[1]->id)->value('answer'))->toBe('Bad');
 
+    TradeCheck::query()
+        ->whereKey($template->id)
+        ->update(['sync_status' => 'synced']);
     TradeCheckAnswer::where('trade_check_id', $template->id)->update(['rsm_status' => 2]);
 
     expect(fn () => $service->update($template->fresh(), [
@@ -294,8 +323,8 @@ test('updating a Trade Check can remove an existing local attachment', function 
 test('server status changes for the mapped user are cached on pull', function () {
     $payload = tradeCheckPullPayload();
     $payload['trade_checks'][0]['answers'] = [
-        ['submitted_by' => 2, 'rsm_status' => 2, 'tdh_status' => 2, 'item' => ['name' => 'Available', 'subgroup_name' => 'DF Signage']],
-        ['submitted_by' => 2, 'rsm_status' => 2, 'tdh_status' => 2, 'item' => ['name' => 'Good condition', 'subgroup_name' => 'DF Signage']],
+        ['submitted_by' => 2, 'rsm_status' => 2, 'tdh_status' => TDHStatus::RETURNED->value, 'item' => ['name' => 'Available', 'subgroup_name' => 'DF Signage']],
+        ['submitted_by' => 2, 'rsm_status' => 2, 'tdh_status' => TDHStatus::RETURNED->value, 'item' => ['name' => 'Good condition', 'subgroup_name' => 'DF Signage']],
     ];
 
     Http::fake(['*/api/forms/trade-check/pull' => Http::response($payload, 200)]);
@@ -313,7 +342,7 @@ test('server status changes for the mapped user are cached on pull', function ()
         'answers' => [$items[0]->id => 'Yes', $items[1]->id => 'Good'],
     ]);
 
-    // Simulate a completed push, then an admin approval on the Portal.
+    // Simulate a completed push, then a TDH return to the DRM on the Portal.
     TradeCheck::query()
         ->whereKey($template->id)
         ->update(['server_id' => 20, 'sync_status' => 'synced']);
@@ -322,8 +351,8 @@ test('server status changes for the mapped user are cached on pull', function ()
 
     expect($rows)->toHaveCount(1)
         ->and($rows->first()['rsm_status'])->toBe(2)
-        ->and($rows->first()['tdh_status'])->toBe(2)
-        ->and($rows->first()['is_editable'])->toBeFalse();
+        ->and($rows->first()['tdh_status'])->toBe(TDHStatus::RETURNED->value)
+        ->and($rows->first()['is_editable'])->toBeTrue();
 });
 
 test('pushing a Trade Check posts the template, answers and stores the server id', function () {

@@ -121,7 +121,7 @@ class MarketingFormPage extends Page
                 ->find($marketingId);
 
             if ($marketing instanceof Marketing) {
-                abort_unless($marketing->isEditable(), 403);
+                abort_unless($marketing->is_editable, 403);
 
                 $this->marketing = $marketing;
                 $this->isEdit = true;

@@ -34,6 +34,78 @@ abstract class AbstractFormService
     }
 
     /**
+     * Reconcile a cached lookup table with the Portal's current rows.
+     *
+     * Rows are matched by server id first, then by name, so a Portal reseed
+     * that changes ids keeps local ids and submission references intact.
+     * Same-name duplicates are merged into the matched row, with child
+     * references reassigned before the duplicate is removed. Unreferenced
+     * stale rows are removed; referenced stale rows are kept for history.
+     * An empty or invalid response leaves local data untouched.
+     *
+     * @param  class-string<Model>  $modelClass
+     * @param  array<int, array<string, mixed>>  $rows
+     * @param  Closure(array<string, mixed>): array<string, mixed>  $values
+     * @param  string  $referenceRelation  Relation used to decide whether a stale row is still in use.
+     * @return array<int, int>
+     */
+    protected function reconcileLookup(string $modelClass, array $rows, Closure $values, string $referenceRelation): array
+    {
+        $currentIds = [];
+        $validRows = 0;
+        $remoteIds = collect($rows)
+            ->pluck('id')
+            ->filter(fn (mixed $id): bool => $id !== null)
+            ->values()
+            ->all();
+
+        foreach ($rows as $row) {
+            if (! isset($row['id'], $row['name'])) {
+                continue;
+            }
+
+            $validRows++;
+
+            $model = $modelClass::query()->where('server_id', $row['id'])->first()
+                ?? $modelClass::query()->where('name', $row['name'])->first()
+                ?? new $modelClass;
+
+            $model->fill($values($row))->save();
+            $currentIds[] = $model->id;
+
+            $modelClass::query()
+                ->where('name', $row['name'])
+                ->whereKeyNot($model->getKey())
+                ->where(function ($query) use ($remoteIds): void {
+                    $query->whereNull('server_id')
+                        ->orWhereNotIn('server_id', $remoteIds);
+                })
+                ->get()
+                ->each(function (Model $duplicate) use ($model, $referenceRelation): void {
+                    $relation = $duplicate->{$referenceRelation}();
+                    $relation->update([$relation->getForeignKeyName() => $model->getKey()]);
+                    $duplicate->delete();
+                });
+        }
+
+        if ($validRows === 0) {
+            return [];
+        }
+
+        $modelClass::query()
+            ->whereNotIn('id', $currentIds)
+            ->withExists($referenceRelation)
+            ->get()
+            ->each(function (Model $model) use ($referenceRelation): void {
+                if (! (bool) ($model->{$referenceRelation.'_exists'} ?? false)) {
+                    $model->delete();
+                }
+            });
+
+        return $currentIds;
+    }
+
+    /**
      * Decode and bound temporary attachment payloads before any row is stored.
      *
      * @param  array<int, mixed>  $attachments

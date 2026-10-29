@@ -7,6 +7,7 @@ use App\Enums\SPSStatus;
 use App\Models\RegionType;
 use App\Models\Salescall;
 use App\Models\User;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -75,13 +76,15 @@ class Marketing extends Model
     }
 
     /**
-     * A Marketing Recommendation may be edited only while SPS and RAC have not
-     * acted; the Portal resets both to Pending on every push.
+     * A Marketing Recommendation is editable until it has synced, or again
+     * after SPS or RAC returns it to the DRM. A return to SPS is not a DRM
+     * edit.
      */
-    public function isEditable(): bool
+    protected function isEditable(): Attribute
     {
-        return $this->sps_status === SPSStatus::PENDING
-            && $this->rac_status === RACStatus::PENDING;
+        return Attribute::get(fn (): bool => $this->sync_status !== 'synced'
+            || $this->sps_status === SPSStatus::RETURNED
+            || $this->rac_status === RACStatus::RETURNED_TO_DRM);
     }
 
     /**

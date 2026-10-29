@@ -123,7 +123,7 @@ test('pulled trainings are cached locally with their participants and statuses',
 
     expect($rows)->toHaveCount(1)
         ->and($rows->first()['topic'])->toBe('Product Knowledge')
-        ->and($rows->first()['is_editable'])->toBeTrue()
+        ->and($rows->first()['is_editable'])->toBeFalse()
         ->and($rows->first()['participants'][0]['name'])->toBe('Juan Dela Cruz')
         ->and($rows->first()['participants'][0]['position'])->toBe('Driver');
 
@@ -135,6 +135,36 @@ test('pulled trainings are cached locally with their participants and statuses',
         ->and($training->topic->name)->toBe('Product Knowledge')
         ->and($training->rsm_status)->toBe(RSMStatus::PENDING)
         ->and($training->participants()->count())->toBe(1);
+});
+
+test('a Training is editable before sync and after TDH returns it to DRM', function () {
+    Storage::fake('local');
+    $user = trainingWorkflowUser();
+    $this->actingAs($user);
+    trainingFakePortal();
+
+    $service = app(TrainingService::class);
+    $service->programs();
+
+    $topic = TrainingTopic::query()->firstOrFail();
+    $position = TrainingPosition::query()->firstOrFail();
+    $request = trainingStagedAttachment($user);
+
+    $training = $service->create($user, trainingCreatePayload($topic->id, null, [
+        ['name' => 'Juan Dela Cruz', 'position_id' => $position->id],
+    ], [
+        ['type' => TrainingAttachmentType::REQUEST->value, 'staged_id' => $request->id],
+    ]));
+
+    expect($training->fresh()->is_editable)->toBeTrue();
+
+    $training->update(['sync_status' => 'synced']);
+
+    expect($training->fresh()->is_editable)->toBeFalse();
+
+    $training->update(['tdh_status' => TDHStatus::RETURNED->value]);
+
+    expect($training->fresh()->is_editable)->toBeTrue();
 });
 
 test('creating a Training requires at least one participant', function () {
@@ -369,7 +399,7 @@ test('updating a Training cannot remove the last Request attachment', function (
     expect(TrainingAttachment::query()->count())->toBe(1);
 });
 
-test('updating a Training is blocked once an approver has acted', function () {
+test('updating a synced Training is blocked until it is returned to DRM', function () {
     Storage::fake('local');
     $user = trainingWorkflowUser();
     $this->actingAs($user);
@@ -388,7 +418,10 @@ test('updating a Training is blocked once an approver has acted', function () {
         ['type' => TrainingAttachmentType::REQUEST->value, 'staged_id' => $request->id],
     ]));
 
-    Training::query()->update(['tdh_status' => TDHStatus::APPROVED->value]);
+    Training::query()->update([
+        'tdh_status' => TDHStatus::APPROVED->value,
+        'sync_status' => 'synced',
+    ]);
 
     expect(fn () => $service->update(Training::query()->firstOrFail(), [
         'salescall_uuid' => null,
@@ -435,7 +468,7 @@ test('pulled status changes and participant snapshots are cached for synced trai
     expect($result)->toHaveCount(1)
         ->and($result->first()['rsm_status'])->toBe(RSMStatus::APPROVED->value)
         ->and($result->first()['tdh_status'])->toBe(TDHStatus::RETURNED->value)
-        ->and($result->first()['is_editable'])->toBeFalse()
+        ->and($result->first()['is_editable'])->toBeTrue()
         ->and($result->first()['participants'])->toHaveCount(1)
         ->and($result->first()['participants'][0]['name'])->toBe('Maria Santos');
 });

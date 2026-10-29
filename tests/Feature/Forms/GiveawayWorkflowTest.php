@@ -143,6 +143,31 @@ test('pulled giveaways are cached with master items and proof', function () {
         ->and(GiveawayPhoto::where('giveaway_id', $giveaway->id)->value('sync_status'))->toBe('synced');
 });
 
+test('a Giveaway is editable before sync and read-only after sync', function () {
+    Storage::fake('local');
+    $user = giveawayWorkflowUser();
+    $this->actingAs($user);
+    giveawayFakePull();
+
+    $service = app(GiveawayService::class);
+    $items = giveawayItemRows($service);
+    $signature = giveawayStagedAttachment($user, 'signature.png');
+    $photo = giveawayStagedAttachment($user, 'photo.png');
+
+    $giveaway = $service->create($user, [
+        'name' => 'Store Giveaway',
+        'items' => $items,
+        'staged_signature_id' => $signature->id,
+        'staged_photo_id' => $photo->id,
+    ]);
+
+    expect($giveaway->fresh()->is_editable)->toBeTrue();
+
+    $giveaway->update(['sync_status' => 'synced']);
+
+    expect($giveaway->fresh()->is_editable)->toBeFalse();
+});
+
 test('creating a giveaway requires a signature and persists master item quantities', function () {
     Storage::fake('local');
     $user = giveawayWorkflowUser();

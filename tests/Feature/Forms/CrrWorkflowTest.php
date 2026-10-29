@@ -29,9 +29,13 @@ function crrWorkflowUser(): User
     return User::factory()->create(['api_token' => 'crr-test-token']);
 }
 
-function crrWorkflowProgram(?int $serverId = null): CrrProgram
+function crrWorkflowProgram(?int $serverId = null, bool $isMarketingRequired = false): CrrProgram
 {
-    return CrrProgram::create(['name' => 'Price Support', 'server_id' => $serverId]);
+    return CrrProgram::create([
+        'name' => 'Price Support',
+        'server_id' => $serverId,
+        'is_marketing_required' => $isMarketingRequired,
+    ]);
 }
 
 function crrPngDataUri(): string
@@ -99,7 +103,7 @@ test('creating a CRR stores attachments on the local disk', function () {
         ->and(is_file($attachment->local_path))->toBeTrue();
 });
 
-test('a CRR can only be edited while all statuses are pending', function () {
+test('a synced CRR is read-only until it is returned to DRM', function () {
     $user = crrWorkflowUser();
     $program = crrWorkflowProgram();
     $service = app(CrrService::class);
@@ -110,7 +114,10 @@ test('a CRR can only be edited while all statuses are pending', function () {
     expect((float) $updated->amount)->toBe(99.99)
         ->and($updated->sync_status)->toBe('pending');
 
-    $updated->update(['rsm_status' => 2]);
+    $updated->update([
+        'rsm_status' => 2,
+        'sync_status' => 'synced',
+    ]);
 
     expect(fn () => $service->update($updated->refresh(), crrValidInput($program, ['amount' => '10.00'])))
         ->toThrow(ValidationException::class);
@@ -334,6 +341,32 @@ test('has pending changes includes CRR rows', function () {
     expect(app(SyncService::class)->hasPendingChanges())->toBeTrue();
 });
 
+test('a CRR is editable before sync and read-only after sync unless returned to DRM', function () {
+    $user = crrWorkflowUser();
+    $program = crrWorkflowProgram();
+
+    $crr = Crr::create([
+        'local_uuid' => (string) Str::uuid(),
+        'submitted_by' => $user->id,
+        'crr_program_id' => $program->id,
+        'amount' => '100.00',
+        'rsm_status' => 1,
+        'sps_status' => 1,
+        'spm_status' => 1,
+        'sync_status' => 'pending',
+    ]);
+
+    expect($crr->is_editable)->toBeTrue();
+
+    $crr->update(['sync_status' => 'synced']);
+
+    expect($crr->fresh()->is_editable)->toBeFalse();
+
+    $crr->update(['sps_status' => SPSStatus::RETURNED->value]);
+
+    expect($crr->fresh()->is_editable)->toBeTrue();
+});
+
 test('a pulled server CRR can be adopted locally for editing', function () {
     $user = crrWorkflowUser();
     $program = crrWorkflowProgram(serverId: 55);
@@ -343,14 +376,14 @@ test('a pulled server CRR can be adopted locally for editing', function () {
         'crr_program_id' => 55,
         'amount' => '200.00',
         'rsm_status' => 1,
-        'sps_status' => 1,
+        'sps_status' => SPSStatus::RETURNED->value,
         'spm_status' => 1,
     ]);
 
     expect($crr->server_id)->toBe(901)
         ->and($crr->crr_program_id)->toBe($program->id)
         ->and($crr->sync_status)->toBe('synced')
-        ->and($crr->isEditable())->toBeTrue();
+        ->and($crr->is_editable)->toBeTrue();
 });
 
 test('the CRR read service flags a failed program pull', function () {
@@ -451,6 +484,40 @@ test('a local unsynced CRR survives a successful pull that does not include it',
         ->and(Crr::find($crr->id))->not->toBeNull();
 });
 
+test('pulled CRR approval statuses are cached on synced local rows', function () {
+    $user = crrWorkflowUser();
+    $program = crrWorkflowProgram(serverId: 55);
+
+    $crr = Crr::create([
+        'local_uuid' => (string) Str::uuid(),
+        'server_id' => 900,
+        'submitted_by' => $user->id,
+        'crr_program_id' => $program->id,
+        'amount' => '10.00',
+        'rsm_status' => 1,
+        'sps_status' => 1,
+        'spm_status' => 1,
+        'sync_status' => 'synced',
+    ]);
+
+    Http::fake(['*/api/forms/crr/pull' => Http::response(['crrs' => [[
+        'id' => 900,
+        'crr_program_id' => 55,
+        'amount' => '10.00',
+        'rsm_status' => 1,
+        'sps_status' => SPSStatus::RETURNED->value,
+        'spm_status' => 1,
+        'attachments' => [],
+    ]]], 200)]);
+    $this->actingAs($user);
+
+    $rows = app(CrrService::class)->submissions();
+
+    expect($rows)->toHaveCount(1)
+        ->and($rows->first()['is_editable'])->toBeTrue()
+        ->and($crr->fresh()->sps_status)->toBe(SPSStatus::RETURNED);
+});
+
 test('a failed pull does not purge local synced CRRs', function () {
     $user = crrWorkflowUser();
     $program = crrWorkflowProgram(serverId: 55);
@@ -520,9 +587,33 @@ function crrWorkflowMarketing(
     ]);
 }
 
-test('creating a CRR linked to a sales call requires an approved Marketing recommendation', function () {
+test('creating a CRR linked to a sales call does not require Marketing for a non-requiring program', function () {
     $user = crrWorkflowUser();
     $program = crrWorkflowProgram();
+    $salescall = crrWorkflowSalescall($user);
+
+    $crr = app(CrrService::class)->create($user, crrValidInput($program, [
+        'salescall_uuid' => $salescall->local_uuid,
+    ]));
+
+    expect($crr->salescall_id)->toBe($salescall->id);
+});
+
+test('creating a CRR linked to a sales call requires approved Marketing for a requiring program', function () {
+    $user = crrWorkflowUser();
+    $program = crrWorkflowProgram(isMarketingRequired: true);
+    $salescall = crrWorkflowSalescall($user);
+
+    expect(fn () => app(CrrService::class)->create($user, crrValidInput($program, [
+        'salescall_uuid' => $salescall->local_uuid,
+    ])))->toThrow(ValidationException::class);
+
+    expect(Crr::query()->count())->toBe(0);
+});
+
+test('creating a CRR linked to a sales call rejects a pending Marketing for a requiring program', function () {
+    $user = crrWorkflowUser();
+    $program = crrWorkflowProgram(isMarketingRequired: true);
     $salescall = crrWorkflowSalescall($user);
 
     crrWorkflowMarketing($user, $salescall, RACStatus::PENDING->value);
@@ -536,7 +627,7 @@ test('creating a CRR linked to a sales call requires an approved Marketing recom
 
 test('creating a CRR linked to a sales call with an approved Marketing recommendation succeeds', function () {
     $user = crrWorkflowUser();
-    $program = crrWorkflowProgram();
+    $program = crrWorkflowProgram(isMarketingRequired: true);
     $salescall = crrWorkflowSalescall($user);
 
     crrWorkflowMarketing($user, $salescall);
@@ -548,10 +639,10 @@ test('creating a CRR linked to a sales call with an approved Marketing recommend
     expect($crr->salescall_id)->toBe($salescall->id);
 });
 
-test('a Marketing for another sales call or another rep does not unlock CRR creation', function () {
+test('a Marketing for another sales call or another rep does not satisfy a requiring program', function () {
     $user = crrWorkflowUser();
     $otherUser = crrWorkflowUser();
-    $program = crrWorkflowProgram();
+    $program = crrWorkflowProgram(isMarketingRequired: true);
     $salescall = crrWorkflowSalescall($user);
     $otherSalescall = crrWorkflowSalescall($user);
 
@@ -563,4 +654,60 @@ test('a Marketing for another sales call or another rep does not unlock CRR crea
     ])))->toThrow(ValidationException::class);
 
     expect(Crr::query()->count())->toBe(0);
+});
+
+test('a standalone CRR with a requiring program does not require Marketing', function () {
+    $user = crrWorkflowUser();
+    $program = crrWorkflowProgram(isMarketingRequired: true);
+
+    $crr = app(CrrService::class)->create($user, crrValidInput($program));
+
+    expect($crr->salescall_id)->toBeNull();
+});
+
+test('editing a linked CRR into a requiring program requires approved Marketing', function () {
+    $user = crrWorkflowUser();
+    $exemptProgram = crrWorkflowProgram();
+    $requiringProgram = crrWorkflowProgram(isMarketingRequired: true);
+    $salescall = crrWorkflowSalescall($user);
+    $service = app(CrrService::class);
+
+    $crr = $service->create($user, crrValidInput($exemptProgram, [
+        'salescall_uuid' => $salescall->local_uuid,
+    ]));
+
+    expect(fn () => $service->update($crr, crrValidInput($requiringProgram, [
+        'salescall_uuid' => $salescall->local_uuid,
+    ])))->toThrow(ValidationException::class);
+
+    expect($crr->fresh()->crr_program_id)->toBe($exemptProgram->id);
+
+    crrWorkflowMarketing($user, $salescall);
+
+    $updated = $service->update($crr->fresh(), crrValidInput($requiringProgram, [
+        'salescall_uuid' => $salescall->local_uuid,
+    ]));
+
+    expect($updated->crr_program_id)->toBe($requiringProgram->id);
+});
+
+test('the CRR program sync persists the marketing requirement flag', function () {
+    config(['sync.server_url' => 'http://portal.test']);
+    $this->actingAs(crrWorkflowUser());
+
+    Http::fake([
+        '*/api/forms/crr/programs' => Http::response([
+            'crr_programs' => [
+                ['id' => 501, 'name' => 'Price Support', 'is_marketing_required' => true],
+                ['id' => 502, 'name' => 'Battery Swap', 'is_marketing_required' => false],
+                ['id' => 503, 'name' => 'Legacy Program'],
+            ],
+        ], 200),
+    ]);
+
+    app(CrrService::class)->programs();
+
+    expect(CrrProgram::query()->where('name', 'Price Support')->first()?->is_marketing_required)->toBeTrue()
+        ->and(CrrProgram::query()->where('name', 'Battery Swap')->first()?->is_marketing_required)->toBeFalse()
+        ->and(CrrProgram::query()->where('name', 'Legacy Program')->first()?->is_marketing_required)->toBeTrue();
 });

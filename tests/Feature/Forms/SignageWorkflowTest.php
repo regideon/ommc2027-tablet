@@ -119,7 +119,7 @@ test('pulled signages are cached locally with their masters and statuses', funct
         ->and($rows->first()['name'])->toBe('Store Front Signage')
         ->and($rows->first()['product'])->toBe('Tarpaulin')
         ->and($rows->first()['type'])->toBe('Horizontal')
-        ->and($rows->first()['is_editable'])->toBeTrue();
+        ->and($rows->first()['is_editable'])->toBeFalse();
 
     $signage = Signage::query()->firstOrFail();
 
@@ -129,6 +129,32 @@ test('pulled signages are cached locally with their masters and statuses', funct
         ->and($signage->product->name)->toBe('Tarpaulin')
         ->and($signage->type->name)->toBe('Horizontal')
         ->and($signage->rsm_status)->toBe(RSMStatus::PENDING);
+});
+
+test('a Signage is editable before sync and after TDH returns it to DRM', function () {
+    Storage::fake('local');
+    $user = signageWorkflowUser();
+    $this->actingAs($user);
+    signageFakePortal();
+
+    $service = app(SignageService::class);
+    $service->programs();
+
+    $product = SignageProduct::query()->firstOrFail();
+    $type = SignageType::query()->firstOrFail();
+    $request = signageStagedAttachment($user);
+
+    $signage = $service->create($user, signageCreatePayload($product->id, $type->id, $request));
+
+    expect($signage->fresh()->is_editable)->toBeTrue();
+
+    $signage->update(['sync_status' => 'synced']);
+
+    expect($signage->fresh()->is_editable)->toBeFalse();
+
+    $signage->update(['tdh_status' => TDHStatus::RETURNED->value]);
+
+    expect($signage->fresh()->is_editable)->toBeTrue();
 });
 
 test('creating a Signage requires a Request attachment', function () {
@@ -301,7 +327,7 @@ test('updating a Signage cannot remove the last Request attachment', function ()
         ->and(SignageAttachment::query()->firstOrFail()->original_name)->toBe('request-2.png');
 });
 
-test('updating a Signage is blocked once an approver has acted', function () {
+test('updating a synced Signage is blocked until it is returned to DRM', function () {
     Storage::fake('local');
     $user = signageWorkflowUser();
     $this->actingAs($user);
@@ -316,7 +342,10 @@ test('updating a Signage is blocked once an approver has acted', function () {
 
     $service->create($user, signageCreatePayload($product->id, $type->id, $request));
 
-    Signage::query()->update(['tdh_status' => TDHStatus::APPROVED->value]);
+    Signage::query()->update([
+        'tdh_status' => TDHStatus::APPROVED->value,
+        'sync_status' => 'synced',
+    ]);
 
     expect(fn () => $service->update(Signage::query()->firstOrFail(), [
         'salescall_uuid' => null,
@@ -355,7 +384,7 @@ test('pulled status changes are cached for synced local signages', function () {
     expect($result)->toHaveCount(1)
         ->and($result->first()['rsm_status'])->toBe(RSMStatus::APPROVED->value)
         ->and($result->first()['tdh_status'])->toBe(TDHStatus::RETURNED->value)
-        ->and($result->first()['is_editable'])->toBeFalse();
+        ->and($result->first()['is_editable'])->toBeTrue();
 });
 
 test('an unsynced local Signage is not overwritten by the pull', function () {

@@ -91,7 +91,7 @@ class RepairFormPage extends Page
                 ->find($submissionId);
 
             if ($repair instanceof Repair) {
-                abort_unless($repair->isEditable(), 403);
+                abort_unless($repair->is_editable, 403);
 
                 $this->repair = $repair;
                 $this->isEdit = true;

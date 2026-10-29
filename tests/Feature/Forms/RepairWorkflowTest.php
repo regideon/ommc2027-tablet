@@ -83,6 +83,32 @@ function repairCreatePayload(StagedAttachment $attachment, int $type = 1): array
     ];
 }
 
+test('a Repair is editable before sync and after SPS returns it to DRM', function () {
+    $user = repairWorkflowUser();
+
+    $repair = Repair::create([
+        'local_uuid' => (string) Str::uuid(),
+        'submitted_by' => $user->id,
+        'plate_number' => 'ABC 1234',
+        'details' => 'Replace brake pads',
+        'amount' => '500.00',
+        'rsm_status' => RSMStatus::PENDING->value,
+        'sps_status' => SPSStatus::PENDING->value,
+        'spm_status' => SPMStatus::PENDING->value,
+        'sync_status' => 'pending',
+    ]);
+
+    expect($repair->is_editable)->toBeTrue();
+
+    $repair->update(['sync_status' => 'synced']);
+
+    expect($repair->fresh()->is_editable)->toBeFalse();
+
+    $repair->update(['sps_status' => SPSStatus::RETURNED->value]);
+
+    expect($repair->fresh()->is_editable)->toBeTrue();
+});
+
 test('pulled repairs are cached locally with their statuses', function () {
     $user = repairWorkflowUser();
     $this->actingAs($user);
@@ -93,7 +119,7 @@ test('pulled repairs are cached locally with their statuses', function () {
     expect($rows)->toHaveCount(1)
         ->and($rows->first()['plate_number'])->toBe('ABC 1234')
         ->and($rows->first()['amount'])->toBe('500.00')
-        ->and($rows->first()['is_editable'])->toBeTrue();
+        ->and($rows->first()['is_editable'])->toBeFalse();
 
     $repair = Repair::query()->firstOrFail();
 
@@ -101,6 +127,20 @@ test('pulled repairs are cached locally with their statuses', function () {
         ->and($repair->sync_status)->toBe('synced')
         ->and($repair->submitted_by)->toBe($user->id)
         ->and($repair->rsm_status)->toBe(RSMStatus::PENDING);
+});
+
+test('a pulled Repair returned to DRM is editable', function () {
+    $user = repairWorkflowUser();
+    $this->actingAs($user);
+
+    $payload = repairPullPayload();
+    $payload['repairs'][0]['sps_status'] = SPSStatus::RETURNED->value;
+    repairFakePull($payload);
+
+    $rows = app(RepairService::class)->submissions();
+
+    expect($rows)->toHaveCount(1)
+        ->and($rows->first()['is_editable'])->toBeTrue();
 });
 
 test('creating a Repair requires at least one attachment', function () {
@@ -246,7 +286,7 @@ test('updating a Repair cannot remove the last attachment', function () {
     expect(RepairAttachment::query()->count())->toBe(1);
 });
 
-test('updating a Repair is blocked once an approver has acted', function () {
+test('updating a synced Repair is blocked until it is returned to DRM', function () {
     Storage::fake('local');
     $user = repairWorkflowUser();
     $this->actingAs($user);
@@ -256,7 +296,10 @@ test('updating a Repair is blocked once an approver has acted', function () {
 
     $service->create($user, repairCreatePayload($invoice, RepairAttachmentType::INVOICE->value));
 
-    Repair::query()->update(['rsm_status' => RSMStatus::APPROVED->value]);
+    Repair::query()->update([
+        'rsm_status' => RSMStatus::APPROVED->value,
+        'sync_status' => 'synced',
+    ]);
 
     expect(fn () => $service->update(Repair::query()->firstOrFail(), [
         'salescall_uuid' => null,

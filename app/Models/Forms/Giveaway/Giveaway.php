@@ -2,9 +2,9 @@
 
 namespace App\Models\Forms\Giveaway;
 
-use App\Enums\RSMStatus;
 use App\Models\Salescall;
 use App\Models\User;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -58,18 +58,19 @@ class Giveaway extends Model
     }
 
     /**
-     * Editable only while every one of the user's answer rows is still Pending.
+     * Editable until synced. Giveaways have no return-to-DRM status.
      */
+    protected function isEditable(): Attribute
+    {
+        return Attribute::get(fn (): bool => $this->isEditableBy((int) auth()->id()));
+    }
+
     public function isEditableBy(int $userId): bool
     {
-        $answers = $this->answers->where('submitted_by', $userId);
-
-        if ($answers->isEmpty()) {
+        if ($this->answers->where('submitted_by', $userId)->isEmpty()) {
             return false;
         }
 
-        return $answers->every(
-            fn (GiveawayAnswer $answer): bool => $answer->rsm_status === RSMStatus::PENDING
-        );
+        return $this->sync_status !== 'synced';
     }
 }
