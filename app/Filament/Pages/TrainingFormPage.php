@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Enums\FormKey;
 use App\Enums\Training\TrainingAttachmentType;
+use App\Filament\Concerns\RedirectsWithFormSync;
 use App\Filament\Concerns\StagesAttachments;
 use App\Models\Forms\Training\Training;
 use App\Models\Forms\Training\TrainingPosition;
@@ -25,6 +26,7 @@ use Throwable;
 
 class TrainingFormPage extends Page
 {
+    use RedirectsWithFormSync;
     use StagesAttachments;
 
     protected string $view = 'filament.pages.training-form-page';
@@ -218,7 +220,7 @@ class TrainingFormPage extends Page
 
         Notification::make()->title($title)->success()->send();
 
-        $this->redirect(FormsPage::getUrl(['form' => FormKey::TRAINING->value]));
+        $this->redirectAfterFormSave(FormKey::TRAINING->value);
     }
 
     public function cancel(): void

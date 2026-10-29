@@ -171,21 +171,35 @@
             @forelse (($selected['groups'] ?? []) as $group)
                 <div class="rounded-2xl border border-gray-200 bg-white p-4">
                     <p class="text-[10px] font-black uppercase tracking-widest text-[#890f00]">{{ $group['category_label'] ?? 'Group' }}</p>
-                    <h4 class="mb-1 text-sm font-bold text-[#191c1e]">{{ $group['name'] ?? '—' }}</h4>
+                    <h4 class="mb-3 text-sm font-bold text-[#191c1e]">{{ $group['name'] ?? '—' }}</h4>
                     @if (! empty($group['description']))
                         <p class="mb-3 text-xs text-[#737685]">{{ $group['description'] }}</p>
                     @endif
 
-                    <div class="divide-y divide-gray-100">
-                        @forelse (($group['items'] ?? []) as $item)
-                            <div class="py-2 first:pt-0 last:pb-0">
-                                <div class="flex items-start justify-between gap-4">
-                                    <span class="text-xs font-bold text-[#737685]">{{ $item['name'] ?? '—' }}</span>
-                                    <span class="whitespace-pre-line break-words text-right text-sm text-[#191c1e]">{{ $answerLabel($item) }}</span>
+                    <div class="space-y-4">
+                        @forelse (($group['subgroups'] ?? []) as $subgroup)
+                            <div class="rounded-xl border border-gray-200 p-3">
+                                <p class="text-xs font-bold text-[#191c1e]">{{ $subgroup['name'] ?? '—' }}</p>
+                                @if (! empty($subgroup['description']))
+                                    <p class="mt-1 text-xs text-[#737685]">{{ $subgroup['description'] }}</p>
+                                @endif
+
+                                <div class="mt-2 divide-y divide-gray-100">
+                                    @forelse (($subgroup['items'] ?? []) as $item)
+                                        <div class="py-2 first:pt-0 last:pb-0">
+                                            <div class="flex items-start justify-between gap-4">
+                                                <span class="text-xs font-bold text-[#737685]">{{ $item['name'] ?? '—' }}</span>
+                                                <span class="whitespace-pre-line break-words text-right text-sm text-[#191c1e]">{{ $answerLabel($item) }}</span>
+                                            </div>
+                                        </div>
+                                    @empty
+                                        <p class="py-2 text-sm text-[#737685]">No items recorded.</p>
+                                    @endforelse
                                 </div>
-                                @if (! empty($item['attachments']))
-                                    <div class="mt-1 flex flex-wrap gap-2">
-                                        @foreach ($item['attachments'] as $attachment)
+
+                                @if (! empty($subgroup['attachments']))
+                                    <div class="mt-3 flex flex-wrap gap-2">
+                                        @foreach ($subgroup['attachments'] as $attachment)
                                             @if (! empty($attachment['url']) && str_starts_with((string) ($attachment['mime_type'] ?? ''), 'image/'))
                                                 <a href="{{ $attachment['url'] }}" target="_blank" rel="noopener" class="block h-12 w-12 overflow-hidden rounded-lg border border-gray-200">
                                                     <img src="{{ $attachment['url'] }}" alt="{{ $attachment['original_name'] ?? 'Attachment' }}" class="h-full w-full object-cover">
@@ -201,7 +215,7 @@
                                 @endif
                             </div>
                         @empty
-                            <p class="py-2 text-sm text-[#737685]">No items recorded.</p>
+                            <p class="text-sm text-[#737685]">No sub-groups recorded.</p>
                         @endforelse
                     </div>
                 </div>

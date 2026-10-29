@@ -216,7 +216,7 @@
             <div class="grid grid-cols-2 gap-3 pt-1">
                 <button type="button" @click="cancelMarketing()" class="h-12 rounded-xl border border-gray-200 text-[#434654] font-bold">Cancel</button>
                 <button type="submit" :disabled="marketingSaving" class="h-12 rounded-xl bg-[#890f00] text-white font-bold disabled:opacity-50">
-                    <span x-show="! marketingSaving">Save Locally</span>
+                    <span x-show="! marketingSaving">Save</span>
                     <span x-show="marketingSaving">Saving…</span>
                 </button>
             </div>

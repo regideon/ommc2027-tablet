@@ -5,6 +5,7 @@ namespace App\Filament\Pages;
 use App\Enums\FormKey;
 use App\Enums\TradeRequest\TradeRequestAttachmentType;
 use App\Filament\Concerns\LocksRequestedSalescall;
+use App\Filament\Concerns\RedirectsWithFormSync;
 use App\Filament\Concerns\StagesAttachments;
 use App\Models\Forms\TradeRequest\TradeProduct;
 use App\Models\Forms\TradeRequest\TradeRequest;
@@ -27,6 +28,7 @@ use Throwable;
 class TradeRequestFormPage extends Page
 {
     use LocksRequestedSalescall;
+    use RedirectsWithFormSync;
     use StagesAttachments;
 
     protected string $view = 'filament.pages.trade-request-form-page';
@@ -208,7 +210,7 @@ class TradeRequestFormPage extends Page
 
         Notification::make()->title($title)->success()->send();
 
-        $this->redirect(FormsPage::getUrl(['form' => FormKey::TRADE_REQUEST->value]));
+        $this->redirectAfterFormSave(FormKey::TRADE_REQUEST->value);
     }
 
     public function cancel(): void

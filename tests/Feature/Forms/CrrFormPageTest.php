@@ -89,6 +89,23 @@ test('saving a CRR with valid data creates it locally and redirects', function (
         ->and($crr->sync_status)->toBe('pending');
 });
 
+test('saving a CRR marks the Forms page for automatic sync', function () {
+    $user = crrFormPageUser();
+    $program = crrFormPageProgram();
+    $this->actingAs($user);
+
+    Livewire::test(CrrFormPage::class)
+        ->set('crr_program_id', $program->id)
+        ->set('date_implemented', '2026-10-11')
+        ->set('amount', '1500.50')
+        ->set('details', 'Sample details')
+        ->set('remarks', 'Sample remarks')
+        ->call('save')
+        ->assertRedirect(FormsPage::getUrl(['form' => 'crr']));
+
+    expect(session('forms.sync_after_save'))->toBeTrue();
+});
+
 test('saving a CRR with a zero amount reports an amount error and creates nothing', function () {
     $user = crrFormPageUser();
     $program = crrFormPageProgram();

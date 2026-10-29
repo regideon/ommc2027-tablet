@@ -125,33 +125,58 @@
 
             <div class="rounded-2xl border border-gray-200 bg-white p-4">
                 <p class="text-[10px] font-black uppercase tracking-widest text-[#890f00]">Checklist</p>
-                <div class="mt-1 divide-y divide-gray-100">
-                    @forelse (($selected['items'] ?? []) as $item)
-                        <div class="py-3 first:pt-0 last:pb-0">
-                            <div class="flex items-start justify-between gap-4">
-                                <div class="min-w-0">
-                                    <p class="text-xs font-bold text-[#737685]">{{ $item['category_label'] ?? '—' }}</p>
-                                    <p class="truncate text-sm text-[#191c1e]">{{ $item['name'] ?? '—' }}</p>
+
+                @php($itemGroups = collect($selected['items'] ?? [])->groupBy('category_label'))
+                @forelse ($itemGroups as $category => $groupItems)
+                    <div class="mt-3">
+                        <p class="text-xs font-black uppercase tracking-wider text-[#737685]">{{ $category }}</p>
+                        <div class="mt-1 divide-y divide-gray-100">
+                            @foreach ($groupItems as $item)
+                                <div class="flex items-start justify-between gap-4 py-2">
+                                    <span class="truncate text-sm text-[#191c1e]">{{ $item['name'] ?? '—' }}</span>
+                                    <span class="shrink-0 text-sm text-[#191c1e]">{{ ($item['answer'] ?? null) !== null && $item['answer'] !== '' ? $item['answer'] : '—' }}</span>
                                 </div>
-                                <div class="shrink-0 text-right">
-                                    <p class="text-[10px] font-black uppercase tracking-wider text-[#737685]">Qty</p>
-                                    <p class="text-sm text-[#191c1e]">{{ ($item['answer'] ?? null) !== null && $item['answer'] !== '' ? $item['answer'] : '—' }}</p>
-                                </div>
-                            </div>
-                            @if (! empty($item['signature']['url']))
-                                <a href="{{ $item['signature']['url'] }}" target="_blank" rel="noopener" class="mt-2 block h-14 w-24 overflow-hidden rounded-lg border border-gray-200">
-                                    <img src="{{ $item['signature']['url'] }}" alt="{{ $item['signature']['original_name'] ?? 'Signature' }}" class="h-full w-full object-cover">
-                                </a>
-                            @elseif (($item['signature'] ?? null) !== null)
-                                <span class="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-2 py-1 text-xs text-[#737685]">
-                                    <span class="material-symbols-outlined text-sm">draw</span>
-                                    <span class="max-w-[10rem] truncate">{{ $item['signature']['original_name'] ?? 'Signature' }}</span>
-                                </span>
-                            @endif
+                            @endforeach
                         </div>
-                    @empty
-                        <p class="py-2 text-sm text-[#737685]">No items recorded.</p>
-                    @endforelse
+                    </div>
+                @empty
+                    <p class="py-2 text-sm text-[#737685]">No items recorded.</p>
+                @endforelse
+            </div>
+
+            <div class="rounded-2xl border border-gray-200 bg-white p-4">
+                <p class="text-[10px] font-black uppercase tracking-widest text-[#890f00]">Proof</p>
+                <div class="mt-3 grid grid-cols-2 gap-3">
+                    <div>
+                        <p class="text-[10px] font-black uppercase tracking-wider text-[#737685]">Photo</p>
+                        @if (! empty($selected['photo']['url']))
+                            <a href="{{ $selected['photo']['url'] }}" target="_blank" rel="noopener" class="mt-1 block h-20 w-full overflow-hidden rounded-lg border border-gray-200">
+                                <img src="{{ $selected['photo']['url'] }}" alt="{{ $selected['photo']['original_name'] ?? 'Photo' }}" class="h-full w-full object-cover">
+                            </a>
+                        @elseif (($selected['photo'] ?? null) !== null)
+                            <span class="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-2 py-1 text-xs text-[#737685]">
+                                <span class="material-symbols-outlined text-sm">image</span>
+                                <span class="max-w-[10rem] truncate">{{ $selected['photo']['original_name'] ?? 'Photo' }}</span>
+                            </span>
+                        @else
+                            <p class="mt-1 text-sm text-[#737685]">—</p>
+                        @endif
+                    </div>
+                    <div>
+                        <p class="text-[10px] font-black uppercase tracking-wider text-[#737685]">Recipient Signature</p>
+                        @if (! empty($selected['signature']['url']))
+                            <a href="{{ $selected['signature']['url'] }}" target="_blank" rel="noopener" class="mt-1 block h-20 w-full overflow-hidden rounded-lg border border-gray-200">
+                                <img src="{{ $selected['signature']['url'] }}" alt="{{ $selected['signature']['original_name'] ?? 'Signature' }}" class="h-full w-full object-cover">
+                            </a>
+                        @elseif (($selected['signature'] ?? null) !== null)
+                            <span class="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-2 py-1 text-xs text-[#737685]">
+                                <span class="material-symbols-outlined text-sm">draw</span>
+                                <span class="max-w-[10rem] truncate">{{ $selected['signature']['original_name'] ?? 'Signature' }}</span>
+                            </span>
+                        @else
+                            <p class="mt-1 text-sm text-[#737685]">—</p>
+                        @endif
+                    </div>
                 </div>
             </div>
 

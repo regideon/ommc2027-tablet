@@ -6,6 +6,7 @@ use App\Enums\CRRSignage\SignageAttachmentType;
 use App\Enums\CRRSignage\SignageCategory;
 use App\Enums\FormKey;
 use App\Filament\Concerns\LocksRequestedSalescall;
+use App\Filament\Concerns\RedirectsWithFormSync;
 use App\Filament\Concerns\StagesAttachments;
 use App\Models\Forms\CRRSignage\Signage;
 use App\Models\Forms\CRRSignage\SignageProduct;
@@ -28,6 +29,7 @@ use Throwable;
 class SignageFormPage extends Page
 {
     use LocksRequestedSalescall;
+    use RedirectsWithFormSync;
     use StagesAttachments;
 
     protected string $view = 'filament.pages.signage-form-page';
@@ -195,7 +197,7 @@ class SignageFormPage extends Page
 
         Notification::make()->title($title)->success()->send();
 
-        $this->redirect(FormsPage::getUrl(['form' => FormKey::SIGNAGE->value]));
+        $this->redirectAfterFormSave(FormKey::SIGNAGE->value);
     }
 
     public function cancel(): void

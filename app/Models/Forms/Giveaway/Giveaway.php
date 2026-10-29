@@ -20,7 +20,7 @@ class Giveaway extends Model
 
     public function items(): HasMany
     {
-        return $this->hasMany(GiveawayItem::class);
+        return $this->hasMany(GiveawaySubmissionItem::class);
     }
 
     public function answers(): HasMany
@@ -37,9 +37,14 @@ class Giveaway extends Model
         return $this->hasOne(GiveawayAnswer::class)->oldestOfMany();
     }
 
-    public function signatures(): HasMany
+    public function signature(): HasOne
     {
-        return $this->hasMany(GiveawaySignature::class);
+        return $this->hasOne(GiveawaySignature::class)->latestOfMany();
+    }
+
+    public function photo(): HasOne
+    {
+        return $this->hasOne(GiveawayPhoto::class)->latestOfMany();
     }
 
     public function submittedBy(): BelongsTo

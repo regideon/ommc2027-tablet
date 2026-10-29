@@ -36,30 +36,36 @@ function tradeCheckPullPayload(): array
                 'category' => 1,
                 'description' => null,
                 'order' => 1,
-                'items' => [
+                'subgroups' => [
                     [
-                        'id' => 101,
-                        'name' => 'DF Signage - Available',
+                        'id' => 11,
+                        'name' => 'DF Signage',
                         'description' => null,
-                        'type' => 1,
-                        'is_required' => true,
                         'is_image_required' => false,
-                        'options' => null,
                         'order' => 1,
-                        'answer' => null,
                         'attachments' => [],
-                    ],
-                    [
-                        'id' => 102,
-                        'name' => 'DF Signage - Condition',
-                        'description' => null,
-                        'type' => 4,
-                        'is_required' => false,
-                        'is_image_required' => false,
-                        'options' => ['Good', 'Bad'],
-                        'order' => 2,
-                        'answer' => null,
-                        'attachments' => [],
+                        'items' => [
+                            [
+                                'id' => 101,
+                                'name' => 'Available',
+                                'description' => null,
+                                'type' => 1,
+                                'is_required' => true,
+                                'options' => null,
+                                'order' => 1,
+                                'answer' => null,
+                            ],
+                            [
+                                'id' => 102,
+                                'name' => 'Good condition',
+                                'description' => null,
+                                'type' => 4,
+                                'is_required' => false,
+                                'options' => ['Good', 'Bad'],
+                                'order' => 2,
+                                'answer' => null,
+                            ],
+                        ],
                     ],
                 ],
             ]],
@@ -93,10 +99,14 @@ test('Trade Check templates and their fields are cached from the pull', function
     expect($templates)->toHaveCount(1)
         ->and($templates->first()->name)->toBe('Trade Check Evaluation');
 
-    $items = $templates->first()->group->flatMap->items;
+    $group = $templates->first()->group->first();
+    $subgroup = $group->subgroups->first();
+    $items = $subgroup->items;
 
     expect($items)->toHaveCount(2)
-        ->and($items->first()->name)->toBe('DF Signage - Available')
+        ->and($subgroup->name)->toBe('DF Signage')
+        ->and($subgroup->is_image_required)->toBeFalse()
+        ->and($items->first()->name)->toBe('Available')
         ->and($items->first()->is_required)->toBeTrue()
         ->and($items->last()->options)->toBe(['Good', 'Bad']);
 });
@@ -115,7 +125,7 @@ test('submissions list every template with a has_submission flag', function () {
         ->and($before->first()['has_submission'])->toBeFalse();
 
     $template = $service->programs()->first();
-    $items = $template->group->flatMap->items;
+    $items = $template->group->first()->subgroups->first()->items;
 
     $service->create($user, [
         'trade_check_id' => $template->id,
@@ -129,8 +139,37 @@ test('submissions list every template with a has_submission flag', function () {
         ->and($rows->first()['name'])->toBe('Trade Check Evaluation')
         ->and($rows->first()['has_submission'])->toBeTrue()
         ->and($rows->first()['is_editable'])->toBeTrue()
-        ->and($rows->first()['groups'][0]['items'][0]['answer'])->toBe('Yes')
-        ->and($rows->first()['groups'][0]['items'][1]['answer'])->toBe('Good');
+        ->and($rows->first()['groups'][0]['subgroups'][0]['items'][0]['answer'])->toBe('Yes')
+        ->and($rows->first()['groups'][0]['subgroups'][0]['items'][1]['answer'])->toBe('Good');
+});
+
+test('submission details map photos under their subgroup', function () {
+    Storage::fake('local');
+    $user = tradeCheckWorkflowUser();
+    $this->actingAs($user);
+    tradeCheckFakePull();
+
+    $service = app(TradeCheckService::class);
+    $template = $service->programs()->first();
+    $subgroup = $template->group->first()->subgroups->first();
+    $items = $subgroup->items;
+
+    $staged = app(StagedAttachmentService::class)
+        ->stageFromDataUri($user, tradeCheckPngDataUri(), 'signage-photo.png');
+
+    $service->create($user, [
+        'trade_check_id' => $template->id,
+        'answers' => [$items[0]->id => 'Yes', $items[1]->id => 'Good'],
+        'attachments' => [$subgroup->id => [$staged->id]],
+    ]);
+
+    $attachment = TradeCheckAttachment::query()->firstOrFail();
+    $row = $service->submissions()->first();
+
+    expect($row['groups'][0]['subgroups'][0]['is_image_required'])->toBeFalse()
+        ->and($row['groups'][0]['subgroups'][0]['attachments'])->toHaveCount(1)
+        ->and($row['groups'][0]['subgroups'][0]['attachments'][0]['id'])->toBe($attachment->id)
+        ->and($row['groups'][0]['subgroups'][0]['items'][0])->not->toHaveKey('attachments');
 });
 
 test('creating a Trade Check requires required items and persists the answers', function () {
@@ -140,7 +179,7 @@ test('creating a Trade Check requires required items and persists the answers', 
 
     $service = app(TradeCheckService::class);
     $template = $service->programs()->first();
-    $items = $template->group->flatMap->items;
+    $items = $template->group->first()->subgroups->first()->items;
 
     expect(fn () => $service->create($user, [
         'trade_check_id' => $template->id,
@@ -165,7 +204,7 @@ test('a Trade Check answer must match the item options', function () {
 
     $service = app(TradeCheckService::class);
     $template = $service->programs()->first();
-    $items = $template->group->flatMap->items;
+    $items = $template->group->first()->subgroups->first()->items;
 
     // Boolean item without explicit options still accepts only Yes/No, not 1/0.
     expect(fn () => $service->create($user, [
@@ -194,7 +233,7 @@ test('updating a Trade Check replaces its answers idempotently and is blocked on
 
     $service = app(TradeCheckService::class);
     $template = $service->programs()->first();
-    $items = $template->group->flatMap->items;
+    $items = $template->group->first()->subgroups->first()->items;
 
     $service->create($user, [
         'trade_check_id' => $template->id,
@@ -226,7 +265,8 @@ test('updating a Trade Check can remove an existing local attachment', function 
 
     $service = app(TradeCheckService::class);
     $template = $service->programs()->first();
-    $items = $template->group->flatMap->items;
+    $subgroup = $template->group->first()->subgroups->first();
+    $items = $subgroup->items;
 
     $staged = app(StagedAttachmentService::class)
         ->stageFromDataUri($user, tradeCheckPngDataUri(), 'photo.png');
@@ -234,7 +274,7 @@ test('updating a Trade Check can remove an existing local attachment', function 
     $service->create($user, [
         'trade_check_id' => $template->id,
         'answers' => [$items[0]->id => 'Yes', $items[1]->id => 'Good'],
-        'attachments' => [$items[0]->id => [$staged->id]],
+        'attachments' => [$subgroup->id => [$staged->id]],
     ]);
 
     $attachment = TradeCheckAttachment::query()->first();
@@ -242,7 +282,7 @@ test('updating a Trade Check can remove an existing local attachment', function 
     expect($attachment)->not->toBeNull()
         ->and(is_file($attachment->local_path))->toBeTrue();
 
-    $service->update($template->fresh(['group.items']), [
+    $service->update($template->fresh(['group.subgroups.items']), [
         'answers' => [$items[0]->id => 'Yes', $items[1]->id => 'Good'],
         'remove_attachments' => [$attachment->id],
     ]);
@@ -254,8 +294,8 @@ test('updating a Trade Check can remove an existing local attachment', function 
 test('server status changes for the mapped user are cached on pull', function () {
     $payload = tradeCheckPullPayload();
     $payload['trade_checks'][0]['answers'] = [
-        ['submitted_by' => 2, 'rsm_status' => 2, 'tdh_status' => 2, 'item' => ['name' => 'DF Signage - Available']],
-        ['submitted_by' => 2, 'rsm_status' => 2, 'tdh_status' => 2, 'item' => ['name' => 'DF Signage - Condition']],
+        ['submitted_by' => 2, 'rsm_status' => 2, 'tdh_status' => 2, 'item' => ['name' => 'Available', 'subgroup_name' => 'DF Signage']],
+        ['submitted_by' => 2, 'rsm_status' => 2, 'tdh_status' => 2, 'item' => ['name' => 'Good condition', 'subgroup_name' => 'DF Signage']],
     ];
 
     Http::fake(['*/api/forms/trade-check/pull' => Http::response($payload, 200)]);
@@ -266,7 +306,7 @@ test('server status changes for the mapped user are cached on pull', function ()
 
     $service = app(TradeCheckService::class);
     $template = $service->programs()->first();
-    $items = $template->group->flatMap->items;
+    $items = $template->group->first()->subgroups->first()->items;
 
     $service->create($user, [
         'trade_check_id' => $template->id,
@@ -293,7 +333,7 @@ test('pushing a Trade Check posts the template, answers and stores the server id
 
     $service = app(TradeCheckService::class);
     $template = $service->programs()->first();
-    $items = $template->group->flatMap->items;
+    $items = $template->group->first()->subgroups->first()->items;
 
     $service->create($user, [
         'trade_check_id' => $template->id,
@@ -310,16 +350,18 @@ test('pushing a Trade Check posts the template, answers and stores the server id
         return str_ends_with($request->url(), '/api/forms/trade-check/push')
             && $request['name'] === 'Trade Check Evaluation'
             && count($request['groups']) === 1
-            && count($request['groups'][0]['items']) === 2
-            && $request['groups'][0]['items'][0]['answer'] === 'Yes'
-            && $request['groups'][0]['items'][1]['answer'] === 'Good';
+            && count($request['groups'][0]['subgroups']) === 1
+            && $request['groups'][0]['subgroups'][0]['is_image_required'] === false
+            && count($request['groups'][0]['subgroups'][0]['items']) === 2
+            && $request['groups'][0]['subgroups'][0]['items'][0]['answer'] === 'Yes'
+            && $request['groups'][0]['subgroups'][0]['items'][1]['answer'] === 'Good';
     });
 
     expect($template->fresh()->sync_status)->toBe('synced')
         ->and($template->fresh()->server_id)->toBe(501);
 });
 
-test('Trade Check attachments push after the parent with the item reference', function () {
+test('Trade Check attachments push after the parent with the sub-group reference', function () {
     Storage::fake('local');
     $user = tradeCheckWorkflowUser();
     $this->actingAs($user);
@@ -327,20 +369,21 @@ test('Trade Check attachments push after the parent with the item reference', fu
 
     $service = app(TradeCheckService::class);
     $template = $service->programs()->first();
-    $items = $template->group->flatMap->items;
+    $subgroup = $template->group->first()->subgroups->first();
+    $items = $subgroup->items;
 
     $staged = app(StagedAttachmentService::class)->stageFromDataUri($user, tradeCheckPngDataUri(), 'signage.png');
 
     $service->create($user, [
         'trade_check_id' => $template->id,
         'answers' => [$items[0]->id => 'Yes', $items[1]->id => 'Good'],
-        'attachments' => [$items[0]->id => [$staged->id]],
+        'attachments' => [$subgroup->id => [$staged->id]],
     ]);
 
     $attachment = TradeCheckAttachment::query()->first();
 
     expect($attachment)->not->toBeNull()
-        ->and($attachment->item_id)->toBe($items[0]->id)
+        ->and($attachment->subgroup_id)->toBe($subgroup->id)
         ->and($attachment->sync_status)->toBe('pending')
         ->and(StagedAttachment::find($staged->id))->toBeNull();
 
@@ -352,12 +395,51 @@ test('Trade Check attachments push after the parent with the item reference', fu
     ]);
     app(SyncService::class)->push();
 
-    Http::assertSent(fn ($request) => str_ends_with($request->url(), '/api/forms/trade-check/attach'));
+    Http::assertSent(function ($request) {
+        if (! str_ends_with($request->url(), '/api/forms/trade-check/attach')) {
+            return false;
+        }
+
+        $parts = collect($request->data())->keyBy('name');
+
+        return ($parts['group_ref']['contents'] ?? null) === 'External'
+            && ($parts['subgroup_ref']['contents'] ?? null) === 'DF Signage';
+    });
 
     expect($attachment->fresh()->sync_status)->toBe('synced')
         ->and($attachment->fresh()->server_id)->toBe(88)
         ->and($template->fresh()->sync_status)->toBe('synced')
         ->and($template->fresh()->server_id)->toBe(501);
+});
+
+test('a subgroup marked image-required needs at least one photo before saving', function () {
+    Storage::fake('local');
+    $user = tradeCheckWorkflowUser();
+    $this->actingAs($user);
+    tradeCheckFakePull();
+
+    $service = app(TradeCheckService::class);
+    $template = $service->programs()->first();
+    $subgroup = $template->group->first()->subgroups->first();
+    $items = $subgroup->items;
+
+    $subgroup->update(['is_image_required' => true]);
+
+    expect(fn () => $service->create($user, [
+        'trade_check_id' => $template->id,
+        'answers' => [$items[0]->id => 'Yes', $items[1]->id => 'Good'],
+    ]))->toThrow(ValidationException::class);
+
+    $staged = app(StagedAttachmentService::class)
+        ->stageFromDataUri($user, tradeCheckPngDataUri(), 'signage-photo.png');
+
+    $service->create($user, [
+        'trade_check_id' => $template->id,
+        'answers' => [$items[0]->id => 'Yes', $items[1]->id => 'Good'],
+        'attachments' => [$subgroup->id => [$staged->id]],
+    ]);
+
+    expect(TradeCheckAttachment::query()->where('subgroup_id', $subgroup->id)->count())->toBe(1);
 });
 
 test('has pending changes includes Trade Checks', function () {
@@ -367,7 +449,7 @@ test('has pending changes includes Trade Checks', function () {
 
     $service = app(TradeCheckService::class);
     $template = $service->programs()->first();
-    $items = $template->group->flatMap->items;
+    $items = $template->group->first()->subgroups->first()->items;
 
     $service->create($user, [
         'trade_check_id' => $template->id,

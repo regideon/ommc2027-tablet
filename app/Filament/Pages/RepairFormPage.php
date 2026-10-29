@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Enums\FormKey;
 use App\Enums\Repair\RepairAttachmentType;
+use App\Filament\Concerns\RedirectsWithFormSync;
 use App\Filament\Concerns\StagesAttachments;
 use App\Models\Forms\Repair\Repair;
 use App\Models\Salescall;
@@ -23,6 +24,7 @@ use Throwable;
 
 class RepairFormPage extends Page
 {
+    use RedirectsWithFormSync;
     use StagesAttachments;
 
     protected string $view = 'filament.pages.repair-form-page';
@@ -156,7 +158,7 @@ class RepairFormPage extends Page
 
         Notification::make()->title($title)->success()->send();
 
-        $this->redirect(FormsPage::getUrl(['form' => FormKey::REPAIR->value]));
+        $this->redirectAfterFormSave(FormKey::REPAIR->value);
     }
 
     public function cancel(): void

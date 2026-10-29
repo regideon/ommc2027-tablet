@@ -16,6 +16,6 @@ class GiveawayAnswerItem extends Model
 
     public function item(): BelongsTo
     {
-        return $this->belongsTo(GiveawayItem::class, 'item_id');
+        return $this->belongsTo(GiveawaySubmissionItem::class, 'item_id');
     }
 }

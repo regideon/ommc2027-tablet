@@ -16,13 +16,13 @@ enum GiveawayCategory: int
     {
         return [
             self::GC->value => [
-                'title' => 'Gift Check',
+                'title' => 'Gift Certificates',
             ],
             self::CALENDAR->value => [
-                'title' => 'Calendar',
+                'title' => 'Calendars',
             ],
             self::SHIRT->value => [
-                'title' => 'Shirt',
+                'title' => 'Shirts',
             ],
         ];
     }

@@ -19,8 +19,8 @@ class TradeCheckAttachment extends Model
         return $this->belongsTo(TradeCheck::class);
     }
 
-    public function item(): BelongsTo
+    public function subgroup(): BelongsTo
     {
-        return $this->belongsTo(TradeCheckItem::class, 'item_id');
+        return $this->belongsTo(TradeCheckSubgroup::class, 'subgroup_id');
     }
 }

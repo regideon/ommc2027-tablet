@@ -22,11 +22,13 @@ class GiveawayRules implements ProvidesFormRules
             'name' => ['required', 'string', 'max:255'],
             'items' => ['nullable', 'array'],
             'items.*.id' => ['nullable', 'integer'],
-            'items.*.category' => ['required', 'integer'],
-            'items.*.name' => ['required', 'string', 'max:255'],
+            'items.*.giveaway_item_id' => ['required', 'integer'],
             'items.*.answer' => ['nullable', 'string'],
-            'items.*.signature_id' => ['nullable', 'integer'],
-            'items.*.staged_signature_id' => ['nullable', 'integer'],
+            'signature_id' => ['nullable', 'integer'],
+            'staged_signature_id' => ['nullable', 'integer'],
+            'photo_id' => ['nullable', 'integer'],
+            'staged_photo_id' => ['nullable', 'integer'],
+            'remove_photo' => ['nullable', 'boolean'],
         ];
     }
 
@@ -40,11 +42,13 @@ class GiveawayRules implements ProvidesFormRules
             'salescall_uuid' => 'sales call',
             'items' => 'items',
             'items.*.id' => 'item',
-            'items.*.category' => 'category',
-            'items.*.name' => 'item name',
-            'items.*.answer' => 'answer',
-            'items.*.signature_id' => 'signature',
-            'items.*.staged_signature_id' => 'signature',
+            'items.*.giveaway_item_id' => 'item',
+            'items.*.answer' => 'quantity',
+            'signature_id' => 'signature',
+            'staged_signature_id' => 'signature',
+            'photo_id' => 'photo',
+            'staged_photo_id' => 'photo',
+            'remove_photo' => 'photo',
         ];
     }
 }

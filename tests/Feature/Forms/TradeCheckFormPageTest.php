@@ -1,5 +1,7 @@
 <?php
 
+use App\Enums\TradeCheck\FieldType;
+use App\Enums\TradeCheck\GroupCategory;
 use App\Filament\Pages\FormsPage;
 use App\Filament\Pages\TradeCheckFormPage;
 use App\Models\Customer;
@@ -7,6 +9,9 @@ use App\Models\Forms\TradeCheck\TradeCheck;
 use App\Models\Forms\TradeCheck\TradeCheckAnswer;
 use App\Models\Forms\TradeCheck\TradeCheckAnswerItems;
 use App\Models\Forms\TradeCheck\TradeCheckAttachment;
+use App\Models\Forms\TradeCheck\TradeCheckGroup;
+use App\Models\Forms\TradeCheck\TradeCheckItem;
+use App\Models\Forms\TradeCheck\TradeCheckSubgroup;
 use App\Models\Itinerary;
 use App\Models\Salescall;
 use App\Models\User;
@@ -15,6 +20,7 @@ use App\Services\StagedAttachmentService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
@@ -44,30 +50,36 @@ function tradeCheckFormPagePullPayload(): array
                 'category' => 1,
                 'description' => null,
                 'order' => 1,
-                'items' => [
+                'subgroups' => [
                     [
-                        'id' => 101,
-                        'name' => 'DF Signage - Available',
+                        'id' => 11,
+                        'name' => 'DF Signage',
                         'description' => null,
-                        'type' => 1,
-                        'is_required' => true,
-                        'is_image_required' => true,
-                        'options' => null,
-                        'order' => 1,
-                        'answer' => null,
-                        'attachments' => [],
-                    ],
-                    [
-                        'id' => 102,
-                        'name' => 'DF Signage - Condition',
-                        'description' => null,
-                        'type' => 4,
-                        'is_required' => false,
                         'is_image_required' => false,
-                        'options' => ['Good', 'Bad'],
-                        'order' => 2,
-                        'answer' => null,
+                        'order' => 1,
                         'attachments' => [],
+                        'items' => [
+                            [
+                                'id' => 101,
+                                'name' => 'Available',
+                                'description' => null,
+                                'type' => 1,
+                                'is_required' => true,
+                                'options' => null,
+                                'order' => 1,
+                                'answer' => null,
+                            ],
+                            [
+                                'id' => 102,
+                                'name' => 'Good condition',
+                                'description' => null,
+                                'type' => 4,
+                                'is_required' => false,
+                                'options' => ['Good', 'Bad'],
+                                'order' => 2,
+                                'answer' => null,
+                            ],
+                        ],
                     ],
                 ],
             ]],
@@ -92,8 +104,10 @@ test('the Trade Check form defaults to the first template and renders its fields
     Livewire::test(TradeCheckFormPage::class)
         ->assertOk()
         ->assertSet('trade_check_id', $template->id)
-        ->assertSee('DF Signage - Available')
-        ->assertSee('DF Signage - Condition');
+        ->assertSee('External')
+        ->assertSee('DF Signage')
+        ->assertSee('Available')
+        ->assertSee('Good condition');
 });
 
 test('opening the form with a template renders its items', function () {
@@ -101,18 +115,20 @@ test('opening the form with a template renders its items', function () {
     $this->actingAs($user);
 
     $template = tradeCheckFormPageTemplate();
-    $items = $template->group->flatMap->items;
+    $items = $template->group->first()->subgroups->first()->items;
 
     Livewire::withQueryParams(['template' => $template->id])
         ->test(TradeCheckFormPage::class)
         ->assertOk()
         ->assertSet('trade_check_id', $template->id)
         ->assertSet('salescall_uuid', null)
-        ->assertSee('DF Signage - Available')
-        ->assertSee('DF Signage - Condition')
         ->assertSee('External')
+        ->assertSee('DF Signage')
+        ->assertSee('Available')
+        ->assertSee('Good condition')
         ->assertSee('Good')
         ->assertCount('groups', 1)
+        ->assertCount('groups.0.subgroups', 1)
         ->assertSet('answers.'.$items[0]->id, '')
         ->assertSet('answers.'.$items[1]->id, '');
 });
@@ -122,7 +138,7 @@ test('saving required answers creates the submission and redirects', function ()
     $this->actingAs($user);
 
     $template = tradeCheckFormPageTemplate();
-    $items = $template->group->flatMap->items;
+    $items = $template->group->first()->subgroups->first()->items;
 
     Livewire::withQueryParams(['template' => $template->id])
         ->test(TradeCheckFormPage::class)
@@ -137,12 +153,100 @@ test('saving required answers creates the submission and redirects', function ()
         ->and(TradeCheckAnswerItems::query()->where('item_id', $items[1]->id)->value('answer'))->toBe('Good');
 });
 
+test('boolean and select items render as radio buttons', function () {
+    $user = tradeCheckFormPageUser();
+    $this->actingAs($user);
+
+    $template = tradeCheckFormPageTemplate();
+    $items = $template->group->first()->subgroups->first()->items;
+
+    Livewire::withQueryParams(['template' => $template->id])
+        ->test(TradeCheckFormPage::class)
+        ->assertSeeHtml('type="radio"')
+        ->assertSeeHtml('wire:model="answers.'.$items[0]->id.'"')
+        ->assertSeeHtml('wire:model="answers.'.$items[1]->id.'"')
+        ->assertDontSeeHtml('<select wire:model="answers.'.$items[0]->id.'"')
+        ->assertDontSeeHtml('<select wire:model="answers.'.$items[1]->id.'"');
+});
+
+test('a subgroup marked image-required blocks save until a photo is staged', function () {
+    Storage::fake('local');
+    $user = tradeCheckFormPageUser();
+    $this->actingAs($user);
+
+    $template = TradeCheck::create([
+        'name' => 'Local Trade Check Evaluation',
+        'local_uuid' => (string) Str::uuid(),
+        'submitted_by' => $user->id,
+        'sync_status' => 'synced',
+    ]);
+
+    $group = TradeCheckGroup::create([
+        'trade_check_id' => $template->id,
+        'category' => GroupCategory::EXTERNAL->value,
+        'name' => 'External',
+        'order' => 1,
+    ]);
+
+    $subgroup = TradeCheckSubgroup::create([
+        'trade_check_id' => $template->id,
+        'group_id' => $group->id,
+        'name' => 'DF Signage',
+        'is_image_required' => true,
+        'order' => 1,
+    ]);
+
+    $items = collect([
+        TradeCheckItem::create([
+            'subgroup_id' => $subgroup->id,
+            'name' => 'Available',
+            'type' => FieldType::BOOLEAN->value,
+            'is_required' => true,
+            'options' => ['Yes', 'No'],
+            'order' => 1,
+        ]),
+        TradeCheckItem::create([
+            'subgroup_id' => $subgroup->id,
+            'name' => 'Good condition',
+            'type' => FieldType::SELECT->value,
+            'is_required' => false,
+            'options' => ['Good', 'Bad'],
+            'order' => 2,
+        ]),
+    ]);
+
+    $component = Livewire::withQueryParams(['template' => $template->id])
+        ->test(TradeCheckFormPage::class)
+        ->assertSeeHtml('x-ref="tradeCheckCameraInput'.$subgroup->id.'"')
+        ->set('answers.'.$items[0]->id, 'Yes')
+        ->set('answers.'.$items[1]->id, 'Good')
+        ->call('save');
+
+    $errors = $component->get('formErrors');
+
+    expect($errors)
+        ->toHaveKey('attachments.'.$subgroup->id)
+        ->and($errors['attachments.'.$subgroup->id][0])->toBe('This Trade Check subgroup requires at least one photo.')
+        ->and(TradeCheckAttachment::query()->count())->toBe(0);
+
+    $component->assertNoRedirect();
+
+    $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
+
+    $component->call('stageSubgroupAttachment', $subgroup->id, [
+        'data' => 'data:image/png;base64,'.base64_encode($png),
+        'original_name' => 'signage-photo.png',
+    ])->call('save')->assertRedirect(FormsPage::getUrl(['form' => 'trade-check']));
+
+    expect(TradeCheckAttachment::query()->where('subgroup_id', $subgroup->id)->count())->toBe(1);
+});
+
 test('a missing required answer reports a field error and creates nothing', function () {
     $user = tradeCheckFormPageUser();
     $this->actingAs($user);
 
     $template = tradeCheckFormPageTemplate();
-    $items = $template->group->flatMap->items;
+    $items = $template->group->first()->subgroups->first()->items;
 
     $component = Livewire::withQueryParams(['template' => $template->id])
         ->test(TradeCheckFormPage::class)
@@ -167,7 +271,7 @@ test('editing a pending submission loads its answers and saves an update', funct
     $this->actingAs($user);
 
     $template = tradeCheckFormPageTemplate();
-    $items = $template->group->flatMap->items;
+    $items = $template->group->first()->subgroups->first()->items;
 
     app(TradeCheckService::class)->create($user, [
         'trade_check_id' => $template->id,
@@ -195,7 +299,8 @@ test('editing shows existing attachments and removes them on save', function () 
     $this->actingAs($user);
 
     $template = tradeCheckFormPageTemplate();
-    $items = $template->group->flatMap->items;
+    $subgroup = $template->group->first()->subgroups->first();
+    $items = $subgroup->items;
 
     $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
     $staged = app(StagedAttachmentService::class)
@@ -204,17 +309,17 @@ test('editing shows existing attachments and removes them on save', function () 
     app(TradeCheckService::class)->create($user, [
         'trade_check_id' => $template->id,
         'answers' => [$items[0]->id => 'Yes', $items[1]->id => 'Good'],
-        'attachments' => [$items[0]->id => [$staged->id]],
+        'attachments' => [$subgroup->id => [$staged->id]],
     ]);
 
     $attachment = TradeCheckAttachment::query()->first();
 
     $component = Livewire::withQueryParams(['submission' => $template->id])
         ->test(TradeCheckFormPage::class)
-        ->assertSet('attachments.'.$items[0]->id.'.0.source', 'existing')
-        ->assertSet('attachments.'.$items[0]->id.'.0.original_name', 'photo.png');
+        ->assertSet('attachments.'.$subgroup->id.'.0.source', 'existing')
+        ->assertSet('attachments.'.$subgroup->id.'.0.original_name', 'photo.png');
 
-    $component->call('removeItemAttachment', $items[0]->id, 0)
+    $component->call('removeSubgroupAttachment', $subgroup->id, 0)
         ->set('answers.'.$items[0]->id, 'Yes')
         ->set('answers.'.$items[1]->id, 'Good')
         ->call('save')
@@ -228,7 +333,7 @@ test('the edit route aborts 403 for a non-pending submission', function () {
     $this->actingAs($user);
 
     $template = tradeCheckFormPageTemplate();
-    $items = $template->group->flatMap->items;
+    $items = $template->group->first()->subgroups->first()->items;
 
     app(TradeCheckService::class)->create($user, [
         'trade_check_id' => $template->id,

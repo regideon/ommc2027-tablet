@@ -195,7 +195,7 @@
             <div class="grid grid-cols-2 gap-3 pt-1">
                 <button type="button" @click="cancelCrr()" class="h-12 rounded-xl border border-gray-200 text-[#434654] font-bold">Cancel</button>
                 <button type="submit" :disabled="crrSaving" class="h-12 rounded-xl bg-[#890f00] text-white font-bold disabled:opacity-50">
-                    <span x-show="! crrSaving">Save Locally</span>
+                    <span x-show="! crrSaving">Save</span>
                     <span x-show="crrSaving">Saving…</span>
                 </button>
             </div>

@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\Enums\FormKey;
 use App\Filament\Concerns\LocksRequestedSalescall;
+use App\Filament\Concerns\RedirectsWithFormSync;
 use App\Models\Forms\Marketing\Marketing;
 use App\Models\Forms\Marketing\MarketingMechanic;
 use App\Models\Forms\Marketing\MarketingProgram;
@@ -20,6 +21,7 @@ use Illuminate\Validation\ValidationException;
 class MarketingFormPage extends Page
 {
     use LocksRequestedSalescall;
+    use RedirectsWithFormSync;
 
     protected string $view = 'filament.pages.marketing-form-page';
 
@@ -252,7 +254,7 @@ class MarketingFormPage extends Page
 
         Notification::make()->title($title)->success()->send();
 
-        $this->redirect(FormsPage::getUrl(['form' => FormKey::MARKETING->value]));
+        $this->redirectAfterFormSave(FormKey::MARKETING->value);
     }
 
     public function cancel(): void

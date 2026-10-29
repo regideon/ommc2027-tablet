@@ -72,6 +72,12 @@ class FormsPage extends Page
             ? $form->value
             : FormKey::CRR->value;
 
+        if (session()->pull('forms.sync_after_save', false)) {
+            $this->syncNow(app(SyncService::class));
+
+            return;
+        }
+
         $this->loadRows();
     }
 
